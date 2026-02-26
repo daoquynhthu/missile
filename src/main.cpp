@@ -226,73 +226,56 @@ int main(int argc, char** argv) {
     guid_cfg.target_range = 2200000.0;
     GNC::Guidance guidance(guid_cfg);
     
-    // Set Target (Equatorial, 2200km downrange approx)
-    LLA target_lla = {0.0, 20.0 * AeroSim::Math::DEG2RAD(), 0.0};
+    // Set Target (Pacific Ocean - Guam Region approx)
+    // Jiuquan (40.96N, 100.30E) -> ~2800km Range -> ~135E, 20N
+    // Target: 20.0 N, 135.0 E
+    LLA target_lla = {20.0 * AeroSim::Math::DEG2RAD(), 135.0 * AeroSim::Math::DEG2RAD(), 0.0};
     guidance.set_target(CoordinateTransform::lla_to_ecef(target_lla));
 
     // 2. Initial State Setup
     std::cout << "[Init] Setting up initial state..." << std::endl;
-    // Ground Launch
-    LLA init_lla = {0.0, 0.0, 10.0}; // 10m ASL
+    // Launch Site: Jiuquan Satellite Launch Center (JSLC)
+    // Lat: 40.960556 N, Lon: 100.298333 E, Alt: 1000m
+    LLA init_lla = {40.960556 * AeroSim::Math::DEG2RAD(), 100.298333 * AeroSim::Math::DEG2RAD(), 1000.0}; 
     Eigen::Vector3d init_pos = CoordinateTransform::lla_to_ecef(init_lla);
     
     State6DOF state;
     state.pos_ecef = init_pos;
     state.vel_ecef = Eigen::Vector3d::Zero(); // Launch from rest
     
-    // Rot(-90, X):
-    // v_e=[0,1,0] (East) -> v_b=[0,1,0] (Z). So Body Z is East.
-    // v_e=[0,0,1] (North) -> v_b=[0,0,1] (Y). So Body Y is North?
-    // Wait. R_x(-90):
-    // 1  0  0
-    // 0  0  1
-    // 0 -1  0
-    // Col 0 (X_b) = [1, 0, 0] = Up.
-    // Col 1 (Y_b) = [0, 0, -1] = South (since North is +Z in NED? No, North is +Z in ECEF? No).
-    // Let's stick to ECEF at Lat=0, Lon=0.
-    // X_ecef = Up.
-    // Y_ecef = East.
-    // Z_ecef = North.
-    // R_x(-90) in this frame:
-    // X_b = X_e = Up.
-    // Y_b = Z_e = North.
-    // Z_b = -Y_e = West.
-    // Still not Y=South.
+    // We want Body Z aligned with Local East (Launch Azimuth = 90 deg East)
+    // At Launch Site (Lat=40.96, Lon=100.3):
+    // Up, North, East are local vectors.
+    // Launch Vertical: Body X = Up.
+    // Body Y = South (-North) or similar?
+    // Let's use Guidance to initialize orientation? Or just construct it.
     
-    // We want:
-    // X_b = Up = X_e
-    // Y_b = South = -Z_e (if Z_e is North)
-    // Z_b = East = Y_e
-    // Matrix:
-    // 1  0  0
-    // 0  0  1  (Y_b in ECEF terms? No, Columns are Body axes in ECEF)
-    // Col 0: 1 0 0 (Up)
-    // Col 1: 0 0 -1 (South)
-    // Col 2: 0 1 0 (East)
-    // Matrix:
-    // 1  0  0
-    // 0  0  1
-    // 0 -1  0
-    // This is R_x(-90).
-    // Let's verify standard definition of Rotation Matrix from Quaternion.
-    // q represents rotation from Frame A to Frame B? Or B to A?
-    // In Eigen, q * v rotates v.
-    // If v is in Body, q * v gives v in ECEF.
-    // So Matrix Columns are Body Axes expressed in ECEF.
-    // My Matrix Construction:
-    // Col 0 (X_b): [1, 0, 0] -> Up. Correct.
-    // Col 1 (Y_b): [0, 0, -1].
-    // Col 2 (Z_b): [0, 1, 0].
-    // Determinant: 1 * (0 - (-1)) = 1.
-    // This matrix corresponds to:
-    // AngleAxis(-90, X).
-    // cos(-90)=0, sin(-90)=-1.
-    // 1  0   0
-    // 0  0   1
-    // 0 -1   0
-    // Matches.
-    // So -90 degrees about X axis is correct.
-    state.quat_be = Eigen::AngleAxisd(-90.0 * AeroSim::Math::DEG2RAD(), Eigen::Vector3d::UnitX());
+    // Construct Initial Quaternion: Vertical, with Body Z pointing East.
+    // ECEF Frame vectors at launch site:
+    Eigen::Vector3d up_init = init_pos.normalized();
+    Eigen::Vector3d earth_z(0,0,1);
+    Eigen::Vector3d north_init = (earth_z - (earth_z.dot(up_init) * up_init)).normalized();
+    Eigen::Vector3d east_init = north_init.cross(up_init).normalized();
+    
+    // Body Frame:
+    // X_b = Up
+    // Z_b = East
+    // Y_b = Z_b x X_b = East x Up = North? No.
+    // East x Up = (North x Up) x Up? No.
+    // East = North x Up.
+    // East x Up = (North x Up) x Up = North x (Up x Up) ... wait.
+    // Right Hand Rule: North(Index) x Up(Middle) = East(Thumb).
+    // East(Index) x Up(Middle) = North?
+    // Let's check: (1,0,0) x (0,0,1) = (0,-1,0) = -Y.
+    // So East x Up = -North = South.
+    // So Y_b = South.
+    
+    Eigen::Matrix3d init_rot;
+    init_rot.col(0) = up_init;    // Body X (Nose)
+    init_rot.col(1) = -north_init; // Body Y (Right Wing) -> South
+    init_rot.col(2) = east_init;   // Body Z (Belly/Top?) -> East
+    
+    state.quat_be = Eigen::Quaterniond(init_rot);
     
     state.omega_body.setZero();
     state.mass = hgv_config.total_mass;
@@ -345,6 +328,8 @@ int main(int argc, char** argv) {
             if (state.vel_ecef.dot(up) < 0) {
                 state.vel_ecef.setZero();
                 state.omega_body.setZero();
+                std::cout << "Impact detected at t=" << t << "s. Simulation aborted." << std::endl;
+                break;
             }
         }
 

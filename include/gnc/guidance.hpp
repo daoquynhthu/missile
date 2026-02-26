@@ -43,8 +43,8 @@ public:
         // Glide Phase (QEGG)
         double glide_alt_end = 20000.0;    // Target altitude at end of glide (m)
         double target_range = 2200000.0;   // Target range for simple impact calculation (m)
-        double glide_aoa_bias = 10.0;      // Nominal AoA (deg)
-        double glide_aoa_max = 20.0;       // Max AoA (deg)
+        double glide_aoa_bias = 12.0;      // Nominal AoA (deg) - Increased for better L/D
+        double glide_aoa_max = 25.0;       // Max AoA (deg) - Increased for aggressive skip
         double glide_aoa_min = 0.0;        // Min AoA (deg)
         double kp_alt = 0.08;              // Altitude error gain -> Target Vz
         double kp_vz = 0.2;                // Vertical velocity error gain -> AoA
@@ -52,11 +52,12 @@ public:
         double max_descent_rate = -300.0;  // Max descent rate (m/s)
 
         // Lateral Guidance
-        double lateral_gain = 2.5;         // Gain for lateral guidance (Heading Error -> Bank Angle)
+        double lateral_gain = 3.5;         // Gain for lateral guidance (Heading Error -> Bank Angle)
         double max_bank_angle = 60.0;      // Max bank angle (deg)
 
         // Terminal Phase
-        double terminal_g_limit = 5.0;     // Max G-load in terminal phase
+        double terminal_range_trigger = 50000.0; // Trigger terminal phase when range < 50km
+        double terminal_g_limit = 10.0;    // Max G-load in terminal phase
     };
 
     Guidance(const Config& config) 
@@ -98,7 +99,8 @@ public:
         }
 
         // 1. Determine Phase with Hysteresis
-        update_phase(t, alt, vel_mag, vertical_vel);
+        double range_to_target = (m_target_ecef - pos_ecef).norm();
+        update_phase(t, alt, vel_mag, vertical_vel, range_to_target);
 
         // 2. Compute Desired Attitude based on Phase
         Eigen::Quaterniond target_quat = Eigen::Quaterniond::Identity();
@@ -138,24 +140,44 @@ public:
                     
                     double target_angle_from_vertical = (90.0 - target_pitch_deg) * AeroSim::Math::DEG2RAD();
                     
-                    // Rotate Up vector towards East (Launch Azimuth 90)
-                    // TODO: Make Launch Azimuth configurable? Assumed East for now.
-                    target_dir = std::cos(target_angle_from_vertical) * up + std::sin(target_angle_from_vertical) * local_east;
+                    // Calculate Launch Azimuth to Target
+                    // Vector from Pos to Target (Projected to Horizontal Plane)
+                    Eigen::Vector3d to_target = (m_target_ecef - pos_ecef).normalized();
+                    Eigen::Vector3d to_target_horiz = (to_target - to_target.dot(up) * up).normalized();
+                    
+                    // Use calculated azimuth direction instead of hardcoded East
+                    target_dir = std::cos(target_angle_from_vertical) * up + std::sin(target_angle_from_vertical) * to_target_horiz;
                     target_dir.normalize();
                 }
                 
                 // Construct Body Frame (Wings Level)
+                // We want Body Z to be "Up" relative to the horizon (or consistent with launch)
+                // If we pitch over, Body X follows target_dir.
+                // We want wings level relative to the ground.
+                // Body Y = Right Wing. Body Z = Belly.
+                // If we are flying "Belly Down" (Body Z down), then Body Y is horizontal.
+                // Cross(target_dir, Up) gives Right Wing (Body Y) if target_dir is forward and Up is Up?
+                // Forward x Up = Right? No.
+                // North x Up = East.
+                // So Cross(target_dir, Up) is Right Wing.
+                
                 Eigen::Vector3d body_x = target_dir;
                 Eigen::Vector3d body_y;
-                
-                if (std::abs(body_x.dot(up)) > 0.999) {
-                    // Vertical flight: Align Y with South
-                    body_y = -local_north; 
+                if (body_x.cross(up).norm() < 1e-3) {
+                     // Vertical. Use Launch Attitude (East is Z, South is Y)
+                     // If X is Up.
+                     // We want to maintain roll stability.
+                     // Let's match the initial condition or just pick East.
+                     // Initial state: Body Y was South.
+                     body_y = local_north * -1.0; 
                 } else {
-                    // Wings Level
-                    body_y = body_x.cross(up).normalized();
+                     // Wings Level: Body Y is horizontal (perp to Up and Forward)
+                     // We want Body Y to be "Right".
+                     // Let's test: North x Up = East. Correct.
+                     body_y = body_x.cross(up).normalized();
                 }
                 
+                // Body Z completes the triad (Down-ish)
                 Eigen::Vector3d body_z = body_x.cross(body_y).normalized();
                 
                 Eigen::Matrix3d rot_mat;
@@ -163,8 +185,8 @@ public:
                 rot_mat.col(1) = body_y;
                 rot_mat.col(2) = body_z;
                 target_quat = Eigen::Quaterniond(rot_mat);
-                break;
             }
+            break;
             case Phase::COAST: {
                 // Exo-atmospheric / Re-entry Preparation
                 // Goal: Align for re-entry with positive AoA to generate lift (Skip).
@@ -219,29 +241,44 @@ public:
                 
                 // A. Energy Management: Calculate Target Altitude based on Range-to-Go
                 // Estimate Range-to-Go (Great Circle)
-                // Project current and target to unit sphere (ignoring altitude for angle)
-                // Use Haversine or Dot product on normalized ECEF
                 Eigen::Vector3d p_unit = pos_ecef.normalized();
                 Eigen::Vector3d t_unit = m_target_ecef.normalized();
                 double central_angle = std::acos(std::clamp(p_unit.dot(t_unit), -1.0, 1.0));
                 double range_to_go = central_angle * 6371000.0; // Earth Radius approx
                 
-                // Simple Linear Profile for Reference Altitude
-                // H_ref = H_end + (R / R_total) * (H_start - H_end)
-                // Note: R_total is roughly initial range. Let's use current range as R.
-                // Or better: Quadratic profile to maintain energy?
-                // Let's stick to linear for now as requested "Range-Altitude Profile"
+                // Use a non-linear profile to encourage skip-glide
+                // H_ref = H_end + (H_start - H_end) * (R / R_total)^n
+                // n > 1 means we stay high longer and dive later?
+                // n < 1 means we drop fast and glide low?
+                // Qian Xuesen: Dive deep first, then pull up.
+                // The current "Linear" profile might be too shallow.
+                // Let's use a standard linear profile for now but with adjusted constants.
+                
                 double dist_ratio = range_to_go / m_config.target_range;
                 if (dist_ratio > 1.0) dist_ratio = 1.0;
                 double target_alt = m_config.glide_alt_end + dist_ratio * (m_config.glide_alt_start - m_config.glide_alt_end);
                 
-                // B. Vertical Guidance (QEGG) -> Desired Vertical Force -> AoA
+                // Altitude Error Gain Schedule
+                // Increase gain as we get closer?
+                // Or just use fixed gain.
+                // Current: kp_alt = 0.08
+                
                 double h_error = target_alt - alt;
                 double v_z_target = m_config.kp_alt * h_error;
                 v_z_target = std::clamp(v_z_target, m_config.max_descent_rate, m_config.max_climb_rate);
                 
                 double v_z_err = v_z_target - vertical_vel;
+                
+                // Damping Term? Damping is provided by velocity loop (v_z_err).
+                // AoA Command
                 double aoa_deg = m_config.glide_aoa_bias + m_config.kp_vz * v_z_err;
+                
+                // Add "Skip" logic: If Descent Rate is high at low altitude, pull max AoA
+                if (alt < m_config.glide_alt_start - 2000.0 && vertical_vel < -50.0) {
+                     // Pull up hard to skip
+                     aoa_deg += 5.0; 
+                }
+                
                 aoa_deg = std::clamp(aoa_deg, m_config.glide_aoa_min, m_config.glide_aoa_max);
                 double aoa = aoa_deg * AeroSim::Math::DEG2RAD();
                 
@@ -323,35 +360,156 @@ public:
                 break;
             }
             case Phase::TERMINAL: {
-                // Pure Pursuit with G-Limiting
+                // Proportional Navigation (PN) Implementation
+                // Command Acceleration: a_cmd = N * V_closing * Omega_los
+                
                 if (m_target_ecef.norm() > 1.0) {
-                    Eigen::Vector3d to_target = (m_target_ecef - pos_ecef).normalized();
+                    Eigen::Vector3d to_target = (m_target_ecef - pos_ecef);
+                    double dist = to_target.norm();
+                    Eigen::Vector3d los_vec = to_target.normalized();
                     
-                    // G-Limiting: Don't turn too hard
-                    // Compare current velocity vector with to_target
-                    // Calculate angle difference
-                    double angle_diff = std::acos(std::clamp(v_dir.dot(to_target), -1.0, 1.0));
+                    // Relative Velocity (assuming stationary target)
+                    // v_rel = v_target - v_missile = -v_missile
+                    Eigen::Vector3d v_rel = -vel_ecef;
+                    double v_closing = v_rel.dot(los_vec); // Should be positive if closing
                     
-                    // Max turn rate = a_max / V
-                    // We can't easily limit rate here without state, but we can limit the "Target Point" deviation
-                    // For now, Pure Pursuit is fine, Autopilot limits G via max fin deflection usually.
-                    // But we can limit the Angle of Attack implied by the turn?
-                    // Let's just point at target.
+                    // LOS Rate (Omega)
+                    // Omega = (r x v_rel) / |r|^2 ???
+                    // Standard Definition: Omega = (LOS x V_rel) / Range ???
+                    // No. Omega = (r x v) / r^2 where r is relative position vector.
+                    // Omega = (to_target x v_rel) / (dist * dist)
+                    Eigen::Vector3d omega = to_target.cross(v_rel) / (dist * dist);
                     
-                    Eigen::Vector3d body_x = to_target;
-                    Eigen::Vector3d body_y;
-                    if (body_x.cross(up).norm() < 1e-3) {
-                        body_y = local_east;
-                    } else {
-                        body_y = body_x.cross(up).normalized();
+                    // PN Acceleration Command (Perpendicular to LOS)
+                    // a_cmd = N * V_closing * Omega
+                    double N_pn = 3.0; // Navigation Constant
+                    Eigen::Vector3d a_cmd = N_pn * v_closing * omega.cross(los_vec); // Direction?
+                    // Omega is perpendicular to Plane defined by LOS and V_rel.
+                    // Omega x LOS is in the Plane, perpendicular to LOS.
+                    // This gives the direction to turn.
+                    
+                    // Limit Acceleration (G-Limit)
+                    double a_mag = a_cmd.norm();
+                    double max_accel = m_config.terminal_g_limit * 9.81;
+                    if (a_mag > max_accel) {
+                        a_cmd = a_cmd * (max_accel / a_mag);
                     }
-                    Eigen::Vector3d body_z = body_x.cross(body_y).normalized();
+                    
+                    // Convert Acceleration Command to Attitude Command
+                    // We need to generate aerodynamic lift in the direction of a_cmd.
+                    // F_aero = a_cmd * mass.
+                    // Lift Direction = a_cmd direction.
+                    // We need to roll the missile so that Body Pitch Plane aligns with a_cmd.
+                    // And pull AoA to generate the magnitude.
+                    
+                    // 1. Desired Lift Vector Direction (in ECEF)
+                    // We also need to fight Gravity?
+                    // a_total = a_cmd - g_vector ?
+                    // Gravity acts Down. To fly straight, we need Lift = Gravity.
+                    // To accelerate by a_cmd, we need Lift = a_cmd + Gravity.
+                    // g_vector is roughly -Up * 9.81.
+                    Eigen::Vector3d gravity = -9.81 * up;
+                    Eigen::Vector3d lift_needed = a_cmd - gravity; // F/m units
+                    
+                    // 2. Desired Body Y (Right Wing) should be perpendicular to Lift.
+                    // Body Z (Spine) is usually "Up" in body frame for standard plane?
+                    // For missile, usually +AoA is "Pitch Up" in Body Y axis?
+                    // Let's assume Body Z is "Up" (Direction of Lift).
+                    // Or Body Y is "Right", so Lift is in -Z or +Z?
+                    // Standard Aero: Lift is in Body Z-X plane, perpendicular to V.
+                    // Usually Lift is "Up" relative to body.
+                    // Let's assume we pull Positive AoA to generate Lift in Body -Z direction?
+                    // Wait, standard Body Frame: X=Nose, Y=Right, Z=Down.
+                    // Positive AoA -> Lift in -Z direction (Up).
+                    // So we want Body -Z aligned with lift_needed.
+                    
+                    Eigen::Vector3d desired_body_z = -lift_needed.normalized();
+                    
+                    // 3. Desired Body X (Nose) should be roughly Velocity vector
+                    // But we have AoA.
+                    // Body X is Velocity rotated by AoA.
+                    // For now, let's just align the Roll.
+                    // Construct Rotation:
+                    // X_temp = v_dir
+                    // Z_temp = desired_body_z projected to be perp to X_temp?
+                    
+                    Eigen::Vector3d body_x_temp = v_dir;
+                    Eigen::Vector3d body_y_temp = desired_body_z.cross(body_x_temp).normalized();
+                    Eigen::Vector3d body_z_final = body_x_temp.cross(body_y_temp).normalized();
+                    
+                    // Now we have the orientation that aligns "Body Up" (-Z) with Lift direction.
+                    // We also need to pitch up by AoA.
+                    // Calculate required AoA based on Lift Magnitude?
+                    // Lift_Mag = lift_needed.norm();
+                    // Lift = 0.5 * rho * V^2 * S * Cl_alpha * alpha
+                    // alpha = Lift / (Q * S * Cl_alpha)
+                    // We don't have rho/S/Cl here easily.
+                    // Let's use a simpler proportional mapping or max AoA.
+                    // Let's just command a pitch bias?
+                    // Or better: Just point the nose at the "Lead Point"?
+                    // The "Attitude Command" here defines the Reference Frame for the Autopilot.
+                    // The Autopilot will try to achieve this orientation.
+                    // If we set Target Orientation = Aligned with Velocity but Rolled,
+                    // The Autopilot will try to zero the error.
+                    // But we want to maintain an AoA.
+                    // If we command an orientation that is "pitched up" relative to velocity...
+                    
+                    // Let's apply a fixed "Max AoA" scaling?
+                    // Or just let the Autopilot handle "G-Command"?
+                    // Current Autopilot tracks Attitude Quaternion.
+                    // So we must output the Desired Attitude (Nose direction).
+                    
+                    // Desired Nose = Velocity Vector rotated by 'Alpha' towards 'Lift Direction'.
+                    // Alpha = k * Lift_Mag ?
+                    // Let's guess alpha. Max Lift corresponds to Max AoA (e.g. 20 deg).
+                    // Max G = 10g ~ 100 m/s2.
+                    // Current demand = lift_needed.norm().
+                    double lift_accel = lift_needed.norm();
+                    double max_lift_accel = max_accel + 9.81; // Approx
+                    double fraction = lift_accel / max_lift_accel;
+                    if (fraction > 1.0) fraction = 1.0;
+                    
+                    double commanded_aoa_deg = fraction * 20.0; // Max 20 deg AoA
+                    
+                    // Rotate body_x_temp (Velocity) around body_y_temp (Right Wing) by -alpha (Pitch Up)
+                    // Pitch Up means Nose goes "Up" (away from Z).
+                    // Rotation axis is +Y. Angle is +alpha?
+                    // Body Z is Down. Pitch Up is rotation about +Y that moves X towards -Z.
+                    // Right Hand Rule on +Y: X rotates towards -Z. Yes.
+                    // So rotate by +alpha.
+                    
+                    double alpha_rad = commanded_aoa_deg * AeroSim::Math::DEG2RAD();
+                    Eigen::AngleAxisd pitch_rot(-alpha_rad, body_y_temp); // Wait, standard pitch up is +theta.
+                    // If we rotate vectors: New_X = Rot * Old_X.
+                    // We want Nose to be "Above" Velocity.
+                    // Velocity is X_temp.
+                    // We want Nose to be rotated around Y by +alpha.
+                    Eigen::Vector3d body_x_final = Eigen::AngleAxisd(-alpha_rad, body_y_temp) * body_x_temp; 
+                    // Sign?
+                    // Y points Right. X points Forward. Z points Down.
+                    // Rotate X around Y by +90 -> Z. (Down). This is Pitch Down.
+                    // So Pitch Up is negative rotation around Y?
+                    // Let's check:
+                    // R_y(theta):
+                    //  c  0  s
+                    //  0  1  0
+                    // -s  0  c
+                    // R_y(90) * [1,0,0] = [0,0,-1] = -Z (Up).
+                    // So Positive Rotation around Y gives Pitch Up (Body X moves to Body -Z).
+                    // So we use +alpha_rad.
+                    
+                    body_x_final = Eigen::AngleAxisd(alpha_rad, body_y_temp) * body_x_temp;
+                    
+                    // Re-orthogonalize
+                    Eigen::Vector3d body_z_real = body_x_final.cross(body_y_temp).normalized();
+                    Eigen::Vector3d body_y_real = body_z_real.cross(body_x_final).normalized();
                     
                     Eigen::Matrix3d rot_mat;
-                    rot_mat.col(0) = body_x;
-                    rot_mat.col(1) = body_y;
-                    rot_mat.col(2) = body_z;
+                    rot_mat.col(0) = body_x_final;
+                    rot_mat.col(1) = body_y_real;
+                    rot_mat.col(2) = body_z_real;
                     target_quat = Eigen::Quaterniond(rot_mat);
+
                 } else {
                     target_quat = Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d::UnitX(), v_dir);
                 }
@@ -367,7 +525,7 @@ private:
     Phase m_phase;
     Eigen::Vector3d m_target_ecef;
 
-    void update_phase(double t, double alt, double vel_mag, double vertical_vel) {
+    void update_phase(double t, double alt, double vel_mag, double vertical_vel, double range_to_target) {
         if (t < m_config.boost_end_time) {
             m_phase = Phase::BOOST;
             return;
@@ -376,6 +534,12 @@ private:
         // Hysteresis Logic
         // Use margin to prevent flickering
         double margin = m_config.hysteresis_margin;
+
+        // Terminal Phase Trigger (Distance or Altitude based)
+        if (m_phase == Phase::GLIDE && range_to_target < m_config.terminal_range_trigger) {
+             m_phase = Phase::TERMINAL;
+             return;
+        }
 
         if (m_phase == Phase::BOOST) {
             // End of boost.
