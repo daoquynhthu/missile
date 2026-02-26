@@ -2,3 +2,5 @@ build/
 .vscode/
 *.png
 *.csv
+
+data/
