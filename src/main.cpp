@@ -150,16 +150,19 @@ int main(int argc, char** argv) {
     double boost_pitch_rate = 2.775;   // Optimized via Nelder-Mead (Low Gain Stable)
     double boost_pitch_min = 5.0;     // Minimum pitch limit (Allow flattening)
     double t_end = 1200.0;           // Simulation duration
+    double glide_aoa_bias = 5.0;     // Default Glide AoA Bias
 
     if (argc >= 2) boost_pitch_start = std::atof(argv[1]);
     if (argc >= 3) boost_pitch_rate = std::atof(argv[2]);
     if (argc >= 4) boost_pitch_min = std::atof(argv[3]);
     if (argc >= 5) t_end = std::atof(argv[4]);
+    if (argc >= 6) glide_aoa_bias = std::atof(argv[5]);
 
     std::cout << "[Args] Start: " << boost_pitch_start 
               << ", Rate: " << boost_pitch_rate 
               << ", Min: " << boost_pitch_min 
-              << ", T_end: " << t_end << std::endl;
+              << ", T_end: " << t_end 
+              << ", Glide AoA: " << glide_aoa_bias << std::endl;
     
     // 1. Initialize Models
     std::cout << "[Init] Loading Gravity Model..." << std::endl;
@@ -211,7 +214,7 @@ int main(int argc, char** argv) {
     guid_cfg.glide_vel_min = 800.0;
     guid_cfg.hysteresis_margin = 5000.0; // Larger margin to prevent flickering
 
-    guid_cfg.glide_aoa_bias = 5.0; // Low bias
+    guid_cfg.glide_aoa_bias = glide_aoa_bias; // From Args
     guid_cfg.glide_aoa_max = 20.0; // Increase max lift for skip
     guid_cfg.glide_aoa_min = -10.0; // Allow negative lift
     

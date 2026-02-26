@@ -27,7 +27,7 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R * c
 
-def run_simulation(start, rate, min_pitch):
+def run_simulation(start, rate, glide_aoa):
     """Runs the simulation with given parameters."""
     if os.path.exists(CSV_PATH):
         try:
@@ -35,7 +35,9 @@ def run_simulation(start, rate, min_pitch):
         except:
             pass
         
-    cmd = [EXE_PATH, str(start), str(rate), str(min_pitch), str(T_END)]
+    # Cmd: exe start rate min_pitch t_end glide_aoa
+    # We fix min_pitch to 5.0
+    cmd = [EXE_PATH, str(start), str(rate), "5.0", str(T_END), str(glide_aoa)]
     # Suppress output to keep console clean
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -111,9 +113,11 @@ def cost_function(metrics):
     return cost
 
 def nelder_mead():
-    # Initial Guess [Start, Rate]
-    x0 = [6.4375, 2.775] # Current best
-    step = [0.5, 0.2]
+    # Initial Guess [Start, Rate, GlideAoA]
+    # Based on manual testing: Start=5.0, Rate=3.0 gave flatter trajectory.
+    # AoA=10.0 for better L/D.
+    x0 = [5.0, 3.0, 10.0] 
+    step = [0.5, 0.2, 2.0] 
     
     # Simplex initialization
     simplex = [x0]
@@ -126,7 +130,7 @@ def nelder_mead():
     scores = []
     for point in simplex:
         print(f"Evaluating: {point}")
-        metrics = run_simulation(point[0], point[1], 5.0)
+        metrics = run_simulation(point[0], point[1], point[2])
         if metrics:
             score = cost_function(metrics)
             print(f"  Apogee: {metrics['apogee']/1000:.1f}km, Dist: {metrics['dist_to_target']/1000:.1f}km -> Cost: {score:.1f}")
@@ -140,13 +144,14 @@ def nelder_mead():
     rho = 0.5    # Contraction
     sigma = 0.5  # Shrink
     
-    for i in range(15): # Max iterations
+    for i in range(50): # Increased iterations
+
         scores.sort(key=lambda x: x[0])
         best = scores[0]
         worst = scores[-1]
         second_worst = scores[-2]
         
-        print(f"Iter {i+1}: Best Cost {best[0]:.1f} (Start={best[1][0]:.2f}, Rate={best[1][1]:.2f}) - Dist: {best[2]['dist_to_target']/1000:.1f}km")
+        print(f"Iter {i+1}: Best Cost {best[0]:.1f} (Start={best[1][0]:.2f}, Rate={best[1][1]:.2f}, AoA={best[1][2]:.2f}) - Dist: {best[2]['dist_to_target']/1000:.1f}km")
         
         # Centroid
         centroid = [0.0] * len(x0)
@@ -160,7 +165,7 @@ def nelder_mead():
         for j in range(len(x0)):
             xr[j] = centroid[j] + alpha * (centroid[j] - worst[1][j])
             
-        metrics_r = run_simulation(xr[0], xr[1], 5.0)
+        metrics_r = run_simulation(xr[0], xr[1], xr[2])
         score_r = cost_function(metrics_r)
         
         if scores[0][0] <= score_r < second_worst[0]:
@@ -172,7 +177,7 @@ def nelder_mead():
             xe = [0.0] * len(x0)
             for j in range(len(x0)):
                 xe[j] = centroid[j] + gamma * (xr[j] - centroid[j])
-            metrics_e = run_simulation(xe[0], xe[1], 5.0)
+            metrics_e = run_simulation(xe[0], xe[1], xe[2])
             score_e = cost_function(metrics_e)
             if score_e < score_r:
                 scores[-1] = (score_e, xe, metrics_e)
@@ -184,7 +189,7 @@ def nelder_mead():
         xc = [0.0] * len(x0)
         for j in range(len(x0)):
             xc[j] = centroid[j] + rho * (worst[1][j] - centroid[j])
-        metrics_c = run_simulation(xc[0], xc[1], 5.0)
+        metrics_c = run_simulation(xc[0], xc[1], xc[2])
         score_c = cost_function(metrics_c)
         if score_c < worst[0]:
             scores[-1] = (score_c, xc, metrics_c)
@@ -194,7 +199,7 @@ def nelder_mead():
         for k in range(1, len(scores)):
             for j in range(len(x0)):
                 scores[k][1][j] = scores[0][1][j] + sigma * (scores[k][1][j] - scores[0][1][j])
-            metrics = run_simulation(scores[k][1][0], scores[k][1][1], 5.0)
+            metrics = run_simulation(scores[k][1][0], scores[k][1][1], scores[k][1][2])
             scores[k] = (cost_function(metrics), scores[k][1], metrics)
 
     print("\nOptimization Complete")
