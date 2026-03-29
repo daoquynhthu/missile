@@ -18,7 +18,12 @@ namespace AeroSim {
         
         bool load_coefficients(const std::string& filepath);
         Eigen::Vector3d calculate_acceleration(const Eigen::Vector3d& r_ecef) const;
+        
+        // Batch processing for multi-trajectory simulation
+        std::vector<Eigen::Vector3d> calculate_accelerations_cuda(const std::vector<Eigen::Vector3d>& r_ecef_list) const;
+        
         void prepare_cuda();
+        // Deprecated single-point CUDA call (kept for compatibility but implementation will change)
         Eigen::Vector3d calculate_acceleration_cuda(const Eigen::Vector3d& r_ecef) const;
         int get_loaded_max_degree() const { return m_loaded_max_degree; }
 

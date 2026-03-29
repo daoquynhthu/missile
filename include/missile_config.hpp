@@ -17,6 +17,8 @@ namespace MissileDesign {
         // Mass Properties
         double total_mass = 15000.0;
         double payload_mass = 1000.0;
+        Eigen::Matrix3d inertia_tensor;
+        Eigen::Vector3d center_of_mass;
         
         // Propulsion
         AeroSim::SolidMotor::Config propulsion;

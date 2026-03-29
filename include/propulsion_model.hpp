@@ -189,16 +189,24 @@ public:
         out.moment_body = Eigen::Vector3d::Zero();
         out.mass_flow_rate = 0.0;
 
-        if (!m_ignited) return out;
+        // Debug Print (Limited)
+        // static int debug_cnt = 0;
+        // bool do_print = (debug_cnt++ % 1000 == 0) && (t < 70.0); // Print during boost phase
+
+        if (!m_ignited) {
+            // if (do_print) printf("[Prop] Not Ignited (t=%.2f)\n", t);
+            return out;
+        }
         
         // Check for burnout by mass
         if (current_mass <= m_config.dry_mass + m_config.payload_mass + 1.0) { // 1kg buffer
+             // if (do_print) printf("[Prop] Mass Burnout: Mass=%.1f Limit=%.1f\n", current_mass, m_config.dry_mass + m_config.payload_mass);
              return out;
         }
 
         double dt = t - m_ignition_time;
         if (dt < 0 || dt > m_config.burn_time) {
-            // Burnout by time
+            // if (do_print) printf("[Prop] Time Burnout: dt=%.2f Max=%.2f\n", dt, m_config.burn_time);
             return out;
         }
 
@@ -215,6 +223,8 @@ public:
         // Pressure correction: F = F_vac - P_amb * A_exit
         double thrust_mag = F_vac - ambient_pressure * m_config.exit_area;
         if (thrust_mag < 0) thrust_mag = 0; 
+
+        // if (do_print) printf("[Prop] Thrust=%.1f Mass=%.1f dt=%.2f\n", thrust_mag, current_mass, dt);
 
         // 2. Mass Flow Rate
         // m_dot = -F_vac / (Isp * g0)

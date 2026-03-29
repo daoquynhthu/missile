@@ -88,8 +88,8 @@ public:
 
         // 2. PID Control
         // TVC (Pitch/Yaw)
-        double tvc_pitch_cmd = -m_pitch_pid.update_with_rate(pitch_err, current_omega.y(), dt);
-        double tvc_yaw_cmd = -m_yaw_pid.update_with_rate(yaw_err, current_omega.z(), dt);
+            double tvc_pitch_cmd = -m_pitch_pid.update_with_rate(pitch_err, current_omega.y(), dt);
+            double tvc_yaw_cmd = -m_yaw_pid.update_with_rate(yaw_err, current_omega.z(), dt);
         
         // RCS (Pitch/Yaw/Roll)
         double rcs_pitch_cmd = m_rcs_pitch_pid.update_with_rate(pitch_err, current_omega.y(), dt);

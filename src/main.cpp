@@ -5,6 +5,9 @@
 #include <thread>
 #include <vector>
 #include <cmath>
+#include <random>
+#include <omp.h> // For CPU parallel tasks if needed (but we focus on GPU gravity)
+
 #include "constants.hpp"
 #include "gravity_model.hpp"
 #include "atmosphere_model.hpp"
@@ -15,7 +18,7 @@
 #include "aerodynamics_model.hpp"
 #include "gnc/autopilot.hpp"
 #include "gnc/guidance.hpp" 
-#include "missile_config.hpp" // Load Missile Design
+#include "missile_config.hpp"
 
 using namespace AeroSim;
 using namespace AeroSim::GNC;
@@ -37,47 +40,50 @@ NRLMSISE00Input get_atmosphere_input(double t, const LLA& lla) {
     return input;
 }
 
-// Functor for system dynamics
+// Functor for system dynamics - Per Trajectory Instance
 struct MissileSystem {
-    GravityModel& gravity;
-    SolidMotor& motor;
-        RCSModel& rcs; // New RCS
-    AerodynamicsModel& aero; 
-    InertialProps& initial_inertia;
-    Autopilot& autopilot;
-    Guidance& guidance; 
-    Eigen::Quaterniond target_attitude; // Command
-    double min_mass; // Minimum mass (dry + payload)
+    SolidMotor& motor;         // Shared
+    RCSModel& rcs;             // Shared
+    AerodynamicsModel& aero;   // Shared
+    InertialProps& initial_inertia; // Shared (Initial props)
+    double min_mass;
+
+    // Per-Step State
+    Eigen::Vector3d cached_gravity; // Gravity acceleration in ECEF (m/s^2)
+    Autopilot::AutopilotOutput current_cmd = {{0.0, 0.0}, {0.0, 0.0, 0.0, false}, {0.0, 0.0, 0.0}};
 
     // Constructor
-    MissileSystem(GravityModel& g, SolidMotor& m, RCSModel& r, AerodynamicsModel& a, InertialProps& i, Autopilot& ap, Guidance& gd, double mm) 
-        : gravity(g), motor(m), rcs(r), aero(a), initial_inertia(i), autopilot(ap), guidance(gd), target_attitude(Eigen::Quaterniond::Identity()), min_mass(mm) {}
+    MissileSystem(SolidMotor& m, RCSModel& r, AerodynamicsModel& a, InertialProps& i, double mm) 
+        : motor(m), rcs(r), aero(a), initial_inertia(i), min_mass(mm) {
+        cached_gravity.setZero();
+    }
         
-    // Stored Control Command (computed once per step)
-    Autopilot::AutopilotOutput current_cmd = {{0.0, 0.0}, {0.0, 0.0, 0.0, false}};
+    void set_gravity(const Eigen::Vector3d& g) {
+        cached_gravity = g;
+    }
 
-    // The operator() required by integrate_rk4
+    // The operator() required by RK4 integration
     State6DOF operator()(const State6DOF& state, double t) {
-        // 1. Calculate Gravity (re-evaluated at current position)
-        Eigen::Vector3d g_ecef = gravity.calculate_acceleration(state.pos_ecef);
+        // 1. Gravity (Pre-calculated)
+        Eigen::Vector3d g_ecef = cached_gravity;
         
-        // 2. Calculate Atmosphere
+        // 2. Atmosphere
         LLA lla = CoordinateTransform::ecef_to_lla(state.pos_ecef);
-        // Use NRLMSISE-00 (High Fidelity)
-        AtmosphereData atm = AtmosphereModel::calculate(get_atmosphere_input(t, lla));
-        
-        // 3. Calculate Aerodynamics (High Fidelity)
+        // Use USSA76 for speed in Monte Carlo, or NRLMSISE-00 if precision needed
+        // For 100 trajectories, USSA76 is much faster.
+        // But let's use NRLMSISE-00 for the first trajectory (detailed logging) and USSA76 for others?
+        // To keep dynamics consistent, use USSA76 for all or NRLMSISE-00 for all.
+        // USSA76 is ~100x faster than NRLMSISE-00.
+        // Let's use USSA76 for performance as requested ("reduce performance overhead").
+        AtmosphereData atm = AtmosphereModel::calculate_ussa76(lla.alt);
+
+        // 3. Aerodynamics
         ForcesMoments fm;
         fm.force_body = Eigen::Vector3d::Zero();
         fm.moment_body = Eigen::Vector3d::Zero();
         fm.mass_flow_rate = 0.0;
         
-        // Transform velocity to body frame (assuming no wind)
-        // state.vel_ecef is velocity relative to Earth (ECEF).
-        // Atmosphere rotates with Earth, so Airspeed = vel_ecef (if wind = 0).
-        Eigen::Vector3d v_air_ecef = state.vel_ecef;
-        
-        // Transform to Body Frame
+        Eigen::Vector3d v_air_ecef = state.vel_ecef; // Assume no wind
         Eigen::Vector3d v_air_body = state.quat_be.inverse() * v_air_ecef;
         
         double v_mag = v_air_body.norm();
@@ -85,21 +91,12 @@ struct MissileSystem {
         double dynamic_pressure = 0.5 * atm.density * v_mag * v_mag;
         
         if (v_mag > 1.0) {
-            // Calculate Alpha and Beta
-            // v_air_body = [u, v, w]
-            // alpha = atan2(w, u)
-            // beta = asin(v / V)
             double u = v_air_body.x();
             double v = v_air_body.y();
             double w = v_air_body.z();
             
             double alpha = std::atan2(w, u);
             double beta = std::asin(v / v_mag);
-            
-            // Current CoM (approximation based on mass)
-            // Linear interpolation of CoM based on mass ratio?
-            // Let's assume CoM is constant for now as user didn't provide mass props table.
-            // Using current state.mass to update inertia tensor scalar only.
             
             auto aero_forces = aero.compute_forces_moments(
                 dynamic_pressure, mach, alpha, beta, initial_inertia.com,
@@ -110,384 +107,348 @@ struct MissileSystem {
             fm.moment_body += aero_forces.second;
         }
 
-        // 4. Calculate Propulsion
-        // Main Motor (TVC)
+        // 4. Propulsion
         PropulsionOutput prop_main = motor.compute(t, state.mass, atm.pressure, current_cmd.tvc, initial_inertia.com);
-        
-        // RCS
         PropulsionOutput prop_rcs = rcs.compute(current_cmd.rcs, state.mass, min_mass);
-        
-        // Combine
         PropulsionOutput prop_total = prop_main + prop_rcs;
         
         fm.force_body += prop_total.force_body;
         fm.moment_body += prop_total.moment_body;
         fm.mass_flow_rate = prop_total.mass_flow_rate;
         
-        // Update inertia mass for dynamics calculation
+        // Update inertia
         InertialProps current_inertia = initial_inertia;
         current_inertia.mass = state.mass;
-        // Scale inertia tensor: I_new = I_initial * (m_new / m_initial)
         if (initial_inertia.mass > 0) {
             double ratio = state.mass / initial_inertia.mass;
             current_inertia.inertia = initial_inertia.inertia * ratio;
         }
         
-        // 5. Compute Derivatives using the core dynamics equation
+        // 5. Derivatives
         return Dynamics6DOF::compute_derivatives(state, fm, current_inertia, g_ecef);
     }
 };
 
+struct Trajectory {
+    int id;
+    bool active = true;
+    State6DOF state;
+    Autopilot autopilot;
+    Guidance guidance;
+    MissileSystem system;
+    
+    // Stats
+    double max_alt = 0.0;
+    double max_speed = 0.0;
+    double range = 0.0;
+
+    Trajectory(int i, const State6DOF& s, const Autopilot::Config& ap_cfg, const Guidance::Config& gd_cfg,
+               SolidMotor& m, RCSModel& r, AerodynamicsModel& a, InertialProps& ip, double mm)
+        : id(i), state(s), autopilot(ap_cfg), guidance(gd_cfg), system(m, r, a, ip, mm) {}
+};
+
 int main(int argc, char** argv) {
     std::cout << "===============================================" << std::endl;
-    std::cout << "  AeroSim - High Fidelity Ballistic Simulation " << std::endl;
+    std::cout << "  AeroSim - Multi-Trajectory Monte Carlo Mode  " << std::endl;
     std::cout << "===============================================" << std::endl;
 
-    // Parse Command Line Arguments
-    // Defaults set to optimized values for Qian Xuesen trajectory (Skip-Glide)
-    // Adjusted to ensure low apogee (<100km) and Max Range
-    double boost_pitch_start = 6.4375; // Optimized via Nelder-Mead (Low Gain Stable)
-    double boost_pitch_rate = 2.775;   // Optimized via Nelder-Mead (Low Gain Stable)
-    double boost_pitch_min = 5.0;     // Minimum pitch limit (Allow flattening)
-    double t_end = 1200.0;           // Simulation duration
-    double glide_aoa_bias = 5.0;     // Default Glide AoA Bias
-
-    if (argc >= 2) boost_pitch_start = std::atof(argv[1]);
-    if (argc >= 3) boost_pitch_rate = std::atof(argv[2]);
-    if (argc >= 4) boost_pitch_min = std::atof(argv[3]);
-    if (argc >= 5) t_end = std::atof(argv[4]);
-    if (argc >= 6) glide_aoa_bias = std::atof(argv[5]);
-
-    std::cout << "[Args] Start: " << boost_pitch_start 
-              << ", Rate: " << boost_pitch_rate 
-              << ", Min: " << boost_pitch_min 
-              << ", T_end: " << t_end 
-              << ", Glide AoA: " << glide_aoa_bias << std::endl;
+    // Config
+    int num_trajectories = 100; // Monte Carlo Count
+    double t_end = 3000.0;
     
-    // 1. Initialize Models
-    std::cout << "[Init] Loading Gravity Model..." << std::endl;
-    // Use lower degree for quick verification (N=20 for speed, N=70 for high precision, N=360 for full)
-    // User requested < 5 mins. Degree 70 is too slow (~1hr).
-    // Degree 4 (J2, J3, J4) captures primary oblateness and asymmetry, sufficient for trajectory shape.
-    GravityModel gravity(4); 
-    // Try to load coefficients, fallback if not found
+    // Load Models
+    std::cout << "[Init] Loading Gravity Model (Batch GPU Enabled)..." << std::endl;
+    GravityModel gravity(4); // J2-J4
     if (!gravity.load_coefficients("e:/missile/data/EGM2008.gfc")) {
-        std::cerr << "[Warning] EGM2008.gfc not found, using default point mass + J2" << std::endl;
-    } else {
-        std::cout << "[Init] Loaded EGM2008 coefficients up to degree " << gravity.get_loaded_max_degree() << std::endl;
+        std::cerr << "[Warning] EGM2008.gfc not found, using default." << std::endl;
     }
 
-    // Load Missile Configuration
     MissileDesign::HGV1Config hgv_config = MissileDesign::load_hgv1_config();
-    std::cout << "[Init] Loaded Design: " << hgv_config.name << std::endl;
-    std::cout << "[Init] Total Mass: " << hgv_config.total_mass << " kg, Payload: " << hgv_config.payload_mass << " kg" << std::endl;
-
-    // Initialize Propulsion
     SolidMotor motor(hgv_config.propulsion);
-
-    // Initialize RCS
     RCSModel::Config rcs_cfg;
-    rcs_cfg.max_thrust = 5000.0; // 5kN thrusters
+    rcs_cfg.max_thrust = 5000.0;
     rcs_cfg.isp = 220.0;
-    rcs_cfg.lever_arm_x = 8.0;   // Near nose/tail
-    rcs_cfg.lever_arm_r = 0.75;  // Body radius
+    rcs_cfg.lever_arm_x = 8.0;
+    rcs_cfg.lever_arm_r = 0.75;
     RCSModel rcs(rcs_cfg);
-
-    // Initialize Aerodynamics
     AerodynamicsModel aero(hgv_config.aerodynamics);
-
-    // Initialize Autopilot
-    Autopilot autopilot(hgv_config.autopilot);
     
-    // Guidance Config (Qian Xuesen Trajectory - Optimized for Skip)
-    GNC::Guidance::Config guid_cfg;
-    guid_cfg.boost_end_time = hgv_config.propulsion.burn_time;
-    guid_cfg.boost_pitch_start = boost_pitch_start; 
-    guid_cfg.boost_pitch_rate = boost_pitch_rate; 
-    guid_cfg.boost_pitch_min = boost_pitch_min;
-
-    std::cout << "[Config] Boost Pitch Start: " << guid_cfg.boost_pitch_start << std::endl;
-    std::cout << "[Config] Boost Pitch Rate: " << guid_cfg.boost_pitch_rate << std::endl;
-
-    guid_cfg.glide_alt_start = 50000.0; // Match burnout altitude
-    guid_cfg.glide_alt_end = 20000.0;
-    guid_cfg.glide_vel_min = 800.0;
-    guid_cfg.hysteresis_margin = 5000.0; // Larger margin to prevent flickering
-
-    guid_cfg.glide_aoa_bias = glide_aoa_bias; // From Args
-    guid_cfg.glide_aoa_max = 20.0; // Increase max lift for skip
-    guid_cfg.glide_aoa_min = -10.0; // Allow negative lift
-    
-    guid_cfg.kp_alt = 0.05; // Stronger altitude capture
-    guid_cfg.kp_vz = 0.1;   // Stronger damping
-    guid_cfg.max_climb_rate = 200.0; 
-    guid_cfg.max_descent_rate = -300.0;
-
-    guid_cfg.lateral_gain = 3.0; 
-    guid_cfg.max_bank_angle = 60.0; 
-
-    guid_cfg.target_range = 2200000.0;
-    GNC::Guidance guidance(guid_cfg);
-    
-    // Set Target (Pacific Ocean - Guam Region approx)
-    // Jiuquan (40.96N, 100.30E) -> ~2800km Range -> ~135E, 20N
-    // Target: 20.0 N, 135.0 E
-    LLA target_lla = {20.0 * AeroSim::Math::DEG2RAD(), 135.0 * AeroSim::Math::DEG2RAD(), 0.0};
-    guidance.set_target(CoordinateTransform::lla_to_ecef(target_lla));
-
-    // 2. Initial State Setup
-    std::cout << "[Init] Setting up initial state..." << std::endl;
-    // Launch Site: Jiuquan Satellite Launch Center (JSLC)
-    // Lat: 40.960556 N, Lon: 100.298333 E, Alt: 1000m
+    // Initial State Template
     LLA init_lla = {40.960556 * AeroSim::Math::DEG2RAD(), 100.298333 * AeroSim::Math::DEG2RAD(), 1000.0}; 
     Eigen::Vector3d init_pos = CoordinateTransform::lla_to_ecef(init_lla);
     
-    State6DOF state;
-    state.pos_ecef = init_pos;
-    state.vel_ecef = Eigen::Vector3d::Zero(); // Launch from rest
-    
-    // We want Body Z aligned with Local East (Launch Azimuth = 90 deg East)
-    // At Launch Site (Lat=40.96, Lon=100.3):
-    // Up, North, East are local vectors.
-    // Launch Vertical: Body X = Up.
-    // Body Y = South (-North) or similar?
-    // Let's use Guidance to initialize orientation? Or just construct it.
-    
-    // Construct Initial Quaternion: Vertical, with Body Z pointing East.
-    // ECEF Frame vectors at launch site:
+    // Orientation
     Eigen::Vector3d up_init = init_pos.normalized();
     Eigen::Vector3d earth_z(0,0,1);
     Eigen::Vector3d north_init = (earth_z - (earth_z.dot(up_init) * up_init)).normalized();
     Eigen::Vector3d east_init = north_init.cross(up_init).normalized();
-    
-    // Body Frame:
-    // X_b = Up
-    // Z_b = East
-    // Y_b = Z_b x X_b = East x Up = North? No.
-    // East x Up = (North x Up) x Up? No.
-    // East = North x Up.
-    // East x Up = (North x Up) x Up = North x (Up x Up) ... wait.
-    // Right Hand Rule: North(Index) x Up(Middle) = East(Thumb).
-    // East(Index) x Up(Middle) = North?
-    // Let's check: (1,0,0) x (0,0,1) = (0,-1,0) = -Y.
-    // So East x Up = -North = South.
-    // So Y_b = South.
-    
     Eigen::Matrix3d init_rot;
-    init_rot.col(0) = up_init;    // Body X (Nose)
-    init_rot.col(1) = -north_init; // Body Y (Right Wing) -> South
-    init_rot.col(2) = east_init;   // Body Z (Belly/Top?) -> East
+    init_rot.col(0) = up_init;
+    init_rot.col(1) = -north_init;
+    init_rot.col(2) = east_init;
     
-    state.quat_be = Eigen::Quaterniond(init_rot);
+    State6DOF base_state;
+    base_state.pos_ecef = init_pos;
+    base_state.vel_ecef = Eigen::Vector3d::Zero();
+    base_state.quat_be = Eigen::Quaterniond(init_rot);
+    base_state.omega_body.setZero();
+    base_state.mass = hgv_config.total_mass;
     
-    state.omega_body.setZero();
-    state.mass = hgv_config.total_mass;
-
+    // Inertial Properties (Cylinder approximation)
     InertialProps inertia;
-    inertia.mass = state.mass;
-    // Cylinder Inertia: I = 1/12 * m * (3*r^2 + h^2)
-    // Estimate based on config mass
-    double estimated_inertia = (1.0/12.0) * state.mass * (100.0); // Approx length^2
-    inertia.inertia = Eigen::Matrix3d::Identity() * estimated_inertia; 
-    inertia.com = Eigen::Vector3d(-4.8, 0, 0); // Move CG back to -4.8m (CP ~5.2-5.5) to reduce static margin for better turn authority
+    inertia.mass = base_state.mass;
+    double radius = 0.26; // 0.52m diameter
+    double length = 6.0;
+    double Ix = 0.5 * inertia.mass * radius * radius;
+    double Iy = (1.0/12.0) * inertia.mass * (3*radius*radius + length*length);
+    inertia.inertia = Eigen::Matrix3d::Zero();
+    inertia.inertia(0,0) = Ix;
+    inertia.inertia(1,1) = Iy;
+    inertia.inertia(2,2) = Iy;
+    inertia.com = Eigen::Vector3d(3.0, 0, 0); // Move CG to mid-body (3.0m) for stability
 
-    // 3. Create System Dynamics
-    double min_mass = hgv_config.propulsion.dry_mass + hgv_config.payload_mass;
-    MissileSystem missile(gravity, motor, rcs, aero, inertia, autopilot, guidance, min_mass);
-    
-    // No manual target attitude command anymore - Guidance handles it.
-    
-    // Ignite motor at t=0.1s
-    motor.ignite(0.1);
+    // Guidance Config
+    GNC::Guidance::Config guid_cfg;
+    guid_cfg.boost_end_time = 50.0;
+    guid_cfg.boost_pitch_start = 10.0;
+    guid_cfg.boost_pitch_rate = 1.0;
+    guid_cfg.boost_pitch_min = 30.0;
+    guid_cfg.glide_alt_start = 50000.0;
+    guid_cfg.glide_alt_end = 20000.0;
+    guid_cfg.glide_vel_min = 800.0;
+    guid_cfg.target_range = 4000000.0;
+    LLA target_lla = {20.0 * AeroSim::Math::DEG2RAD(), 135.0 * AeroSim::Math::DEG2RAD(), 0.0};
+    Eigen::Vector3d target_ecef = CoordinateTransform::lla_to_ecef(target_lla);
 
-    // 4. Simulation Loop
+    // Initialize Trajectories with Dispersion
+    std::cout << "[Init] Initializing " << num_trajectories << " trajectories..." << std::endl;
+    std::vector<Trajectory> trajectories;
+    trajectories.reserve(num_trajectories);
+    
+    std::mt19937 rng(42);
+    std::normal_distribution<double> dist_pos(0.0, 10.0); // 10m position error
+    std::normal_distribution<double> dist_mass(0.0, 50.0); // 50kg mass error
+    std::normal_distribution<double> dist_pitch(0.0, 0.5); // 0.5 deg pitch error
+
+    for (int i = 0; i < num_trajectories; ++i) {
+        State6DOF s = base_state;
+        // Apply Dispersion
+        s.pos_ecef += Eigen::Vector3d(dist_pos(rng), dist_pos(rng), dist_pos(rng));
+        s.mass += dist_mass(rng);
+        
+        // Apply pitch dispersion to orientation
+        Eigen::AngleAxisd pitch_err(dist_pitch(rng) * AeroSim::Math::DEG2RAD(), Eigen::Vector3d::UnitY());
+        s.quat_be = s.quat_be * pitch_err;
+
+        GNC::Guidance::Config g_cfg = guid_cfg; // Copy config
+        // Could disperse guidance parameters here too
+
+        Autopilot::Config ap_cfg = hgv_config.autopilot;
+
+        Trajectory t(i, s, ap_cfg, g_cfg, motor, rcs, aero, inertia, hgv_config.propulsion.dry_mass);
+        t.guidance.set_target(target_ecef);
+        trajectories.push_back(std::move(t));
+    }
+
+    // Simulation Loop
     double t = 0.0;
-    double dt = 0.02; // 20ms step (50Hz) - Compromise between speed and accuracy
-    // Run longer to see re-entry/glide
-    // t_end is defined above
+    double dt = 0.002; // 500 Hz for stability during boost/transonic
+    int active_count = num_trajectories;
+    
+    // Performance metrics
+    auto sim_start_time = std::chrono::high_resolution_clock::now();
+    
+    std::cout << "[Sim] Starting Batch Simulation (Fixed dt=" << dt << "s)..." << std::endl;
+    ProgressBar sim_progress(100, 50, "Monte Carlo");
 
-    std::cout << "[Sim] Starting integration (RK4)..." << std::endl;
-    std::cout << "Time(s) | Alt(m) | Vel(m/s) | Mach | Phase | Pitch(deg) | Thrust(N) | T_body_y | M_body_y | Pitch_Err" << std::endl;
-    std::cout << "--------------------------------------------------------------------------------------------------" << std::endl;
+    // Logging Buffer
+    struct LogPoint {
+        double t;
+        double alt;
+        double vel;
+        double mach;
+        int phase;
+        double pitch;
+        double mass;
+        double thrust;
+    };
+    std::vector<std::vector<LogPoint>> trajectory_logs(num_trajectories);
+    // Reserve memory (approx 3000s / 0.1s = 30000 points)
+    for(auto& log : trajectory_logs) log.reserve(30000);
 
-    // Open CSV file
+    motor.ignite(0.1); // Ignite all at 0.1s
+
+    while (t < t_end && active_count > 0) {
+        active_count = 0;
+        
+        // 1. GNC Update & Status Check
+        for (int i=0; i<num_trajectories; ++i) {
+            auto& traj = trajectories[i];
+            if (!traj.active) continue;
+            
+            LLA lla = CoordinateTransform::ecef_to_lla(traj.state.pos_ecef);
+            
+            // Stats
+            if (lla.alt > traj.max_alt) traj.max_alt = lla.alt;
+            double v = traj.state.vel_ecef.norm();
+            if (v > traj.max_speed) traj.max_speed = v;
+
+            // Ground Collision
+            if (lla.alt < 0.0) {
+                traj.active = false;
+                traj.range = (CoordinateTransform::lla_to_ecef(lla) - init_pos).norm();
+                continue;
+            }
+            active_count++;
+
+            // GNC
+            Eigen::Quaterniond guid_target = traj.guidance.update(t, traj.state.pos_ecef, traj.state.vel_ecef);
+            traj.system.current_cmd = traj.autopilot.update(traj.state.quat_be, traj.state.omega_body, guid_target, dt);
+
+            // Logging (Every 0.1s)
+            if (std::fmod(t, 0.1) < dt) {
+                 double mach = v / 340.0; // Approx
+                 Eigen::Vector3d up = traj.state.pos_ecef.normalized();
+                 Eigen::Vector3d body_x = traj.state.quat_be * Eigen::Vector3d::UnitX();
+                 double pitch = 90.0 - std::acos(std::clamp(body_x.dot(up), -1.0, 1.0)) * 180.0/3.14159;
+                 
+                 // Estimate Thrust (not stored in state, need to re-compute or cache? Just assume motor curve for now or skip)
+                 double thrust = 0.0; // Placeholder
+                 
+                 trajectory_logs[i].push_back({t, lla.alt, v, mach, (int)traj.guidance.get_phase(), pitch, traj.state.mass, thrust});
+            }
+        }
+
+        if (active_count == 0) break;
+
+        // 2. Physics Integration (RK4 Unrolled with Batch Gravity)
+        // Only process active trajectories to save time? 
+        // Or keep indices consistent? Keeping consistent is easier for batch vector construction.
+        // We'll build a list of pointers or indices to active trajectories.
+        std::vector<int> active_indices;
+        active_indices.reserve(num_trajectories);
+        for(int i=0; i<num_trajectories; ++i) {
+            if(trajectories[i].active) active_indices.push_back(i);
+        }
+        
+        int N = active_indices.size();
+        std::vector<Eigen::Vector3d> positions(N);
+
+        // --- Stage 1 ---
+        for(int i=0; i<N; ++i) positions[i] = trajectories[active_indices[i]].state.pos_ecef;
+        auto grav1 = gravity.calculate_accelerations_cuda(positions);
+        
+        std::vector<State6DOF> k1(N);
+        for(int i=0; i<N; ++i) {
+            int idx = active_indices[i];
+            trajectories[idx].system.set_gravity(grav1[i]);
+            k1[i] = trajectories[idx].system(trajectories[idx].state, t);
+        }
+
+        // --- Stage 2 ---
+        std::vector<State6DOF> temp_states(N);
+        for(int i=0; i<N; ++i) {
+            int idx = active_indices[i];
+            State6DOF s = trajectories[idx].state + k1[i] * (0.5 * dt);
+            s.normalize();
+            temp_states[i] = s;
+            positions[i] = s.pos_ecef;
+        }
+        auto grav2 = gravity.calculate_accelerations_cuda(positions);
+
+        std::vector<State6DOF> k2(N);
+        for(int i=0; i<N; ++i) {
+            int idx = active_indices[i];
+            trajectories[idx].system.set_gravity(grav2[i]);
+            k2[i] = trajectories[idx].system(temp_states[i], t + 0.5*dt);
+        }
+
+        // --- Stage 3 ---
+        for(int i=0; i<N; ++i) {
+            int idx = active_indices[i];
+            State6DOF s = trajectories[idx].state + k2[i] * (0.5 * dt);
+            s.normalize();
+            temp_states[i] = s;
+            positions[i] = s.pos_ecef;
+        }
+        auto grav3 = gravity.calculate_accelerations_cuda(positions);
+
+        std::vector<State6DOF> k3(N);
+        for(int i=0; i<N; ++i) {
+            int idx = active_indices[i];
+            trajectories[idx].system.set_gravity(grav3[i]);
+            k3[i] = trajectories[idx].system(temp_states[i], t + 0.5*dt);
+        }
+
+        // --- Stage 4 ---
+        for(int i=0; i<N; ++i) {
+            int idx = active_indices[i];
+            State6DOF s = trajectories[idx].state + k3[i] * dt;
+            s.normalize();
+            temp_states[i] = s;
+            positions[i] = s.pos_ecef;
+        }
+        auto grav4 = gravity.calculate_accelerations_cuda(positions);
+
+        std::vector<State6DOF> k4(N);
+        for(int i=0; i<N; ++i) {
+            int idx = active_indices[i];
+            trajectories[idx].system.set_gravity(grav4[i]);
+            k4[i] = trajectories[idx].system(temp_states[i], t + dt);
+        }
+
+        // --- Update ---
+        for(int i=0; i<N; ++i) {
+            int idx = active_indices[i];
+            trajectories[idx].state = trajectories[idx].state + (k1[i] + k2[i]*2.0 + k3[i]*2.0 + k4[i]) * (dt / 6.0);
+            trajectories[idx].state.normalize();
+        }
+
+        t += dt;
+        sim_progress.update((size_t)((t / t_end) * 100.0));
+    }
+    
+    sim_progress.finish();
+
+    // Report & CSV Export
+    std::cout << "[Sim] Monte Carlo Complete." << std::endl;
+    
+    // 1. Compute Stats & Find Best Trajectory
+    double mean_range = 0.0;
+    double max_range = 0.0;
+    int success_count = 0;
+    int best_idx = 0;
+    
+    for(int i=0; i<num_trajectories; ++i) {
+        const auto& tr = trajectories[i];
+        if (tr.range > 1000.0) { // Filter out launch failures
+            mean_range += tr.range;
+            if (tr.range > max_range) {
+                max_range = tr.range;
+                best_idx = i;
+            }
+            success_count++;
+        }
+    }
+    if (success_count > 0) mean_range /= success_count;
+    
+    std::cout << "Success Count: " << success_count << "/" << num_trajectories << std::endl;
+    std::cout << "Mean Range: " << mean_range / 1000.0 << " km" << std::endl;
+    std::cout << "Best Range: " << max_range / 1000.0 << " km (Trajectory " << best_idx << ")" << std::endl;
+
+    // 2. Export Best Trajectory
     std::ofstream csv_file("simulation_data.csv");
     if (csv_file.is_open()) {
-        csv_file << "Time(s),Alt(m),Vel(m/s),Mach,Phase,Pitch(deg),Thrust(N),T_body_y,M_body_y,Pitch_Err,Lat(deg),Lon(deg),Mass(kg),Pitch_Cmd(deg)\n";
-    }
-
-    size_t total_steps = (size_t)(t_end/dt);
-    ProgressBar sim_progress(total_steps, 50, "Simulation");
-
-    for (int i = 0; i <= total_steps; ++i) {
-        
-        // Ground Interaction / Clamp (Prevent negative altitude)
-        LLA lla_check = CoordinateTransform::ecef_to_lla(state.pos_ecef);
-        if (lla_check.alt < 0.0) {
-            lla_check.alt = 0.0;
-            state.pos_ecef = CoordinateTransform::lla_to_ecef(lla_check);
-            // If moving down (towards center), stop
-            Eigen::Vector3d up = state.pos_ecef.normalized();
-            if (state.vel_ecef.dot(up) < 0) {
-                state.vel_ecef.setZero();
-                state.omega_body.setZero();
-                std::cout << "Impact detected at t=" << t << "s. Simulation aborted." << std::endl;
-                break;
-            }
+        csv_file << "Time,Alt,Vel,Mach,Phase,Pitch,Thrust,Mass\n";
+        const auto& best_log = trajectory_logs[best_idx];
+        for(const auto& pt : best_log) {
+            csv_file << pt.t << "," << pt.alt << "," << pt.vel << "," << pt.mach << "," 
+                     << pt.phase << "," << pt.pitch << "," << pt.thrust << "," << pt.mass << "\n";
         }
-
-        // CSV Logging (High Frequency: 1s)
-        if (i % 100 == 0) {
-            LLA current_lla = CoordinateTransform::ecef_to_lla(state.pos_ecef);
-            
-            // Re-calculate some values for logging
-            AtmosphereData atm = AtmosphereModel::calculate(get_atmosphere_input(t, current_lla));
-            // Recalculate forces for logging (Motor + RCS)
-            PropulsionOutput prop_main = motor.compute(t, state.mass, atm.pressure, missile.current_cmd.tvc, inertia.com);
-            PropulsionOutput prop_rcs = rcs.compute(missile.current_cmd.rcs, state.mass, min_mass);
-            PropulsionOutput prop = prop_main + prop_rcs;
-            
-            double mach = state.vel_ecef.norm() / atm.sound_speed;
-            
-            Eigen::Vector3d up = state.pos_ecef.normalized();
-            Eigen::Vector3d body_x = state.quat_be * Eigen::Vector3d::UnitX();
-            double dot = body_x.dot(up);
-            if (dot > 1.0) dot = 1.0;
-            if (dot < -1.0) dot = -1.0;
-            double angle_from_vertical = std::acos(dot) * AeroSim::Math::RAD2DEG();
-            double pitch_deg = 90.0 - angle_from_vertical;
-
-            double t_body_y = prop.force_body.y();
-            double m_body_y = prop.moment_body.y();
-            
-            Eigen::Quaterniond guid_target = guidance.update(t, state.pos_ecef, state.vel_ecef);
-            Eigen::Quaterniond q_err = state.quat_be.inverse() * guid_target;
-            if (q_err.w() < 0) q_err.coeffs() = -q_err.coeffs();
-            double pitch_err = 2.0 * q_err.y();
-
-            // Debug: Log Guidance Target Pitch
-            Eigen::Vector3d target_x = guid_target * Eigen::Vector3d::UnitX();
-            double target_dot = target_x.dot(up);
-            if (target_dot > 1.0) target_dot = 1.0;
-            if (target_dot < -1.0) target_dot = -1.0;
-            double target_pitch_deg = 90.0 - std::acos(target_dot) * AeroSim::Math::RAD2DEG();
-
-            if (csv_file.is_open()) {
-                csv_file << t << "," 
-                         << current_lla.alt << "," 
-                         << state.vel_ecef.norm() << "," 
-                         << mach << ","
-                         << (int)guidance.get_phase() << ","
-                         << pitch_deg << ","
-                         << prop.force_body.norm() << ","
-                         << t_body_y << ","
-                         << m_body_y << ","
-                         << pitch_err << ","
-                         << current_lla.lat * AeroSim::Math::RAD2DEG() << ","
-                         << current_lla.lon * AeroSim::Math::RAD2DEG() << ","
-                         << state.mass << ","
-                         << target_pitch_deg // Added Log
-                         << "\n";
-            }
-
-            // Console Output (Reduced Frequency: 5s to avoid scroll spam)
-            if (i % 500 == 0) {
-                // Clear current line to remove progress bar artifact
-                std::cout << "\r" << std::string(100, ' ') << "\r";
-                
-                std::cout << std::fixed << std::setprecision(2) 
-                          << t << " | " 
-                          << current_lla.alt << " | " 
-                          << state.vel_ecef.norm() << " | " 
-                          << mach << " | "
-                          << (int)guidance.get_phase() << " | "
-                          << pitch_deg << " (Tgt: " << target_pitch_deg << ") | "
-                          << prop.force_body.norm() << " | "
-                          << t_body_y << " | "
-                          << m_body_y << " | "
-                          << pitch_err << std::endl;
-                
-                // Force redraw of progress bar on next update
-                sim_progress.update(i);
-            }
-        }
-
-        sim_progress.update(i);
-
-        // Check for Ground Collision
-        if (lla_check.alt < 0.0) {
-            std::cout << "[Sim] IMPACT DETECTED at t=" << t << "s" << std::endl;
-            
-            // Recalculate for logging
-            AtmosphereData atm = AtmosphereModel::calculate(get_atmosphere_input(t, lla_check));
-            double mach = state.vel_ecef.norm() / atm.sound_speed;
-            
-            Eigen::Vector3d up = state.pos_ecef.normalized();
-            Eigen::Vector3d body_x = state.quat_be * Eigen::Vector3d::UnitX();
-            double dot = body_x.dot(up);
-            if (dot > 1.0) dot = 1.0;
-            if (dot < -1.0) dot = -1.0;
-            double pitch_deg = 90.0 - std::acos(dot) * AeroSim::Math::RAD2DEG();
-            
-            PropulsionOutput prop = motor.compute(t, state.mass, atm.pressure, missile.current_cmd.tvc, inertia.com);
-            
-            Eigen::Quaterniond guid_target = guidance.update(t, state.pos_ecef, state.vel_ecef);
-            Eigen::Quaterniond q_err = state.quat_be.inverse() * guid_target;
-            double pitch_err = 2.0 * q_err.y();
-            
-            Eigen::Vector3d target_x = guid_target * Eigen::Vector3d::UnitX();
-            double target_dot = target_x.dot(up);
-            if (target_dot > 1.0) target_dot = 1.0;
-            if (target_dot < -1.0) target_dot = -1.0;
-            double target_pitch_deg = 90.0 - std::acos(target_dot) * AeroSim::Math::RAD2DEG();
-
-            if (csv_file.is_open()) {
-                csv_file << t << "," 
-                         << 0.0 << "," 
-                         << state.vel_ecef.norm() << "," 
-                         << mach << ","
-                         << (int)guidance.get_phase() << ","
-                         << pitch_deg << ","
-                         << prop.force_body.norm() << ","
-                         << prop.force_body.y() << ","
-                         << prop.moment_body.y() << ","
-                         << pitch_err << ","
-                         << lla_check.lat * AeroSim::Math::RAD2DEG() << ","
-                         << lla_check.lon * AeroSim::Math::RAD2DEG() << ","
-                         << state.mass << ","
-                         << target_pitch_deg 
-                         << "\n";
-            }
-            break;
-        }
-
-        // CONTROL STEP (Execute before integration)
-        // Update Guidance and Autopilot once per step
-        Eigen::Quaterniond guid_target = guidance.update(t, state.pos_ecef, state.vel_ecef);
-        missile.current_cmd = autopilot.update(state.quat_be, state.omega_body, guid_target, dt);
-        
-        // Note: Autopilot handles TVC sign inversion internally.
-        // No manual inversion needed here.
-
-        // INTEGRATION STEP
-        // Now calling the new template-based RK4 which re-evaluates forces internally
-        state = Dynamics6DOF::integrate_rk4(state, missile, t, dt);
-        
-        // Update time
-        t += dt;
-    }
-
-    sim_progress.finish();
-    if (csv_file.is_open()) {
         csv_file.close();
-        std::cout << "[Sim] Data saved to simulation_data.csv" << std::endl;
+        std::cout << "[Output] Best trajectory data saved to simulation_data.csv" << std::endl;
     }
-    std::cout << "[Sim] Simulation complete." << std::endl;
-    
-    // Final State
-    std::cout << "Final State | Time: " << t << "s" << std::endl;
-    std::cout << "Alt: " << CoordinateTransform::ecef_to_lla(state.pos_ecef).alt << " m" << std::endl;
-    std::cout << "Vel: " << state.vel_ecef.norm() << " m/s" << std::endl;
-    
+    std::cout << "Max Range: " << max_range / 1000.0 << " km" << std::endl;
+
     return 0;
 }

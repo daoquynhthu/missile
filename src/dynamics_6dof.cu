@@ -53,14 +53,24 @@ __host__ __device__ State6DOF Dynamics6DOF::compute_derivatives(
     dot.mass = fm.mass_flow_rate; // Mass decreases (rate is negative)
 
     // Debug Print (Temporary)
-    // if (state.pos_ecef.x() > 0) { // Just to limit frequency or use a static counter
-    //    static int debug_cnt = 0;
-    //    if (debug_cnt++ % 100 == 0) {
-    //        printf("DEBUG: F_body=[%.1f, %.1f, %.1f] Mass=%.1f Acc_ECEF=[%.1f, %.1f, %.1f]\n", 
-    //            fm.force_body.x(), fm.force_body.y(), fm.force_body.z(), 
-    //            state.mass, 
-    //            dot.vel_ecef.x(), dot.vel_ecef.y(), dot.vel_ecef.z());
-    //    }
+    // static int debug_cnt = 0;
+    // debug_cnt++;
+    
+    // if (state.mass > 5000.0 && debug_cnt % 100 == 0) { 
+    //    printf("DEBUG [Early]: F_body=[%.1f, %.1f, %.1f] M_body=[%.1f, %.1f, %.1f] Mass=%.1f\n", 
+    //        fm.force_body.x(), fm.force_body.y(), fm.force_body.z(), 
+    //        fm.moment_body.x(), fm.moment_body.y(), fm.moment_body.z(),
+    //        state.mass);
+    //    printf("      Acc_ECEF=[%.1f, %.1f, %.1f] Omega=[%.3f, %.3f, %.3f]\n",
+    //        dot.vel_ecef.x(), dot.vel_ecef.y(), dot.vel_ecef.z(),
+    //        state.omega_body.x(), state.omega_body.y(), state.omega_body.z());
+    // }
+    
+    // if (state.mass > 1000.0 && state.mass < 3000.0 && debug_cnt % 1000 == 0) { 
+    //    printf("DEBUG [Late]: F_body=[%.1f, %.1f, %.1f] Mass=%.1f Acc_ECEF=[%.1f, %.1f, %.1f]\n", 
+    //        fm.force_body.x(), fm.force_body.y(), fm.force_body.z(), 
+    //        state.mass, 
+    //        dot.vel_ecef.x(), dot.vel_ecef.y(), dot.vel_ecef.z());
     // }
 
     return dot;

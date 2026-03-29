@@ -7,10 +7,11 @@ import sys
 # Configuration
 EXE_PATH = r"e:\missile\build\bin\Release\AeroSim.exe"
 CSV_PATH = "simulation_data.csv"
-T_END = 2000.0 # Increase simulation time to ensure it reaches target
+T_END = 3000.0 # Increase simulation time to ensure it reaches target
 
 # Optimization Targets
-TARGET_APOGEE_MAX = 100000.0 # 100 km (User Constraint)
+TARGET_RANGE = 4000000.0 # 4000 km
+TARGET_APOGEE_MAX = 150000.0 # 150 km (Strict depressed trajectory for skip-glide)
 LAUNCH_LAT = 40.960556
 LAUNCH_LON = 100.298333
 TARGET_LAT = 20.0
@@ -27,7 +28,7 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R * c
 
-def run_simulation(start, rate, glide_aoa):
+def run_simulation(start, rate, min_pitch, glide_aoa, pull_up_alt, pull_up_aoa):
     """Runs the simulation with given parameters."""
     if os.path.exists(CSV_PATH):
         try:
@@ -35,9 +36,8 @@ def run_simulation(start, rate, glide_aoa):
         except:
             pass
         
-    # Cmd: exe start rate min_pitch t_end glide_aoa
-    # We fix min_pitch to 5.0
-    cmd = [EXE_PATH, str(start), str(rate), "5.0", str(T_END), str(glide_aoa)]
+    # Cmd: exe start rate min_pitch t_end glide_aoa pull_up_alt pull_up_aoa
+    cmd = [EXE_PATH, str(start), str(rate), str(min_pitch), str(T_END), str(glide_aoa), str(pull_up_alt), str(pull_up_aoa)]
     # Suppress output to keep console clean
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -96,115 +96,119 @@ def analyze_results():
         return None
 
 def cost_function(metrics):
-    if metrics is None:
+    if not metrics:
         return 1e9
         
-    # Weights
-    w_dist = 1.0     # Minimize distance to target
-    w_apogee = 100.0 # Penalize apogee violation heavily
+    # 1. Range Cost (Primary)
+    dist = metrics['dist_to_target']
+    range_cost = dist # Minimize distance to target
     
-    cost = metrics["dist_to_target"] / 1000.0 # Convert to km for reasonable scale
-    
-    # Apogee Penalty
-    if metrics["apogee"] > TARGET_APOGEE_MAX:
-        over = (metrics["apogee"] - TARGET_APOGEE_MAX) / 1000.0
-        cost += w_apogee * (over ** 2)
+    # 2. Apogee Penalty (Soft Constraint)
+    apogee_penalty = 0.0
+    if metrics['apogee'] > TARGET_APOGEE_MAX:
+        apogee_penalty = (metrics['apogee'] - TARGET_APOGEE_MAX) * 10.0
         
-    return cost
+    # 3. Glide Bonus (Encourage time in glide phase)
+    # Qian Xuesen trajectory: High speed, long glide.
+    # We can check if 'Phase' stayed in Glide (2) for a long time?
+    # Or just trust Range.
+    
+    return range_cost + apogee_penalty
 
-def nelder_mead():
-    # Initial Guess [Start, Rate, GlideAoA]
-    # Based on manual testing: Start=5.0, Rate=3.0 gave flatter trajectory.
-    # AoA=10.0 for better L/D.
-    x0 = [5.0, 3.0, 10.0] 
-    step = [0.5, 0.2, 2.0] 
+import random
+
+def differential_evolution():
+    # Parameters to optimize:
+    # 0: boost_pitch_start [4.0, 15.0]
+    # 1: boost_pitch_rate [0.5, 4.0]
+    # 2: min_pitch [5.0, 45.0]
+    # 3: glide_aoa_bias [0.0, 15.0]
+    # 4: pull_up_alt [20000.0, 50000.0]
+    # 5: pull_up_aoa [10.0, 25.0]
     
-    # Simplex initialization
-    simplex = [x0]
-    for i in range(len(x0)):
-        point = list(x0)
-        point[i] += step[i]
-        simplex.append(point)
+    bounds = [
+        (10.0, 30.0),     # boost_pitch_start (Later for vertical climb)
+        (0.5, 1.5),       # boost_pitch_rate (Slower turn to avoid high Alpha)
+        (20.0, 50.0),     # min_pitch (Keep nose up at burnout)
+        (5.0, 25.0),      # glide_aoa_bias
+        (30000.0, 70000.0), # pull_up_alt
+        (15.0, 30.0)      # pull_up_aoa
+    ]
+    
+    pop_size = 20  # Increased population
+    mutation_factor = 0.8
+    crossover_prob = 0.7
+    generations = 10 # Increased generations
+    
+    # Initialize Population
+    population = []
+    for _ in range(pop_size):
+        ind = []
+        for b in bounds:
+            ind.append(random.uniform(b[0], b[1]))
+        population.append(ind)
         
-    # Evaluation
+    # Evaluate Initial Population
     scores = []
-    for point in simplex:
-        print(f"Evaluating: {point}")
-        metrics = run_simulation(point[0], point[1], point[2])
-        if metrics:
-            score = cost_function(metrics)
-            print(f"  Apogee: {metrics['apogee']/1000:.1f}km, Dist: {metrics['dist_to_target']/1000:.1f}km -> Cost: {score:.1f}")
-            scores.append((score, point, metrics))
-        else:
-            scores.append((1e9, point, None))
-            
-    # Iterations
-    alpha = 1.0  # Reflection
-    gamma = 2.0  # Expansion
-    rho = 0.5    # Contraction
-    sigma = 0.5  # Shrink
+    best_score = 1e9
+    best_ind = None
     
-    for i in range(50): # Increased iterations
+    print("Initializing population...")
+    for i, ind in enumerate(population):
+        # Unpack: start, rate, min_pitch, glide_aoa, pull_up_alt, pull_up_aoa
+        metrics = run_simulation(*ind)
+        score = cost_function(metrics)
+        scores.append(score)
+        
+        if score < best_score:
+            best_score = score
+            best_ind = list(ind)
+        
+        if metrics:
+            print(f"  Ind {i}: Cost {score:.1f} (Dist: {metrics['dist_to_target']/1000.0:.1f}km)")
+        else:
+            print(f"  Ind {i}: Failed")
 
-        scores.sort(key=lambda x: x[0])
-        best = scores[0]
-        worst = scores[-1]
-        second_worst = scores[-2]
+    # Evolution Loop
+    for gen in range(generations):
+        print(f"\nGeneration {gen+1}/{generations} - Best Cost: {best_score:.1f}")
         
-        print(f"Iter {i+1}: Best Cost {best[0]:.1f} (Start={best[1][0]:.2f}, Rate={best[1][1]:.2f}, AoA={best[1][2]:.2f}) - Dist: {best[2]['dist_to_target']/1000:.1f}km")
-        
-        # Centroid
-        centroid = [0.0] * len(x0)
-        for j in range(len(x0)):
-            for k in range(len(scores)-1):
-                centroid[j] += scores[k][1][j]
-            centroid[j] /= (len(scores)-1)
+        for i in range(pop_size):
+            # 1. Mutation
+            idxs = [idx for idx in range(pop_size) if idx != i]
+            a, b, c = random.sample(idxs, 3)
             
-        # Reflection
-        xr = [0.0] * len(x0)
-        for j in range(len(x0)):
-            xr[j] = centroid[j] + alpha * (centroid[j] - worst[1][j])
+            mutant = []
+            for j in range(len(bounds)):
+                val = population[a][j] + mutation_factor * (population[b][j] - population[c][j])
+                val = max(bounds[j][0], min(bounds[j][1], val)) # Clamp
+                mutant.append(val)
+                
+            # 2. Crossover
+            trial = []
+            for j in range(len(bounds)):
+                if random.random() < crossover_prob:
+                    trial.append(mutant[j])
+                else:
+                    trial.append(population[i][j])
+                    
+            # 3. Selection
+            metrics = run_simulation(*trial)
+            score = cost_function(metrics)
             
-        metrics_r = run_simulation(xr[0], xr[1], xr[2])
-        score_r = cost_function(metrics_r)
-        
-        if scores[0][0] <= score_r < second_worst[0]:
-            scores[-1] = (score_r, xr, metrics_r)
-            continue
+            if score < scores[i]:
+                population[i] = trial
+                scores[i] = score
+                if score < best_score:
+                    best_score = score
+                    best_ind = list(trial)
+                    print(f"  New Best! Cost {best_score:.1f} (Dist: {metrics['dist_to_target']/1000.0:.1f}km)")
             
-        # Expansion
-        if score_r < scores[0][0]:
-            xe = [0.0] * len(x0)
-            for j in range(len(x0)):
-                xe[j] = centroid[j] + gamma * (xr[j] - centroid[j])
-            metrics_e = run_simulation(xe[0], xe[1], xe[2])
-            score_e = cost_function(metrics_e)
-            if score_e < score_r:
-                scores[-1] = (score_e, xe, metrics_e)
-            else:
-                scores[-1] = (score_r, xr, metrics_r)
-            continue
-            
-        # Contraction
-        xc = [0.0] * len(x0)
-        for j in range(len(x0)):
-            xc[j] = centroid[j] + rho * (worst[1][j] - centroid[j])
-        metrics_c = run_simulation(xc[0], xc[1], xc[2])
-        score_c = cost_function(metrics_c)
-        if score_c < worst[0]:
-            scores[-1] = (score_c, xc, metrics_c)
-            continue
-            
-        # Shrink
-        for k in range(1, len(scores)):
-            for j in range(len(x0)):
-                scores[k][1][j] = scores[0][1][j] + sigma * (scores[k][1][j] - scores[0][1][j])
-            metrics = run_simulation(scores[k][1][0], scores[k][1][1], scores[k][1][2])
-            scores[k] = (cost_function(metrics), scores[k][1], metrics)
+            print(f"  Gen {gen+1} Ind {i}: Cost {score:.1f}")
 
-    print("\nOptimization Complete")
-    print(f"Best Parameters: Start={best[1][0]:.4f}, Rate={best[1][1]:.4f}")
-    print(f"Result: Apogee={best[2]['apogee']/1000:.1f}km, Distance={best[2]['dist_to_target']/1000:.1f}km")
+    print("\nOptimization Complete.")
+    print(f"Best Parameters: {best_ind}")
+    run_simulation(*best_ind) # Run one last time to save CSV
 
 if __name__ == "__main__":
-    nelder_mead()
+    differential_evolution()

@@ -30,22 +30,28 @@ public:
 
     struct Config {
         // Boost Phase
-        double boost_end_time = 35.0;     // Time when boost phase ends (s)
-        double boost_pitch_start = 2.0;   // Time to start pitch maneuver (s)
-        double boost_pitch_rate = 3.0;    // Pitch rate during boost (deg/s)
-        double boost_pitch_min = 0.0;     // Minimum pitch angle (deg)
+        double boost_end_time = 60.0;     // Time when boost phase ends (s) - Updated for IRBM
+        double boost_pitch_start = 5.0;   // Time to start pitch maneuver (s) - Delayed for vertical clearance
+        double boost_pitch_rate = 1.0;    // Pitch rate during boost (deg/s) - Reduced for high loft (IRBM)
+        double boost_pitch_min = 20.0;    // Minimum pitch angle (deg) - Maintain climb during boost
 
         // Coast/Glide Transition
-        double glide_alt_start = 50000.0; // Altitude to start glide phase (m) - Re-entry interface
+        double glide_alt_start = 60000.0; // Altitude to start glide phase (m) - Re-entry interface
         double glide_vel_min = 800.0;     // Minimum velocity to sustain glide (m/s)
         double hysteresis_margin = 5000.0; // Altitude margin for phase switching (m)
 
         // Glide Phase (QEGG)
         double glide_alt_end = 20000.0;    // Target altitude at end of glide (m)
-        double target_range = 2200000.0;   // Target range for simple impact calculation (m)
+        double target_range = 4000000.0;   // Target range for simple impact calculation (m)
         double glide_aoa_bias = 12.0;      // Nominal AoA (deg) - Increased for better L/D
         double glide_aoa_max = 25.0;       // Max AoA (deg) - Increased for aggressive skip
-        double glide_aoa_min = 0.0;        // Min AoA (deg)
+        double glide_aoa_min = -10.0;        // Min AoA (deg)
+        
+        // Re-entry Pull-up Logic
+        double pull_up_alt = 60000.0;      // Below this altitude, check for high sink rate
+        double pull_up_vz_threshold = -50.0; // Sink rate (m/s) to trigger pull-up
+        double pull_up_aoa = 20.0;         // AoA during pull-up maneuver
+
         double kp_alt = 0.08;              // Altitude error gain -> Target Vz
         double kp_vz = 0.2;                // Vertical velocity error gain -> AoA
         double max_climb_rate = 500.0;     // Max climb rate (m/s)
@@ -125,16 +131,6 @@ public:
                     double pitch_rate = m_config.boost_pitch_rate; 
                     double target_pitch_deg = 90.0 - pitch_rate * time_since_pitch;
                     
-                    // Debug print for pitch logic diagnosis (Run once per second approx)
-                    static int last_print_t = -1;
-                    if ((int)t > last_print_t) {
-                        std::cout << "[Guidance] T=" << t 
-                                  << " Start=" << m_config.boost_pitch_start 
-                                  << " Rate=" << pitch_rate 
-                                  << " TargetPitch=" << target_pitch_deg << std::endl;
-                        last_print_t = (int)t;
-                    }
-
                     if (target_pitch_deg < m_config.boost_pitch_min) target_pitch_deg = m_config.boost_pitch_min; 
 
                     
@@ -263,20 +259,25 @@ public:
                 // Or just use fixed gain.
                 // Current: kp_alt = 0.08
                 
-                double h_error = target_alt - alt;
-                double v_z_target = m_config.kp_alt * h_error;
-                v_z_target = std::clamp(v_z_target, m_config.max_descent_rate, m_config.max_climb_rate);
-                
-                double v_z_err = v_z_target - vertical_vel;
-                
-                // Damping Term? Damping is provided by velocity loop (v_z_err).
-                // AoA Command
-                double aoa_deg = m_config.glide_aoa_bias + m_config.kp_vz * v_z_err;
-                
-                // Add "Skip" logic: If Descent Rate is high at low altitude, pull max AoA
-                if (alt < m_config.glide_alt_start - 2000.0 && vertical_vel < -50.0) {
-                     // Pull up hard to skip
-                     aoa_deg += 5.0; 
+                double aoa_deg;
+
+                // 1. Re-entry Pull-up Logic (Anti-Crash)
+                // If we are sinking too fast at low altitude, PULL UP!
+                // This overrides normal guidance to ensure we bounce off the atmosphere.
+                if (alt < m_config.pull_up_alt && vertical_vel < m_config.pull_up_vz_threshold) {
+                    // Emergency Pull-up
+                    aoa_deg = m_config.pull_up_aoa;
+                } else {
+                    // Normal QEGG Logic
+                    double h_error = target_alt - alt;
+                    double v_z_target = m_config.kp_alt * h_error;
+                    v_z_target = std::clamp(v_z_target, m_config.max_descent_rate, m_config.max_climb_rate);
+                    
+                    double v_z_err = v_z_target - vertical_vel;
+                    
+                    // Damping Term? Damping is provided by velocity loop (v_z_err).
+                    // AoA Command
+                    aoa_deg = m_config.glide_aoa_bias + m_config.kp_vz * v_z_err;
                 }
                 
                 aoa_deg = std::clamp(aoa_deg, m_config.glide_aoa_min, m_config.glide_aoa_max);
