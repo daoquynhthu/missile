@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
+# Enable Relocatable Device Code (RDC) for cross-file __device__ calls
+set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
+
 # Force MSVC runtime library (MD)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
@@ -39,7 +42,11 @@ file(GLOB_RECURSE LIB_SOURCES
 
 # Remove main.cpp and tests from library sources
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/main.cpp")
+list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/rm_dart_sim.cpp")
+list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/rm_dart_mc.cu")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/shape_optimizer.cpp")
+list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/aero_calc_tool.cpp")
+list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/rm_dart_debug.cu")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/tests/test_gravity.cu")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/tests/compare_atm.cpp")
 
@@ -69,15 +76,37 @@ endif()
 
 # Main Executable
 add_executable(AeroSim src/main.cpp)
+set_source_files_properties(src/main.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(AeroSim PRIVATE missile_lib)
+set_target_properties(AeroSim PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(AeroSim PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 # AeroCalc Tool (For fast aerodynamic evaluation)
 add_executable(AeroCalc src/aero_calc_tool.cpp)
+set_source_files_properties(src/aero_calc_tool.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(AeroCalc PRIVATE missile_lib)
+set_target_properties(AeroCalc PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(AeroCalc PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 # Shape Optimizer (C++ based for speed)
 add_executable(ShapeOptimizer src/shape_optimizer.cpp)
+set_source_files_properties(src/shape_optimizer.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(ShapeOptimizer PRIVATE missile_lib)
+set_target_properties(ShapeOptimizer PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(ShapeOptimizer PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
+# RM Dart Simulation
+add_executable(RMDartSim src/rm_dart_sim.cpp)
+set_source_files_properties(src/rm_dart_sim.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(RMDartSim PRIVATE missile_lib)
+set_target_properties(RMDartSim PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(RMDartSim PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
+# RM Dart GPU Monte Carlo
+add_executable(RMDartMC src/rm_dart_mc.cu)
+target_link_libraries(RMDartMC PRIVATE missile_lib)
+set_target_properties(RMDartMC PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(RMDartMC PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 # Copy DLL to output directory
 add_custom_command(TARGET AeroSim POST_BUILD
@@ -95,6 +124,16 @@ add_custom_command(TARGET ShapeOptimizer POST_BUILD
     "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
     $<TARGET_FILE_DIR:ShapeOptimizer>
 )
+add_custom_command(TARGET RMDartSim POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
+    $<TARGET_FILE_DIR:RMDartSim>
+)
+add_custom_command(TARGET RMDartMC POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
+    $<TARGET_FILE_DIR:RMDartMC>
+)
 
 # Target properties
 set_target_properties(AeroSim PROPERTIES
@@ -102,12 +141,27 @@ set_target_properties(AeroSim PROPERTIES
     CUDA_STANDARD 17
 )
 
-# --- Testing Section ---
+# 8. RMDartDebug
+add_executable(RMDartDebug src/rm_dart_debug.cu)
+set_source_files_properties(src/rm_dart_debug.cu PROPERTIES LANGUAGE CUDA)
+target_link_libraries(RMDartDebug PRIVATE missile_lib)
+set_target_properties(RMDartDebug PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(RMDartDebug PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+set_target_properties(RMDartDebug PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# -----------------------------------------------------------------------------
+# 5. Tests
+# -----------------------------------------------------------------------------
+
 enable_testing()
 
 # 1. Propulsion Test
 add_executable(TestPropulsion tests/test_propulsion.cpp)
+set_source_files_properties(tests/test_propulsion.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestPropulsion PRIVATE missile_lib)
+set_target_properties(TestPropulsion PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestPropulsion PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+set_target_properties(TestPropulsion PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_custom_command(TARGET TestPropulsion POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
@@ -117,7 +171,11 @@ add_test(NAME PropulsionTest COMMAND TestPropulsion)
 
 # 2. Aerodynamics Test
 add_executable(TestAero tests/test_aero.cpp)
+set_source_files_properties(tests/test_aero.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestAero PRIVATE missile_lib)
+set_target_properties(TestAero PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestAero PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+set_target_properties(TestAero PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_custom_command(TARGET TestAero POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
@@ -127,7 +185,10 @@ add_test(NAME AeroTest COMMAND TestAero)
 
 # 3. Guidance Test
 add_executable(TestGuidance tests/test_guidance.cpp)
+set_source_files_properties(tests/test_guidance.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestGuidance PRIVATE missile_lib)
+set_target_properties(TestGuidance PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestGuidance PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_custom_command(TARGET TestGuidance POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
@@ -157,7 +218,10 @@ set_target_properties(TestGuidance PROPERTIES
 
 # 4. Autopilot Test
 add_executable(TestAutopilot tests/test_autopilot.cpp)
+set_source_files_properties(tests/test_autopilot.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestAutopilot PRIVATE missile_lib)
+set_target_properties(TestAutopilot PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestAutopilot PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_test(NAME AutopilotTest COMMAND TestAutopilot)
 set_target_properties(TestAutopilot PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -165,7 +229,10 @@ set_target_properties(TestAutopilot PROPERTIES
 
 # 5. Launch Test
 add_executable(TestLaunch tests/test_launch.cpp)
+set_source_files_properties(tests/test_launch.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestLaunch PRIVATE missile_lib)
+set_target_properties(TestLaunch PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestLaunch PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_test(NAME LaunchTest COMMAND TestLaunch)
 set_target_properties(TestLaunch PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -173,7 +240,10 @@ set_target_properties(TestLaunch PROPERTIES
 
 # 6. Integrator Test
 add_executable(TestIntegrator tests/test_integrator.cpp)
+set_source_files_properties(tests/test_integrator.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestIntegrator PRIVATE missile_lib)
+set_target_properties(TestIntegrator PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestIntegrator PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_test(NAME IntegratorTest COMMAND TestIntegrator)
 set_target_properties(TestIntegrator PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"

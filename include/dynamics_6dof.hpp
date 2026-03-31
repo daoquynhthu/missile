@@ -85,7 +85,8 @@ public:
         const State6DOF& state,
         const ForcesMoments& fm,
         const InertialProps& inertia,
-        const Eigen::Vector3d& gravity_ecef
+        const Eigen::Vector3d& gravity_ecef,
+        SimulationProfile profile = SimulationProfile::GLOBAL_BALLISTIC
     );
 
     /**

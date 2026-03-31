@@ -8,7 +8,8 @@ __host__ __device__ State6DOF Dynamics6DOF::compute_derivatives(
     const State6DOF& state,
     const ForcesMoments& fm,
     const InertialProps& inertia,
-    const Eigen::Vector3d& gravity_ecef
+    const Eigen::Vector3d& gravity_ecef,
+    SimulationProfile profile
 ) {
     State6DOF dot;
 
@@ -16,14 +17,15 @@ __host__ __device__ State6DOF Dynamics6DOF::compute_derivatives(
     dot.pos_ecef = state.vel_ecef;
 
     // 2. Velocity derivative (in ECEF)
-    // Considering Coriolis and centrifugal forces due to ECEF frame rotation
-    Eigen::Vector3d omega_e(0, 0, Earth::OMEGA());
-    
-    // Coriolis: -2 * omega_e x vel_ecef
-    Eigen::Vector3d coriolis = -2.0 * omega_e.cross(state.vel_ecef);
-    
-    // Centrifugal: -omega_e x (omega_e x pos_ecef)
-    Eigen::Vector3d centrifugal = -omega_e.cross(omega_e.cross(state.pos_ecef));
+    Eigen::Vector3d coriolis(0, 0, 0);
+    Eigen::Vector3d centrifugal(0, 0, 0);
+
+    // Coriolis and centrifugal forces only for global ballistic
+    if (profile == SimulationProfile::GLOBAL_BALLISTIC) {
+        Eigen::Vector3d omega_e(0, 0, Earth::OMEGA());
+        coriolis = -2.0 * omega_e.cross(state.vel_ecef);
+        centrifugal = -omega_e.cross(omega_e.cross(state.pos_ecef));
+    }
     
     // Rotate force from Body to ECEF
     Eigen::Vector3d force_ecef = state.quat_be * fm.force_body;

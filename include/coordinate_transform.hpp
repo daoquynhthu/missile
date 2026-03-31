@@ -24,6 +24,7 @@ public:
 
     // ECEF <-> NED (at a given LLA reference point)
     static CUDA_HOST_DEVICE Eigen::Vector3d ecef_to_ned(const Eigen::Vector3d& ecef, const LLA& ref_lla);
+    static CUDA_HOST_DEVICE Eigen::Vector3d ecef_to_ned_vector(const Eigen::Vector3d& ecef_vec, const LLA& ref_lla);
     static CUDA_HOST_DEVICE Eigen::Vector3d ned_to_ecef(const Eigen::Vector3d& ned, const LLA& ref_lla);
 
     // NED <-> Body (using Euler angles: roll, pitch, yaw)

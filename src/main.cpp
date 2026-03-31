@@ -125,7 +125,7 @@ struct MissileSystem {
         }
         
         // 5. Derivatives
-        return Dynamics6DOF::compute_derivatives(state, fm, current_inertia, g_ecef);
+        return Dynamics6DOF::compute_derivatives(state, fm, current_inertia, g_ecef, SimulationProfile::GLOBAL_BALLISTIC);
     }
 };
 

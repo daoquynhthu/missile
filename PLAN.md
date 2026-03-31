@@ -45,6 +45,13 @@
 - [ ] 实现大规模蒙特卡洛参数扫描。
 - [ ] 实现基于模板的逆向参数寻优算法。
 
+### 扩展阶段：RoboMaster 飞镖系统 (进行中 🚧)
+- [x] **物理建模**：创建了 RM 飞镖专属配置 [rm_dart_config.hpp](file:///e:/missile/include/rm_dart_config.hpp)。
+- [x] **气动适配**：实现了亚音速细长体气动力模型 [rm_dart_aero.hpp](file:///e:/missile/include/rm_dart_aero.hpp)。
+- [x] **仿真入口**：开发了专用的高精度仿真程序 [rm_dart_sim.cpp](file:///e:/missile/src/rm_dart_sim.cpp)，支持 EGM2008 引力场与 USSA76 大气模型。
+- [ ] **误差分析**：计划开发蒙特卡洛脚本分析发射散布。
+- [ ] **引导算法**：计划实现针对飞镖的比例导引 (PN) 算法。
+
 ## 4. 精度保证体系
 - 所有的位置计算采用 `double`（64位浮点）。
 - 建立能量守恒检验机制，实时监控积分误差。

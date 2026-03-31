@@ -45,7 +45,10 @@ __host__ __device__ LLA CoordinateTransform::ecef_to_lla(const Eigen::Vector3d& 
 __host__ __device__ Eigen::Vector3d CoordinateTransform::ecef_to_ned(const Eigen::Vector3d& ecef, const LLA& ref_lla) {
     Eigen::Vector3d ref_ecef = lla_to_ecef(ref_lla);
     Eigen::Vector3d delta_ecef = ecef - ref_ecef;
+    return ecef_to_ned_vector(delta_ecef, ref_lla);
+}
 
+__host__ __device__ Eigen::Vector3d CoordinateTransform::ecef_to_ned_vector(const Eigen::Vector3d& ecef_vec, const LLA& ref_lla) {
     double sin_lat = sin(ref_lla.lat);
     double cos_lat = cos(ref_lla.lat);
     double sin_lon = sin(ref_lla.lon);
@@ -63,7 +66,7 @@ __host__ __device__ Eigen::Vector3d CoordinateTransform::ecef_to_ned(const Eigen
     R(2, 1) = -cos_lat * sin_lon;
     R(2, 2) = -sin_lat;
 
-    return R * delta_ecef;
+    return R * ecef_vec;
 }
 
 __host__ __device__ Eigen::Vector3d CoordinateTransform::ned_to_ecef(const Eigen::Vector3d& ned, const LLA& ref_lla) {
