@@ -1,5 +1,6 @@
 #include "aero_solver/aero_solver.hpp"
 #include "aero_solver/aero_skin_friction.hpp"
+#include "aero_solver/engineering_aero.hpp"
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -27,27 +28,29 @@ namespace Solver {
 
         float3 flow_dir = make_float3(-ca * cb, -sb, -sa * cb);
         float cos_theta = dot(tri.normal, flow_dir);
+        float gamma_eff = gamma_effective(mach);
                         
         // 1. Newtonian pressure coefficient
         float Cp = 0.0f;
         float mach_sq = mach * mach;
         
         if (cos_theta < 0.0f) {
-            float Cp_max = (gamma + 3.0f) / (gamma + 1.0f);
-            float Cp_stag = Cp_max * (1.0f - 1.0f / (gamma * mach_sq));
+            float Cp_max = (gamma_eff + 3.0f) / (gamma_eff + 1.0f);
+            float Cp_stag = Cp_max * (1.0f - 1.0f / (gamma_eff * mach_sq));
             Cp = Cp_stag * cos_theta * cos_theta;
         } else {
-            Cp = -2.0f / (gamma * mach_sq);
+            Cp = -2.0f / (gamma_eff * mach_sq);
         }
         
-        // 2. Skin friction (van Driest II) — all surfaces, not just compression
+        // 2. Viscous interaction + skin friction (same local conditions)
         float sin_theta = sqrtf(fmaxf(1.0f - cos_theta * cos_theta, 0.0f));
         float M_local = mach * sin_theta;
-        float a_fs = sqrtf(gamma * 287.058f * T_ref);
+        float a_fs = sqrtf(gamma_eff * 287.058f * T_ref);
         float V_local = a_fs * M_local;
         float running_length = fmaxf(tri.body_axis_x + 0.05f, 0.01f);
         float Re_x = rho_ref * V_local * running_length / mu_ref;
-        float Cf = van_driest_II_Cf_adiabatic(M_local, Re_x, gamma);
+        Cp = Cp + viscous_interaction_dCp(M_local, Re_x, gamma_eff);
+        float Cf = van_driest_II_Cf_adiabatic(M_local, Re_x, gamma_eff);
         
         // 3. Total force = pressure + friction
         float3 force_term = tri.normal * (-Cp * tri.area);
@@ -185,8 +188,9 @@ namespace Solver {
             float cb = cosf(beta_rad),  sb = sinf(beta_rad);
             float3 flow_dir = make_float3(-ca*cb, -sb, -sa*cb);
             float mach_sq = mach * mach;
-            float Cp_max_stag = ((gamma + 3.0f) / (gamma + 1.0f))
-                               * (1.0f - 1.0f / (gamma * mach_sq));
+            float gamma_eff = gamma_effective(mach);
+            float Cp_max_stag = ((gamma_eff + 3.0f) / (gamma_eff + 1.0f))
+                               * (1.0f - 1.0f / (gamma_eff * mach_sq));
 
             for (int i = tid; i < num_triangles; i += blockDim.x) {
                 Triangle tri = triangles[i];
@@ -195,18 +199,21 @@ namespace Solver {
                 if (ct < 0.0f) {
                     Cp = Cp_max_stag * ct * ct;
                 } else {
-                    Cp = -2.0f / (gamma * mach_sq);
+                    Cp = -2.0f / (gamma_eff * mach_sq);
                 }
-                float3 f = tri.normal * (-Cp * tri.area);
 
-                // Skin friction (van Driest II) — all surfaces, not just compression
+                // Viscous interaction + skin friction (same local conditions)
                 float sin_theta = sqrtf(fmaxf(1.0f - ct * ct, 0.0f));
                 float M_local = mach * sin_theta;
-                float a_fs = sqrtf(gamma * 287.058f * bc.T_ref);
+                float a_fs = sqrtf(gamma_eff * 287.058f * bc.T_ref);
                 float V_local = a_fs * M_local;
                 float running_length = fmaxf(tri.body_axis_x + 0.05f, 0.01f);
                 float Re_x = bc.rho_ref * V_local * running_length / bc.mu_ref;
-                float Cf = van_driest_II_Cf_adiabatic(M_local, Re_x, gamma);
+
+                Cp = Cp + viscous_interaction_dCp(M_local, Re_x, gamma_eff);
+                float3 f = tri.normal * (-Cp * tri.area);
+
+                float Cf = van_driest_II_Cf_adiabatic(M_local, Re_x, gamma_eff);
                 if (Cf > 0.0f) {
                     float3 tan_dir = surface_flow_direction(tri.normal, flow_dir);
                     f = f + tan_dir * (Cf * tri.area);
@@ -245,6 +252,10 @@ namespace Solver {
                     CY = 0.0f;
                     Cn = 0.0f;
                 }
+
+                // Base drag correction (turbulent base pressure correlation)
+                CX = CX + base_drag_CX_correction(mach, gamma_eff,
+                     eng_geo->base_area, ref_area);
 
                 float Fsx = CX * ca * cb + CY * sb + CZ * sa * cb;
                 float Fsz = -CX * sa + CZ * ca;
@@ -363,6 +374,13 @@ namespace Solver {
             coeffs.Cn = 0.0f;
         }
 
+        // Base drag correction: replace Newtonian base Cp (-2/(γM²)) with
+        // correlated base pressure (p_base/p_∞ = 0.18 + 0.10/M² for turbulent)
+        if (mach >= 0.1f) {
+            coeffs.CX = coeffs.CX + base_drag_CX_correction(mach,
+                gamma_effective(mach), base_area, ref_area);
+        }
+
         float ca = cosf(alpha_rad);
         float sa = sinf(alpha_rad);
         float cb = cosf(beta_rad);
@@ -436,18 +454,38 @@ namespace Solver {
         cudaFree(d_geo);
 
         // CPU-side blending for transition region (Mach 4.0-6.0)
-        // Re-compute engineering at each transition point and blend with GPU result
+        // Smoothly blends engineering estimate and GPU Newtonian panel results.
         for (int i = 0; i < n; ++i) {
-            float mach = conditions[i].mach;
-            if (mach >= 4.0f && mach < 6.0f && mach >= 5.0f) {
-                // Already computed via Newtonian on GPU — also compute engineering for blend
+            double mach = static_cast<double>(conditions[i].mach);
+            if (mach >= 4.0 && mach <= 6.0) {
                 double alpha_rad = conditions[i].alpha_deg * 3.141592653589793 / 180.0;
                 double beta_rad  = conditions[i].beta_deg  * 3.141592653589793 / 180.0;
-                AeroGeometry h_geo = eng_geo;
+                auto eng = compute_engineering_coeffs(eng_geo, mach, alpha_rad, beta_rad);
 
-                // Must use a host-side engineering function. Since we don't have a CPU version
-                // that takes AeroGeometry (float version), we skip CPU blending for now.
-                // The GPU engineering path already handles Mach<5 directly.
+                if (mach >= 5.0) {
+                    // Blend: t=0 (M=5) → 50% eng + 50% GPU, t=1 (M=6) → 100% GPU
+                    double t = (mach - 4.0) / 2.0;
+                    t = std::max(0.0, std::min(1.0, t));
+                    auto blend = [t](double a, double b) { return (1.0 - t) * a + t * b; };
+                    results[i].CX = static_cast<float>(blend(eng.CX, results[i].CX));
+                    results[i].CY = static_cast<float>(blend(eng.CY, results[i].CY));
+                    results[i].CZ = static_cast<float>(blend(eng.CZ, results[i].CZ));
+                    results[i].Cl = static_cast<float>(blend(eng.Cl, results[i].Cl));
+                    results[i].Cm = static_cast<float>(blend(eng.Cm, results[i].Cm));
+                    results[i].Cn = static_cast<float>(blend(eng.Cn, results[i].Cn));
+                    results[i].CL = static_cast<float>(blend(eng.CL, results[i].CL));
+                    results[i].CD = static_cast<float>(blend(eng.CD, results[i].CD));
+                } else {
+                    // Mach 4-5: override GPU device engineering with CPU engineering
+                    results[i].CX = static_cast<float>(eng.CX);
+                    results[i].CY = static_cast<float>(eng.CY);
+                    results[i].CZ = static_cast<float>(eng.CZ);
+                    results[i].Cl = static_cast<float>(eng.Cl);
+                    results[i].Cm = static_cast<float>(eng.Cm);
+                    results[i].Cn = static_cast<float>(eng.Cn);
+                    results[i].CL = static_cast<float>(eng.CL);
+                    results[i].CD = static_cast<float>(eng.CD);
+                }
             }
         }
 

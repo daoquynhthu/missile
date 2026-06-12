@@ -71,6 +71,7 @@ namespace Solver {
         }
 
         void set_gamma(float g) { gamma = g; }
+        void set_base_area(float a) { base_area = a; }
 
     private:
         Triangle* d_triangles = nullptr;
@@ -81,6 +82,7 @@ namespace Solver {
         float ref_area = 1.0f;
         float ref_length = 1.0f;
         float ref_span = 1.0f;
+        float base_area = 0.0f;
         float3 moment_ref_point = {0.0f, 0.0f, 0.0f};
         float gamma = 1.4f;
 

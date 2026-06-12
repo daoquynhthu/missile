@@ -257,6 +257,151 @@ void test_surface_flow_direction() {
     std::cout << "PASS\n";
 }
 
+void test_viscous_interaction() {
+    std::cout << "[Test] Viscous interaction ΔCp_VI ... ";
+
+    // ΔCp should be zero for Re <= 100
+    float dCp_re0 = viscous_interaction_dCp(10.0f, 50.0f, 1.4f);
+    if (dCp_re0 != 0.0f) {
+        std::cerr << "\n  FAIL dCp(Re=50) should be 0, got " << dCp_re0 << "\n";
+        std::exit(1);
+    }
+
+    // ΔCp should be zero for M < 0.01
+    float dCp_m0 = viscous_interaction_dCp(0.0f, 1e7f, 1.4f);
+    if (dCp_m0 != 0.0f) {
+        std::cerr << "\n  FAIL dCp(M=0) should be 0, got " << dCp_m0 << "\n";
+        std::exit(1);
+    }
+
+    // ΔCp increases with Mach (constant Re)
+    float dCp_m5  = viscous_interaction_dCp(5.0f, 1e7f, 1.4f);
+    float dCp_m10 = viscous_interaction_dCp(10.0f, 1e7f, 1.4f);
+    float dCp_m20 = viscous_interaction_dCp(20.0f, 1e7f, 1.4f);
+    if (dCp_m5 >= dCp_m10 || dCp_m10 >= dCp_m20) {
+        std::cerr << "\n  FAIL dCp not monotonic with Mach: "
+                  << dCp_m5 << " " << dCp_m10 << " " << dCp_m20 << "\n";
+        std::exit(1);
+    }
+
+    // ΔCp decreases with Re (constant Mach)
+    float dCp_re1e6  = viscous_interaction_dCp(10.0f, 1e6f, 1.4f);
+    float dCp_re1e7  = viscous_interaction_dCp(10.0f, 1e7f, 1.4f);
+    float dCp_re1e8  = viscous_interaction_dCp(10.0f, 1e8f, 1.4f);
+    if (dCp_re1e6 <= dCp_re1e7 || dCp_re1e7 <= dCp_re1e8) {
+        std::cerr << "\n  FAIL dCp not monotonic with Re: "
+                  << dCp_re1e6 << " " << dCp_re1e7 << " " << dCp_re1e8 << "\n";
+        std::exit(1);
+    }
+
+    // Reference range check: at M=10, Re=1e6, ΔCp should be ~0.003
+    if (dCp_re1e6 < 0.001f || dCp_re1e6 > 0.01f) {
+        std::cerr << "\n  FAIL dCp(M=10, Re=1e6) out of range: got " << dCp_re1e6 << " expected ~0.003\n";
+        std::exit(1);
+    }
+
+    // At M=10, Re=2e7 (nominal hypersonic), ΔCp should be small but non-zero
+    if (dCp_re1e7 < 1e-6f || dCp_re1e7 > 0.005f) {
+        std::cerr << "\n  FAIL dCp(M=10, Re=1e7) out of range: got " << dCp_re1e7 << " expected ~0.001\n";
+        std::exit(1);
+    }
+
+    std::cout << "PASS\n";
+}
+
+void test_base_drag() {
+    std::cout << "[Test] Base drag correlation ... ";
+
+    // p_ratio → 1 at low Mach (no base drag in incompressible limit)
+    if (!approx_equal(base_pressure_ratio(0.0f), 1.0f, 0.01f)) {
+        std::cerr << "\n  FAIL p_ratio(M=0): got " << base_pressure_ratio(0.0f) << " expected 1.0\n";
+        std::exit(1);
+    }
+
+    // p_ratio → ~0.18 at hypersonic Mach numbers
+    float pr_10 = base_pressure_ratio(10.0f);
+    if (pr_10 < 0.17f || pr_10 > 0.20f) {
+        std::cerr << "\n  FAIL p_ratio(M=10): got " << pr_10 << " expected ~0.181\n";
+        std::exit(1);
+    }
+
+    // CX correction: zero for zero base area
+    float dCX_0 = base_drag_CX_correction(10.0f, 1.4f, 0.0f, 1.0f);
+    if (dCX_0 != 0.0f) {
+        std::cerr << "\n  FAIL dCX(base=0): got " << dCX_0 << " expected 0\n";
+        std::exit(1);
+    }
+
+    // CX correction: positive (adds CX = reduces CD from Newtonian estimate)
+    float dCX = base_drag_CX_correction(10.0f, 1.4f, 0.1f, 1.131f);
+    if (dCX <= 0.0f) {
+        std::cerr << "\n  FAIL dCX should be positive, got " << dCX << "\n";
+        std::exit(1);
+    }
+
+    // CX correction decreases with increasing Mach (p_ratio asymptotes)
+    float dCX_m5  = base_drag_CX_correction(5.0f, 1.4f, 0.1f, 1.131f);
+    float dCX_m20 = base_drag_CX_correction(20.0f, 1.4f, 0.1f, 1.131f);
+    if (dCX_m5 <= dCX_m20) {
+        std::cerr << "\n  FAIL dCX should decrease with Mach: "
+                  << dCX_m5 << " " << dCX_m20 << "\n";
+        std::exit(1);
+    }
+
+    std::cout << "PASS\n";
+}
+
+void test_real_gas_gamma() {
+    std::cout << "[Test] Real gas effective gamma ... ";
+
+    // M < 6: γ = 1.4 (perfect gas)
+    if (!approx_equal(gamma_effective(0.0f), 1.4f, 0.01f)) {
+        std::cerr << "\n  FAIL γ(M=0): got " << gamma_effective(0.0f) << " expected 1.4\n";
+        std::exit(1);
+    }
+    if (!approx_equal(gamma_effective(5.0f), 1.4f, 0.01f)) {
+        std::cerr << "\n  FAIL γ(M=5): got " << gamma_effective(5.0f) << " expected 1.4\n";
+        std::exit(1);
+    }
+
+    // Linear in M ∈ [6, 12]: γ = 1.4 - 0.02*(M-6)
+    if (!approx_equal(gamma_effective(6.0f), 1.4f, 0.01f)) {
+        std::cerr << "\n  FAIL γ(M=6): got " << gamma_effective(6.0f) << " expected 1.4\n";
+        std::exit(1);
+    }
+    if (!approx_equal(gamma_effective(9.0f), 1.34f, 0.01f)) {
+        std::cerr << "\n  FAIL γ(M=9): got " << gamma_effective(9.0f) << " expected 1.34\n";
+        std::exit(1);
+    }
+    if (!approx_equal(gamma_effective(12.0f), 1.28f, 0.01f)) {
+        std::cerr << "\n  FAIL γ(M=12): got " << gamma_effective(12.0f) << " expected 1.28\n";
+        std::exit(1);
+    }
+
+    // M > 12: γ = 1.28 (asymptotic)
+    if (!approx_equal(gamma_effective(15.0f), 1.28f, 0.01f)) {
+        std::cerr << "\n  FAIL γ(M=15): got " << gamma_effective(15.0f) << " expected 1.28\n";
+        std::exit(1);
+    }
+    if (!approx_equal(gamma_effective(25.0f), 1.28f, 0.01f)) {
+        std::cerr << "\n  FAIL γ(M=25): got " << gamma_effective(25.0f) << " expected 1.28\n";
+        std::exit(1);
+    }
+
+    // Monotonically non-increasing
+    for (int i = 1; i <= 20; ++i) {
+        float g_prev = gamma_effective(static_cast<float>(i-1));
+        float g_curr = gamma_effective(static_cast<float>(i));
+        if (g_curr > g_prev + 1e-8f) {
+            std::cerr << "\n  FAIL γ not monotonic at M=" << i
+                      << ": " << g_prev << " → " << g_curr << "\n";
+            std::exit(1);
+        }
+    }
+
+    std::cout << "PASS\n";
+}
+
 void test_gpu_skin_friction() {
     std::cout << "[Test] GPU solver with skin friction ... ";
 
@@ -265,6 +410,7 @@ void test_gpu_skin_friction() {
         std::cerr << "\n  FAIL to load STL\n";
         std::exit(1);
     }
+    solver.set_base_area(0.1f);
 
     // Mach 10, α=0: CD should be dominated by skin friction (~0.07-0.15)
     AeroCoefficients c0 = solver.compute_coefficients(10.0f, 0.0f, 0.0f);
@@ -302,8 +448,11 @@ int main() {
     test_van_driest_limits();
     test_van_driest_edge_cases();
     test_surface_flow_direction();
+    test_viscous_interaction();
+    test_base_drag();
+    test_real_gas_gamma();
     test_gpu_skin_friction();
 
-    std::cout << "\nAll A.1 tests PASSED.\n";
+    std::cout << "\nAll A.1 + A.2 + A.3 + A.4 tests PASSED.\n";
     return 0;
 }

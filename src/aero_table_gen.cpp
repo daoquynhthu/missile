@@ -1,8 +1,6 @@
 #include "aero_solver/aero_solver.hpp"
-#include "aero_solver/engineering_aero.hpp"
 #include <iostream>
 #include <fstream>
-#include <cmath>
 
 namespace AeroSim {
 namespace Solver {
@@ -58,41 +56,7 @@ bool generate_aero_table(
     // 3. Single GPU pass
     auto results = solver.compute_batch(conditions, eng_geo);
 
-    // 4. CPU-side blend for transition region (Mach 4-6)
-    AeroGeometry h_geo;
-    h_geo.ref_area = static_cast<float>(cfg.ref_area);
-    h_geo.ref_length = static_cast<float>(cfg.ref_length);
-    h_geo.ref_span = static_cast<float>(cfg.ref_span);
-    h_geo.wet_area = static_cast<float>(cfg.wet_area);
-    h_geo.planform_area = static_cast<float>(cfg.planform_area);
-    h_geo.base_area = static_cast<float>(cfg.base_area);
-    h_geo.nose_fineness = static_cast<float>(cfg.nose_fineness);
-
-    for (size_t i = 0; i < conditions.size(); ++i) {
-        double mach = conditions[i].mach;
-        double alpha_rad = conditions[i].alpha_deg * 3.141592653589793 / 180.0;
-        double beta_rad  = conditions[i].beta_deg  * 3.141592653589793 / 180.0;
-
-        if (mach >= 4.0 && mach <= 6.0) {
-            auto eng = compute_engineering_coeffs(h_geo, mach, alpha_rad, beta_rad);
-
-            if (mach >= 5.0) {
-                double t = (mach - 4.0) / 2.0;
-                t = std::max(0.0, std::min(1.0, t));
-                auto blend = [t](double a, double b) { return (1.0 - t) * a + t * b; };
-                results[i].CX = static_cast<float>(blend(eng.CX, results[i].CX));
-                results[i].CY = static_cast<float>(blend(eng.CY, results[i].CY));
-                results[i].CZ = static_cast<float>(blend(eng.CZ, results[i].CZ));
-                results[i].Cl = static_cast<float>(blend(eng.Cl, results[i].Cl));
-                results[i].Cm = static_cast<float>(blend(eng.Cm, results[i].Cm));
-                results[i].Cn = static_cast<float>(blend(eng.Cn, results[i].Cn));
-                results[i].CL = static_cast<float>(blend(eng.CL, results[i].CL));
-                results[i].CD = static_cast<float>(blend(eng.CD, results[i].CD));
-            }
-        }
-    }
-
-    // 5. Write CSV
+    // 4. Write CSV
     std::ofstream csv(csv_path);
     if (!csv.is_open()) {
         std::cerr << "[aero_table_gen] Failed to write: " << csv_path << "\n";

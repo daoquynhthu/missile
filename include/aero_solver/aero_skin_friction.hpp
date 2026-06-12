@@ -119,6 +119,86 @@ __device__ __host__ inline float van_driest_II_Cf_adiabatic(
     return van_driest_II_Cf(M_e, Re_x, gamma, T_w_T_e);
 }
 
+// Hypersonic viscous interaction (Δp_VI) — pressure increase due to
+// boundary layer displacement at high Mach.
+//
+// Uses the turbulent viscous interaction correlation (White, Eq 7-149):
+//   Δp_w / p_e = 0.3 * χ,  χ = M_e³ √(C / Re_x)
+//   C = ρ_w μ_w / ρ_e μ_e ≈ (T_w/T_e)^(-0.3)   (adiabatic, μ ∝ T^0.7)
+//
+// The pressure rise is converted to ΔCp:
+//   ΔCp = (2/(γ M_e²)) * 0.3 * χ = (0.6/γ) * M_e * √(C/Re_x)
+//
+// Applies to ALL surfaces (both windward and leeward) since BL
+// displacement thickens the body on both sides.
+//
+// Reference values (γ=1.4):
+//   M=10, Re=1e6 → ΔCp ≈ 0.003    M=10, Re=2e7 → ΔCp ≈ 0.0007
+//   M=20, Re=1e6 → ΔCp ≈ 0.005    M=5,  Re=2e7 → ΔCp ≈ 0.0002
+__device__ __host__ inline float viscous_interaction_dCp(
+    float M_e, float Re_x, float gamma)
+{
+    if (Re_x <= 100.0f) return 0.0f;
+    if (M_e < 0.01f) return 0.0f;
+
+    // Adiabatic wall temperature ratio
+    float r = 0.89f;
+    float T_w_T_e = 1.0f + r * 0.5f * (gamma - 1.0f) * M_e * M_e;
+
+    // Chapman-Rubesin factor: C = ρ_w μ_w / ρ_e μ_e
+    // μ ∝ T^0.7 ⇒ C = (T_e/T_w) * (T_w/T_e)^0.7 = (T_w/T_e)^(-0.3)
+    float C = powf(T_w_T_e, -0.3f);
+
+    // √(C/Re_x) with safety floor
+    float sqrt_CRex = sqrtf(fmaxf(C / Re_x, 0.0f));
+
+    // Turbulent VI pressure correction (White Eq 7-149)
+    return (0.6f / gamma) * M_e * sqrt_CRex;
+}
+
+// Base pressure ratio for base drag correlation.
+// Turbulent base pressure: p_base/p_∞ = 0.18 + 0.10/M² (M > 1.5)
+// From NASA TM X-74335 and Datcom S-642, valid for turbulent BL at M > 1.5.
+// Subsonic/transonic: smooth blend to p_base/p_∞ = 1 at M = 0.
+__device__ __host__ inline float base_pressure_ratio(float mach) {
+    if (mach < 0.8f) return 1.0f;
+    if (mach < 1.5f) {
+        float t = (mach - 0.8f) / 0.7f;
+        return 1.0f * (1.0f - t) + 0.23f * t;
+    }
+    return 0.18f + 0.10f / (mach * mach);
+}
+
+// CX correction for base drag. The GPU kernel uses Cp = -2/(γM²) for base
+// triangles (expansion surface). This correction replaces that estimate
+// with the correlated base pressure:
+//   ΔCX = [2/(γM²)·(p_ratio - 1) - (-2/(γM²))] · A_base / A_ref
+//        = 2/(γM²) · p_ratio · A_base / A_ref
+// Always positive (reduces CD slightly from pure Newtonian estimate).
+__device__ __host__ inline float base_drag_CX_correction(
+    float mach, float gamma, float base_area, float ref_area)
+{
+    if (base_area <= 0.0f || ref_area <= 0.0f) return 0.0f;
+    if (mach < 0.1f) return 0.0f;
+    float p_ratio = base_pressure_ratio(mach);
+    return (2.0f / (gamma * mach * mach)) * p_ratio * base_area / ref_area;
+}
+
+// Effective specific heat ratio for real air at hypersonic Mach numbers.
+// At high Mach the post-shock temperature excites vibrational modes and
+// dissociation, reducing γ from 1.4 toward ~1.25-1.28.
+//
+// Correlation from NASA TM X-74335 and SP-7020 engineering methods:
+//   M <  6: γ = 1.40 (perfect gas)
+//   M = 12: γ = 1.28 (full vibrational excitation)
+//   M > 12: γ = 1.28 (equilibrium asymptotic)
+// Linear interpolation in M ∈ [6, 12].
+__device__ __host__ inline float gamma_effective(float mach) {
+    if (mach < 6.0f) return 1.4f;
+    if (mach < 12.0f) return 1.4f - 0.02f * (mach - 6.0f);
+    return 1.28f;
+}
+
 // Surface flow direction (tangent vector along the triangle plane)
 __device__ __host__ inline float3 surface_flow_direction(
     const float3& normal, const float3& flow_dir)
