@@ -13,7 +13,6 @@
 #include "coordinate_transform.hpp"
 #include "constants.hpp"
 #include "rm_dart_config.hpp"
-#include "rm_dart_aero.hpp"
 #include "rm_dart_aero_table.hpp"
 #include "gnc/dart_guidance.hpp"
 

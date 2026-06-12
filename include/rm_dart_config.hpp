@@ -14,21 +14,21 @@ namespace RM {
  * @brief RoboMaster Dart 2022 Physical Parameters
  */
 struct DartConfig {
-    double mass = 0.22;               // Max mass (kg)
-    Eigen::Vector3d com = Eigen::Vector3d(0.1, 0, 0); // Center of Mass (m from nose)
+    double mass = 0.22;
+    Eigen::Vector3d com = Eigen::Vector3d(0.094, 0, 0);
     
     // Inertia (Approx as a cylinder for now, but high-fidelity requires specific values)
     // Dart: L=0.25m, R=0.075m (approx based on 150x150 box)
     // Ix = 0.5 * m * r^2
     // Iy = Iz = 1/12 * m * (3*r^2 + L^2)
-    double length = 0.25;
+    double length = 0.265;
     double radius = 0.04; // Effective radius for inertia
     
     Eigen::Matrix3d inertia;
 
     // Aerodynamic Reference
     double ref_area = 0.0006;          // Reference Area (m^2) - 30x20mm capsule approx
-    double ref_length = 0.25;         // Reference Length (m)
+    double ref_length = 0.265;
 
     // Launch Location (Default to user provided: 22.58, 113.96)
     double launch_lat = 22.58;
@@ -42,22 +42,22 @@ struct DartConfig {
 
     double nav_ratio = 2.0;
     double ctrl_gain = 2.5;
-    double ctrl_moment_coeff_pitch = 8.0;
-    double ctrl_moment_coeff_yaw = 2.0;
+    double ctrl_moment_coeff_pitch = 12.0;
+    double ctrl_moment_coeff_yaw = 3.0;
     double ctrl_q_bias = 300.0;
     double max_ctrl_coeff = 0.16;
     double guid_start_time = 0.12;
-    double guid_terminal_range = 12.0;
+    double guid_terminal_range = 14.0;
     double guid_update_hz = 330.0;
     double guid_min_tgo = 0.12;
-    double guid_max_accel = 6.0;
+    double guid_max_accel = 7.0;
     double guid_fov_deg = 120.0;
     double guid_sensor_latency = 0.03;
     double guid_y_pos_gain = 2.2;
     double guid_y_vel_gain = 1.0;
     double guid_z_pos_gain = 2.2;
     double guid_z_vel_gain = 1.1;
-    double guid_rate_damp = 0.55;
+    double guid_rate_damp = 0.35;
     double guid_dp_gain = 1.75;
     double guid_dy_gain = 1.75;
     double guid_vz_gain = 0.35;

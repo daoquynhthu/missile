@@ -14,6 +14,7 @@
 #include <Eigen/Dense>
 
 #include "aero_solver/aero_solver.hpp"
+#include "utils.hpp"
 
 namespace AeroSim {
 
@@ -308,14 +309,11 @@ public:
         double cd0 = 0.1;
         double cl_alpha = 2.0;
         
-        // Lookup tables if available
-        // (Simplified lookup logic)
         if (!m_config.cd0_table.empty() && !m_config.mach_grid.empty()) {
-            // Use first element for now (TODO: Interpolate)
-            cd0 = m_config.cd0_table[0]; 
+            cd0 = Utils::interpolate_1d(m_config.mach_grid, m_config.cd0_table, mach);
         }
-        if (!m_config.cl_alpha_table.empty()) {
-            cl_alpha = m_config.cl_alpha_table[0];
+        if (!m_config.cl_alpha_table.empty() && !m_config.mach_grid.empty()) {
+            cl_alpha = Utils::interpolate_1d(m_config.mach_grid, m_config.cl_alpha_table, mach);
         }
 
         double cl = cl_alpha * std::sin(alpha); // Better than linear for high alpha

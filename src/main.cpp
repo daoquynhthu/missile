@@ -159,8 +159,10 @@ int main(int argc, char** argv) {
     // Load Models
     std::cout << "[Init] Loading Gravity Model (Batch GPU Enabled)..." << std::endl;
     GravityModel gravity(4); // J2-J4
-    if (!gravity.load_coefficients("e:/missile/data/EGM2008.gfc")) {
-        std::cerr << "[Warning] EGM2008.gfc not found, using default." << std::endl;
+    bool egm_loaded = gravity.load_coefficients("data/EGM2008.gfc")
+                    || gravity.load_coefficients("../data/EGM2008.gfc");
+    if (!egm_loaded) {
+        std::cerr << "[Warning] EGM2008.gfc not found (tried data/ and ../data/), using J2-J4 default." << std::endl;
     }
 
     MissileDesign::HGV1Config hgv_config = MissileDesign::load_hgv1_config();

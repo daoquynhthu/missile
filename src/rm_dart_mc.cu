@@ -416,6 +416,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Usage: RMDartMC <num_sims> [v0] [pitch] [yaw] [nav_ratio] [ctrl_gain] [v0_sigma] [pitch_sigma] [yaw_sigma] [seed] [forced_dp] [forced_dp_2] [forced_switch_x]" << std::endl;
         std::cout << "   or: RMDartMC --sweep <num_sims> <v0> <pitch> <yaw> <nav_list> <ctrl_list> [seed]" << std::endl;
         std::cout << "   or: RMDartMC --closed-loop-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <y_pos_list> <z_pos_list> <dp_gain_list> <dy_gain_list> [seed]" << std::endl;
+        std::cout << "   or: RMDartMC --closed-loop-structure-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <terminal_range_list> <max_accel_list> <rate_damp_list> <pitch_moment_list> <yaw_moment_list> [seed]" << std::endl;
         std::cout << "   or: RMDartMC --forced-dp-sweep <v0> <pitch_list> <yaw> <dp_list> [seed]" << std::endl;
         std::cout << "   or: RMDartMC --forced-dp-2stage-sweep <v0> <pitch_list> <yaw> <dp1_list> <dp2_list> <switch_list> [seed]" << std::endl;
         std::cout << "   or: RMDartMC --forced-dp-2stage-mc-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <dp1_list> <dp2_list> <switch_list> [seed]" << std::endl;
@@ -424,6 +425,7 @@ int main(int argc, char* argv[]) {
 
     bool sweep_mode = std::string(argv[1]) == "--sweep";
     bool closed_loop_sweep_mode = std::string(argv[1]) == "--closed-loop-sweep";
+    bool closed_loop_structure_sweep_mode = std::string(argv[1]) == "--closed-loop-structure-sweep";
     bool authority_mode = std::string(argv[1]) == "--forced-dp-sweep";
     bool authority_2stage_mode = std::string(argv[1]) == "--forced-dp-2stage-sweep";
     bool authority_2stage_mc_mode = std::string(argv[1]) == "--forced-dp-2stage-mc-sweep";
@@ -433,6 +435,10 @@ int main(int argc, char* argv[]) {
     }
     if (closed_loop_sweep_mode && argc < 13) {
         std::cerr << "Closed-loop sweep requires: --closed-loop-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <y_pos_list> <z_pos_list> <dp_gain_list> <dy_gain_list> [seed]" << std::endl;
+        return -1;
+    }
+    if (closed_loop_structure_sweep_mode && argc < 14) {
+        std::cerr << "Closed-loop structure sweep requires: --closed-loop-structure-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <terminal_range_list> <max_accel_list> <rate_damp_list> <pitch_moment_list> <yaw_moment_list> [seed]" << std::endl;
         return -1;
     }
     if (authority_mode && argc < 6) {
@@ -448,41 +454,42 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     MCSimParams params;
-    params.num_sims = (authority_mode || authority_2stage_mode || authority_2stage_mc_mode) ? 1 : std::stoi(argv[(sweep_mode || closed_loop_sweep_mode) ? 2 : 1]);
+    params.num_sims = (authority_mode || authority_2stage_mode || authority_2stage_mc_mode) ? 1 : std::stoi(argv[(sweep_mode || closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 2 : 1]);
     if (authority_2stage_mc_mode) {
         params.num_sims = std::stoi(argv[2]);
     }
-    params.v0_mean = (authority_mode || authority_2stage_mode) ? std::stod(argv[2]) : ((argc > ((sweep_mode || closed_loop_sweep_mode) ? 3 : 2)) ? std::stod(argv[(sweep_mode || closed_loop_sweep_mode) ? 3 : 2]) : 25.0);
+    params.v0_mean = (authority_mode || authority_2stage_mode) ? std::stod(argv[2]) : ((argc > ((sweep_mode || closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 3 : 2)) ? std::stod(argv[(sweep_mode || closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 3 : 2]) : 25.0);
     if (authority_2stage_mc_mode) {
         params.v0_mean = std::stod(argv[3]);
     }
     params.v0_sigma = 0.3;
-    params.pitch_mean_deg = (authority_mode || authority_2stage_mode) ? 0.0 : ((argc > ((sweep_mode || closed_loop_sweep_mode) ? 4 : 3)) ? std::stod(argv[(sweep_mode || closed_loop_sweep_mode) ? 4 : 3]) : 3.93);
+    params.pitch_mean_deg = (authority_mode || authority_2stage_mode) ? 0.0 : ((argc > ((sweep_mode || closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 4 : 3)) ? std::stod(argv[(sweep_mode || closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 4 : 3]) : 3.93);
     if (authority_2stage_mc_mode) {
         params.pitch_mean_deg = std::stod(argv[4]);
     }
     params.pitch_sigma_deg = 0.2;
-    params.yaw_mean_deg = (authority_mode || authority_2stage_mode) ? std::stod(argv[4]) : ((argc > ((sweep_mode || closed_loop_sweep_mode) ? 5 : 4)) ? std::stod(argv[(sweep_mode || closed_loop_sweep_mode) ? 5 : 4]) : 7.3);
+    params.yaw_mean_deg = (authority_mode || authority_2stage_mode) ? std::stod(argv[4]) : ((argc > ((sweep_mode || closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 5 : 4)) ? std::stod(argv[(sweep_mode || closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 5 : 4]) : 7.3);
     if (authority_2stage_mc_mode) {
         params.yaw_mean_deg = std::stod(argv[5]);
     }
     params.yaw_sigma_deg = 0.2;
-    params.nav_ratio = (authority_mode || authority_2stage_mode || authority_2stage_mc_mode) ? 0.0 : (closed_loop_sweep_mode ? 2.0 : ((argc > (sweep_mode ? 6 : 5)) ? std::stod(argv[sweep_mode ? 6 : 5]) : 2.0));
-    params.control_gain = (authority_mode || authority_2stage_mode || authority_2stage_mc_mode) ? 0.0 : (closed_loop_sweep_mode ? 2.5 : ((argc > (sweep_mode ? 7 : 6)) ? std::stod(argv[sweep_mode ? 7 : 6]) : 1.0));
-    params.forced_dp = (!sweep_mode && !closed_loop_sweep_mode && !authority_mode && !authority_2stage_mode && !authority_2stage_mc_mode && argc > 11) ? std::stod(argv[11]) : 0.0;
-    params.forced_dp_2 = (!sweep_mode && !closed_loop_sweep_mode && !authority_mode && !authority_2stage_mode && !authority_2stage_mc_mode && argc > 12) ? std::stod(argv[12]) : 0.0;
-    params.forced_switch_x = (!sweep_mode && !closed_loop_sweep_mode && !authority_mode && !authority_2stage_mode && !authority_2stage_mc_mode && argc > 13) ? std::stod(argv[13]) : 0.0;
+    params.nav_ratio = (authority_mode || authority_2stage_mode || authority_2stage_mc_mode) ? 0.0 : ((closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 2.0 : ((argc > (sweep_mode ? 6 : 5)) ? std::stod(argv[sweep_mode ? 6 : 5]) : 2.0));
+    params.control_gain = (authority_mode || authority_2stage_mode || authority_2stage_mc_mode) ? 0.0 : ((closed_loop_sweep_mode || closed_loop_structure_sweep_mode) ? 2.5 : ((argc > (sweep_mode ? 7 : 6)) ? std::stod(argv[sweep_mode ? 7 : 6]) : 1.0));
+    params.forced_dp = (!sweep_mode && !closed_loop_sweep_mode && !closed_loop_structure_sweep_mode && !authority_mode && !authority_2stage_mode && !authority_2stage_mc_mode && argc > 11) ? std::stod(argv[11]) : 0.0;
+    params.forced_dp_2 = (!sweep_mode && !closed_loop_sweep_mode && !closed_loop_structure_sweep_mode && !authority_mode && !authority_2stage_mode && !authority_2stage_mc_mode && argc > 12) ? std::stod(argv[12]) : 0.0;
+    params.forced_switch_x = (!sweep_mode && !closed_loop_sweep_mode && !closed_loop_structure_sweep_mode && !authority_mode && !authority_2stage_mode && !authority_2stage_mc_mode && argc > 13) ? std::stod(argv[13]) : 0.0;
     params.seed = authority_2stage_mc_mode ? ((argc > 12) ? std::stoull(argv[12]) : 123456789ULL)
                                  : authority_2stage_mode ? ((argc > 8) ? std::stoull(argv[8]) : 123456789ULL)
                                  : authority_mode ? ((argc > 6) ? std::stoull(argv[6]) : 123456789ULL)
+                                 : (closed_loop_structure_sweep_mode ? ((argc > 14) ? std::stoull(argv[14]) : 123456789ULL)
                                  : (closed_loop_sweep_mode ? ((argc > 13) ? std::stoull(argv[13]) : 123456789ULL)
                                  : (sweep_mode ? ((argc > 8) ? std::stoull(argv[8]) : 123456789ULL)
-                                               : ((argc > 10) ? std::stoull(argv[10]) : 123456789ULL)));
+                                               : ((argc > 10) ? std::stoull(argv[10]) : 123456789ULL))));
     if (authority_2stage_mc_mode) {
         params.v0_sigma = std::stod(argv[6]);
         params.pitch_sigma_deg = std::stod(argv[7]);
         params.yaw_sigma_deg = std::stod(argv[8]);
-    } else if (closed_loop_sweep_mode) {
+    } else if (closed_loop_sweep_mode || closed_loop_structure_sweep_mode) {
         params.v0_sigma = std::stod(argv[6]);
         params.pitch_sigma_deg = std::stod(argv[7]);
         params.yaw_sigma_deg = std::stod(argv[8]);
@@ -559,7 +566,7 @@ int main(int argc, char* argv[]) {
     cudaMalloc(&d_results, params.num_sims * sizeof(MCSimResult));
     
     TrajectoryPoint* d_debug_traj = nullptr;
-    if (!sweep_mode && !closed_loop_sweep_mode && params.num_sims >= 1) {
+    if (!sweep_mode && !closed_loop_sweep_mode && !closed_loop_structure_sweep_mode && params.num_sims >= 1) {
         cudaMalloc(&d_debug_traj, 2000 * sizeof(TrajectoryPoint));
     }
 
@@ -619,6 +626,45 @@ int main(int argc, char* argv[]) {
                                   << " HitRate=" << summary.hit_rate << "% MeanMiss="
                                   << summary.mean_miss_distance * 1000.0 << "mm Time="
                                   << batch.elapsed_sec << "s" << std::endl;
+                    }
+                }
+            }
+        }
+    } else if (closed_loop_structure_sweep_mode) {
+        std::vector<double> terminal_range_values = parse_double_list(argv[9]);
+        std::vector<double> max_accel_values = parse_double_list(argv[10]);
+        std::vector<double> rate_damp_values = parse_double_list(argv[11]);
+        std::vector<double> pitch_moment_values = parse_double_list(argv[12]);
+        std::vector<double> yaw_moment_values = parse_double_list(argv[13]);
+        std::ofstream sweep_file("output/logs/rm_dart_mc_closed_loop_structure_sweep.csv");
+        sweep_file << "TerminalRange,MaxAccel,RateDamp,PitchMomentCoeff,YawMomentCoeff,HitRate,MeanMissMM,MaxMissMM,ElapsedSec\n";
+
+        for (double terminal_range : terminal_range_values) {
+            for (double max_accel : max_accel_values) {
+                for (double rate_damp : rate_damp_values) {
+                    for (double pitch_moment : pitch_moment_values) {
+                        for (double yaw_moment : yaw_moment_values) {
+                            dart_cfg.guid_terminal_range = terminal_range;
+                            dart_cfg.guid_max_accel = max_accel;
+                            dart_cfg.guid_rate_damp = rate_damp;
+                            dart_cfg.ctrl_moment_coeff_pitch = pitch_moment;
+                            dart_cfg.ctrl_moment_coeff_yaw = yaw_moment;
+
+                            auto batch = run_mc_batch(
+                                params, table.get_gpu_data(), dart_cfg, origin_lla, origin_ecef, target_ned,
+                                d_results, nullptr, false, true
+                            );
+                            auto summary = summarize_results(batch.results, target_ned);
+                            sweep_file << terminal_range << "," << max_accel << "," << rate_damp << ","
+                                       << pitch_moment << "," << yaw_moment << "," << summary.hit_rate << ","
+                                       << summary.mean_miss_distance * 1000.0 << ","
+                                       << summary.max_miss_distance * 1000.0 << "," << batch.elapsed_sec << "\n";
+                            std::cout << "TR=" << terminal_range << " MA=" << max_accel
+                                      << " RD=" << rate_damp << " PM=" << pitch_moment
+                                      << " YM=" << yaw_moment << " HitRate=" << summary.hit_rate
+                                      << "% MeanMiss=" << summary.mean_miss_distance * 1000.0
+                                      << "mm Time=" << batch.elapsed_sec << "s" << std::endl;
+                        }
                     }
                 }
             }

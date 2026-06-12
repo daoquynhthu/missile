@@ -47,10 +47,11 @@ list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/rm_dart_mc.cu")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/shape_optimizer.cpp")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/aero_calc_tool.cpp")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/rm_dart_debug.cu")
+list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/aero_solver/aero_solver_c_api.cu")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/tests/test_gravity.cu")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/tests/compare_atm.cpp")
 
-# Create the core library
+# Core library (static)
 add_library(missile_lib STATIC ${LIB_SOURCES})
 
 # Include directories
@@ -73,6 +74,25 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/wd4819 -Xcompiler=/wd4068 -Xcudafe --diag_suppress=20012>
     )
 endif()
+
+# C API DLL for Python ctypes
+add_library(aero_solver_c SHARED src/aero_solver/aero_solver_c_api.cu)
+target_compile_definitions(aero_solver_c PRIVATE AERO_SOLVER_EXPORTS)
+target_link_libraries(aero_solver_c PRIVATE missile_lib)
+target_include_directories(aero_solver_c PRIVATE
+    include include/aero_solver ${eigen_SOURCE_DIR}
+)
+set_target_properties(aero_solver_c PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+)
+add_custom_command(TARGET aero_solver_c POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
+    $<TARGET_FILE_DIR:aero_solver_c>
+)
 
 # Main Executable
 add_executable(AeroSim src/main.cpp)
@@ -167,6 +187,11 @@ add_custom_command(TARGET TestPropulsion POST_BUILD
     "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
     $<TARGET_FILE_DIR:TestPropulsion>
 )
+add_custom_command(TARGET TestPropulsion POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:missile_lib>
+    $<TARGET_FILE_DIR:TestPropulsion>
+)
 add_test(NAME PropulsionTest COMMAND TestPropulsion)
 
 # 2. Aerodynamics Test
@@ -238,7 +263,29 @@ set_target_properties(TestLaunch PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-# 6. Integrator Test
+# 6. Aero Table Generation Test
+add_executable(TestAeroTableGen tests/test_aero_table_gen.cpp)
+set_source_files_properties(tests/test_aero_table_gen.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(TestAeroTableGen PRIVATE missile_lib)
+set_target_properties(TestAeroTableGen PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestAeroTableGen PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+add_test(NAME AeroTableGenTest COMMAND TestAeroTableGen)
+set_target_properties(TestAeroTableGen PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# 7. Aero Viscous Test (van Driest II + GPU skin friction)
+add_executable(TestAeroViscous tests/test_aero_viscous.cu)
+set_source_files_properties(tests/test_aero_viscous.cu PROPERTIES LANGUAGE CUDA)
+target_link_libraries(TestAeroViscous PRIVATE missile_lib)
+set_target_properties(TestAeroViscous PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestAeroViscous PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+add_test(NAME AeroViscousTest COMMAND TestAeroViscous)
+set_target_properties(TestAeroViscous PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# 8. Integrator Test
 add_executable(TestIntegrator tests/test_integrator.cpp)
 set_source_files_properties(tests/test_integrator.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestIntegrator PRIVATE missile_lib)
