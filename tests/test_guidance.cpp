@@ -27,6 +27,7 @@ void test_boost_pitch_program() {
 
     // 2. Test Point 1: Early Boost (Vertical)
     double t = 2.0;
+    // Use offset target so to_target_horiz is non-degenerate (not directly below)
     Eigen::Vector3d pos_ecef(6378137.0 + 1000.0, 0.0, 0.0); // 1km Alt on Equator
     Eigen::Vector3d vel_ecef(100.0, 0.0, 0.0); // Vertical Velocity
     

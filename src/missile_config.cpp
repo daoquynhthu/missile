@@ -100,13 +100,14 @@ namespace MissileDesign {
         prop.total_impulse = prop.propellant_mass * prop.isp * 9.80665;
         
         prop.time_knots = {0.0, 5.0, 15.0, 50.0, 58.0, 60.0, 60.1};
-        // Scaled Thrust to match Total Impulse (~35 MNs)
+        // Scaled Thrust to match Total Impulse (34.94 MNs = 12500*285*9.80665)
+        // Scale factor 0.917 = 34.94 / 38.1 (original curve over-shot by 9%)
         prop.thrust_knots = {
-            800000.0,  // t=0: Ignition (800kN)
-            1200000.0, // t=5: Max Thrust (1200kN)
-            800000.0,  // t=15: End Boost
-            400000.0,  // t=50: Sustain
-            100000.0,  // t=58: Tailing off
+            734000.0,  // t=0: Ignition (734kN)
+            1100000.0, // t=5: Max Thrust (1100kN)
+            734000.0,  // t=15: End Boost
+            367000.0,  // t=50: Sustain
+            91700.0,   // t=58: Tailing off
             0.0,       // t=60: Burnout
             0.0        // t=60.1: Off
         };

@@ -100,11 +100,21 @@ namespace Solver {
         float planform_area = 3.0f;
         float base_area = 0.1f;
         float nose_fineness = 3.0f;
+
+        // FVM mesh override (optional). If mesh_subdivisions > 0, FVM replaces
+        // Newtonian panel for Mach >= fvm_mach_min conditions.
+        bool   use_fvm = false;
+        float  fvm_mach_min = 3.0f;
+        int    mesh_subdivisions = 5000;
+        float  mesh_outer_scale = 10.0f;
     };
 
     // Single-GPU-pass generation of complete aerodynamics CSV table.
     // Uses Newtonian panel (Mach >= 5) + engineering estimate (Mach < 5)
     // with smooth blending in Mach 4-6 transition.
+    // If cfg.use_fvm is true, generates a tetrahedral volume mesh and runs
+    // the FVM solver (CfdSolver) for Mach >= cfg.fvm_mach_min, overriding
+    // the Newtonian/engineering results. Warm-started across conditions.
     bool generate_aero_table(
         const std::string& stl_path,
         const std::string& csv_path,
