@@ -39,3 +39,6 @@
 - Added viscous velocity-gradient and temperature-gradient utilities based on Phase 3 primitive gradients.
 - Temperature gradient is computed analytically from `T=p/rho`, using `gradT=(rho*gradp-p*gradrho)/rho^2`.
 - Verification: `cmake --build build --target TestCfdViscous --config Release` passed; `TestCfdViscous.exe` passed 7/7; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction|Viscous)" --output-on-failure` passed 5/5.
+- Corrected the long-range architecture plan after identifying missing top-tier fidelity requirements: DNS-grade high-order/resolution route, explicit transition physics beyond SA, thermochemistry and wall-catalysis uncertainty for heat flux, and GPU-first production execution.
+- Updated `AERO_ACCURACY_UPGRADE.md` to define first-principles expectations, CPU/GPU roles, SA limitations, transition/DNS/high-order/thermal-chemistry stages, and heat-flux uncertainty constraints.
+- Updated `PLAN.md` with Phase 7 GPU Production Path, Phase 8 High-Order And DNS-Grade Verification, Phase 9 Transition Physics, and Phase 10 Thermochemistry And Wall Catalysis.

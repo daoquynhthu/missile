@@ -2,7 +2,14 @@
 
 ## 0. 目标与边界
 
-本子工程的目标是为高超声速飞行器和弹体仿真生成可信气动数据库，而不是做演示性质的 CFD。输出必须能进入 6-DOF 弹道仿真，并且能解释误差来源。
+本子工程的目标是建立面向高超声速飞行器和弹体的高保真气动/热环境求解器，而不是做演示性质或工程曲线拟合性质的 CFD。短期输出必须能进入 6-DOF 弹道仿真；长期目标是形成从可验证低阶基线到 DNS/高阶/热化学壁面模型的连续精度路线。
+
+“第一性原理”在本项目中定义为：
+
+- 离散方程必须来自明确的控制方程、通量、边界条件和材料/气体模型。
+- 任何经验模型、湍流闭合、转捩模型、壁面催化模型都必须显式标注适用范围和不确定性，不允许伪装成真实物理解。
+- 任何数值近似都必须有网格收敛、阶精度验证、守恒误差和物理量误差预算。
+- 不接受“看起来合理”“量级差不多”作为最终正确性；这类测试只允许作为早期 smoke/sanity gate。
 
 核心输出：
 
@@ -14,10 +21,17 @@
 
 非目标：
 
-- 不追求第一版覆盖全物理。
+- 不追求第一版覆盖全物理，但架构不得封死 DNS、高阶格式、热化学、转捩和 GPU 生产路径。
 - 不用壁函数替代积分到壁面作为最终方案。
 - 不把“finite/positive/no NaN”当作物理正确。
 - 不在旧 `cfd_solver.cu` 基础上继续堆补丁。
+
+明确不再接受的长期路线：
+
+- 以 SA/RANS 作为“最终真值”。
+- 以低阶一阶/二阶耗散格式作为“顶尖求解器”终点。
+- 以 CPU 参考实现作为生产性能路线。
+- 在未知转捩、未知壁面催化、未知材料反应率时输出单一“精确热流值”。
 
 当前清理后的原则：
 
@@ -65,6 +79,10 @@ src/aero_cfd/
   timestep.cu
   force_integrator.cu
   diagnostics.cpp
+  gpu_kernels.cu
+  high_order/
+  transition/
+  thermochemistry/
 
 tests/cfd/
   test_cfd_mesh.cpp
@@ -85,6 +103,13 @@ tests/cfd/
 | `timestep` | inviscid/viscous/source CFL | 不把 debug dt 和实际 dt 分开 |
 | `force_integrator` | 壁面积分和系数归一化 | 不从非壁面取力 |
 | `diagnostics` | residual/history/VTK/probes/failure dump | 不改变数值状态 |
+
+执行策略：
+
+- CPU 路径只允许作为参考实现、单元测试 oracle、小网格调试和可重复性验证。
+- GPU 路径是生产路线，不是可选增强。核心 residual、重构、通量、时间推进、线性/隐式求解器、壁面量积分最终都必须有 GPU 实现。
+- 不允许为了 CPU 简单性选择会阻碍 GPU memory layout、kernel fusion、coalescing、multi-GPU domain decomposition 的数据结构。
+- 早期 CPU 实现存在的唯一理由是降低物理和数值公式验证成本；一旦公式门禁通过，必须迁移到 GPU 并用 CPU/GPU bitwise 或容差回归约束。
 
 ## 3. 数据模型
 
@@ -272,7 +297,7 @@ dt      = min(dt_inv, dt_visc)
 
 ### Stage R1: Spalart-Allmaras RANS
 
-只有在 laminar NS 可信后进入。
+只有在 laminar NS 可信后进入。SA 是工程湍流闭合，不是转捩预测模型，也不是最终第一性原理真值。
 
 状态扩展：
 
@@ -293,10 +318,52 @@ Q = [rho, rho*u, rho*v, rho*w, rho*E, rho*nu_tilde]
 - turbulence=false 回归 laminar NS。
 - zero `nu_tilde` 回归 laminar NS。
 - turbulent flat plate `Cf` 与参考同量级。
+- 不允许宣称 SA 预测了自然转捩位置。
+
+### Stage T: 转捩与稳定性
+
+转捩必须作为独立物理问题处理，不能由 SA 模型顺带承担。
+
+路线：
+
+1. 线性稳定性/LST 或 e^N 方法，用于可解释的边界层转捩估计。
+2. γ-Reθ 或同类转捩模型，仅作为工程预测层，必须和 LST/DNS/实验对比。
+3. DNS/WRLES 解析局部转捩机制，用于校准和验证，不作为全弹全包线日常生产计算。
+4. 粗糙度、来流湍强、壁温、真实气体效应对转捩位置的敏感性必须进入误差预算。
+
+门禁：
+
+- 平板 Tollmien-Schlichting 或 Mack mode 增长率与参考解对比。
+- 转捩位置不得只由经验常数拟合得到。
+- 对同一算例必须报告 transition onset 的不确定区间，而不是单点假精确值。
+
+### Stage HO/DNS: 高阶格式与 DNS 级验证
+
+DNS 级精度需要两个条件同时成立：高阶低耗散格式和足够细网格。单独提高格式阶数或单独加密网格都不等于 DNS。
+
+高阶路线：
+
+- p=2/3/4 的 DG、FR/CPR 或高阶有限体积/WENO/TENO 路线择一实现，并保留低阶 FV 作为鲁棒基线。
+- 几何必须支持高阶曲面表示；线性三角/四面体边界不能作为 DNS 几何真值。
+- 时间推进必须支持高阶 SSPRK/ADER 或隐式高阶方法。
+- shock capturing 必须使用可解释的传感器和局部耗散，不允许全场过耗散。
+
+DNS 路线：
+
+- 对低 Reynolds 或局部小域先做 DNS 验证，而不是直接承诺全飞行器全包线 DNS。
+- 网格必须解析 Kolmogorov/壁面尺度；近壁要求以 `y+ < 1` 为下限，DNS 还需要满足切向和流向尺度。
+- 必须做 p-refinement、h-refinement、domain-size 和 time-step convergence。
+- 所有 DNS 结果必须同时报告计算域、边界条件、扰动谱、分辨率指标和耗散谱。
+
+门禁：
+
+- method-of-manufactured-solutions 阶精度验证。
+- 等熵涡、Taylor-Green vortex、shock/vortex interaction 等高阶基准。
+- DNS/WRLES 小域算例与公开参考数据或自洽谱指标对比。
 
 ### Stage H: 高温气体扩展
 
-只在 RANS 通过后规划实施。
+只在 laminar/RANS 基线、诊断和高阶基础可控后规划实施。高超声速定量热流不能只靠常 gamma + Sutherland + Fourier 得到最终精度。
 
 顺序：
 
@@ -304,6 +371,13 @@ Q = [rho, rho*u, rho*v, rho*w, rho*E, rho*nu_tilde]
 2. Park 5-species finite-rate chemistry。
 3. 双温度模型。
 4. 壁面催化。
+
+壁面热流精度约束：
+
+- 定量热流必须区分数值误差、气体模型误差、壁面催化/材料不确定性和网格误差。
+- 壁面催化模型必须支持非催化、有限速率催化、完全催化等边界，并输出敏感性区间。
+- 材料表面状态未知时，禁止输出单一“绝对精确”热流；必须输出条件化结果和不确定性。
+- 辐射、烧蚀、粗糙度和表面反应率如果不建模，必须在结果元数据中声明。
 
 该阶段不允许提前污染 E/V/RANS 基线。
 

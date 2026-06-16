@@ -169,7 +169,7 @@ Gate:
 
 ## Phase 6 — RANS And Beyond
 
-Goal: add SA only after laminar NS is trustworthy.
+Goal: add SA only after laminar NS is trustworthy. SA is an engineering turbulence closure, not a transition predictor or final DNS-grade truth model.
 
 Tasks:
 
@@ -184,6 +184,90 @@ Gate:
 
 - `turbulence=false` matches laminar NS.
 - Turbulent flat plate `Cf` is physically plausible.
+- SA results are labeled as modeled RANS, not transition-resolved truth.
+
+## Phase 7 — GPU Production Path
+
+Goal: move from CPU reference implementation to GPU-first production solver without changing validated physics.
+
+Tasks:
+
+- [ ] Define GPU-owned mesh/state/residual memory layout
+- [ ] Add CPU/GPU state transfer and ownership tests
+- [ ] Port Euler residual assembly to CUDA kernels
+- [ ] Port reconstruction and limiter to CUDA kernels
+- [ ] Port viscous residual and wall integration to CUDA kernels
+- [ ] Add CUDA error checks after every kernel launch
+- [ ] Add CPU/GPU residual equivalence tests on small meshes
+- [ ] Add GPU timing and memory-bandwidth diagnostics
+- [ ] Add multi-block/domain-decomposition design note
+
+Gate:
+
+- GPU and CPU residuals match within strict tolerance on fixed meshes.
+- GPU path is the production path for supported CFD table generation.
+- CPU path remains available only as reference/debug oracle.
+
+## Phase 8 — High-Order And DNS-Grade Verification
+
+Goal: establish a route to DNS-grade accuracy using high-order low-dissipation discretization plus resolution evidence.
+
+Tasks:
+
+- [ ] Add manufactured-solution order verification
+- [ ] Add high-order geometry representation plan
+- [ ] Implement selected high-order spatial discretization prototype
+- [ ] Add high-order shock sensor and localized dissipation strategy
+- [ ] Add p-refinement and h-refinement studies
+- [ ] Add isentropic vortex benchmark
+- [ ] Add Taylor-Green vortex benchmark
+- [ ] Add shock/vortex interaction benchmark
+- [ ] Add DNS resolution metrics: near-wall spacing, spectral content, time-step convergence
+- [ ] Add DNS/WRLES small-domain validation case
+
+Gate:
+
+- Observed order matches intended order on smooth manufactured problems.
+- Shock handling does not destroy smooth-region order.
+- DNS claims are backed by h/p/time/domain convergence and resolution metrics.
+
+## Phase 9 — Transition Physics
+
+Goal: model transition location explicitly instead of relying on SA.
+
+Tasks:
+
+- [ ] Add boundary-layer profile extraction
+- [ ] Add LST/e^N design and validation plan
+- [ ] Add Mack-mode/Tollmien-Schlichting benchmark cases
+- [ ] Add transition onset uncertainty reporting
+- [ ] Add optional engineering transition model with clear labeling
+- [ ] Add DNS/WRLES transition patch validation case
+
+Gate:
+
+- Transition onset is not inferred from SA alone.
+- Reported transition location includes sensitivity to freestream disturbance, wall temperature, roughness, and grid.
+
+## Phase 10 — Thermochemistry And Wall Catalysis
+
+Goal: make hypersonic heat flux predictions conditional on real gas and wall-surface physics.
+
+Tasks:
+
+- [ ] Add variable thermodynamic properties baseline
+- [ ] Add finite-rate multi-species chemistry plan
+- [ ] Add two-temperature model plan
+- [ ] Add non-catalytic wall boundary
+- [ ] Add finite-rate catalytic wall boundary
+- [ ] Add fully catalytic wall boundary
+- [ ] Add wall heat-flux uncertainty reporting
+- [ ] Add radiation/ablation/roughness limitation metadata
+
+Gate:
+
+- Heat flux reports separate numerical error, gas-model error, and wall-catalysis uncertainty.
+- Unknown surface chemistry never produces a single unlabeled "exact" heat-flux value.
 
 ## Work Rules
 
