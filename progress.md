@@ -33,3 +33,6 @@
 - Added manufactured linear-pressure stencil coverage for least-squares gradients. The first test run exposed a normal-matrix accumulation bug where the matrix was accumulated once per primitive component; fixed it so the matrix is accumulated once per neighbor and each component accumulates only its RHS.
 - Phase 3 task checklist is now complete.
 - Verification: `cmake --build build --target TestCfdReconstruction --config Release` passed; `TestCfdReconstruction.exe` passed 7/7; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.
+- Started Phase 4 laminar Navier-Stokes foundation with primitive temperature, nondimensional Sutherland viscosity, and no-slip wall primitive helpers for isothermal and adiabatic walls.
+- Added `TestCfdViscous` with coverage for `T=p/rho`, Sutherland normalization/monotonicity, and wall-state pressure/temperature/velocity invariants.
+- Verification: `cmake -B build` passed; `cmake --build build --target TestCfdViscous --config Release` passed; `TestCfdViscous.exe` passed 5/5; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction|Viscous)" --output-on-failure` passed 5/5.

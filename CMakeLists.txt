@@ -346,3 +346,14 @@ add_test(NAME CfdReconstructionTest COMMAND TestCfdReconstruction)
 set_target_properties(TestCfdReconstruction PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# 13. CFD Viscous Foundation Test
+add_executable(TestCfdViscous tests/cfd/test_cfd_viscous.cpp)
+set_source_files_properties(tests/cfd/test_cfd_viscous.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(TestCfdViscous PRIVATE missile_lib)
+set_target_properties(TestCfdViscous PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestCfdViscous PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+add_test(NAME CfdViscousTest COMMAND TestCfdViscous)
+set_target_properties(TestCfdViscous PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)

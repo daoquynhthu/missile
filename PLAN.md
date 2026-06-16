@@ -132,12 +132,12 @@ Files planned:
 
 Tasks:
 
-- [ ] Implement Sutherland viscosity
+- [x] Implement Sutherland viscosity
 - [ ] Implement velocity and temperature gradients
 - [ ] Implement orthogonal face-gradient correction
-- [ ] Implement no-slip wall primitive
-- [ ] Implement isothermal wall
-- [ ] Implement adiabatic wall
+- [x] Implement no-slip wall primitive
+- [x] Implement isothermal wall
+- [x] Implement adiabatic wall
 - [ ] Implement viscous timestep
 - [ ] Add wall shear and heat flux integration
 - [ ] Add flat plate laminar `Cf` sanity test
