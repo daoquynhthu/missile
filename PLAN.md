@@ -1,58 +1,193 @@
-# 高保真弹道仿真工程计划书 (High-Fidelity Ballistic Simulation Project)
+# CFD Rebuild Plan
 
-## 1. 项目目标
-构建一套基于 C++ 和 CUDA 的全保真、高精度弹道仿真引擎，专门用于高超音速飞行器（如钱学森弹道）的动力学特性研究、热环境分析及关键参数反推。
+> Design: `AERO_ACCURACY_UPGRADE.md`
+> Progress log: `progress.md`
+> Active blockers: `ISSUES.md`
 
-## 2. 核心技术架构
+## Phase 0 — Clean Baseline
 
-### 2.1 地球物理模型 (Geophysical Models)
-- **引力场**：实现 EGM2008 (Earth Gravitational Model 2008)，通过球谐函数展开计算全球非均匀引力加速度。已实现 CUDA 加速内核及 J2/J3 基础修正。
-- **椭球体**：采用 WGS-84 标准，精确计算大地高度及坐标转换（ECI <-> ECEF <-> NED <-> Body）。已实现全套转换算法。
-- **地球自转**：考虑科氏力 (Coriolis) 与离心加速度。
+Goal: remove the contaminated CFD implementation and make the repository build without the old solver.
 
-### 2.2 大气环境模型 (Atmospheric Models)
-- **高空/中低空**：集成 NRLMSISE-00 大气模型。已完成接口定义及标准大气 (ISA) 备份模型。
+- [x] Remove old `cfd_solver.*`
+- [x] Remove old `mesh_generator.*`
+- [x] Remove old CFD/mesh tests
+- [x] Disable old CFD override in aero table generation
+- [x] Remove stale CFD test targets from CMake
+- [x] Verify configure: `cmake -B build`
+- [x] Verify focused retained targets: `missile_lib`, `TestAero`, `TestAeroTableGen`
+- [ ] Verify full build: `cmake --build build --config Release --clean-first`
+- [ ] Verify remaining non-CFD tests that still apply
 
-### 2.3 动力学求解器 (Dynamics Solver)
-- **自由度**：全流程 6-DOF（六自由度）方程，包含平动与转动耦合。已实现状态空间方程。
-- **数值积分**：已实现 **System Dynamics aware RK4** 积分器，支持在每个子步中重新评估引力与气动力，后续计划支持自适应步长算法。
+Gate:
 
-### 2.4 气动与热防护 (Aero-thermodynamics)
-- **气动数据库**：支持基于马赫数、攻角、侧滑角的多维线性插值（待开发）。
-- **热流计算**：集成 Fay-Riddell 驻点热流公式（待开发）。
+- No references to removed `CfdSolver` or old `TetMesh` remain in build targets.
+- `use_fvm=true` fails explicitly instead of silently using stale code.
 
-## 3. 开发阶段规划
+## Phase 1 — Mesh And Metrics Foundation
 
-### 第一阶段：基础设施与物理内核 (已完成 ✅)
-- [x] 初始化 CMake 工程与 CUDA 混合编译环境。
-- [x] 实现基础坐标系转换类（LLA/ECEF/NED/Body/ECI）。
-- [x] 编写 EGM2008 引力场计算框架（支持 CPU/GPU）。
-- [x] 解决 Eigen 与 CUDA 兼容性及编译告警。
+Goal: implement a clean mesh representation with explicit faces and validated metrics.
 
-### 第二阶段：环境与动力学集成 (进行中 🚧)
-- [x] 构建 6-DOF 状态空间方程（位置、速度、四元数姿态、角速度）。
-- [x] 实现基础 RK4 数值积分器。
-- [x] 集成高保真大气模型 (NRLMSISE-00 已集成并验证，USSA76 作为备份)。
-- [x] 实现变质量推力矢量控制模型 (PropulsionModel + TVC)。
+Files planned:
 
-### 第三阶段：高精度求解与验证 (计划中)
-- [ ] 开发自适应步长求解器（RKF89 或 DP853）。
-- [ ] 实现平衡滑翔 (EGC) 指令制导算法。
-- [ ] 与公开基准弹道进行精度比对。
+- `include/aero_cfd/cfd_mesh.hpp`
+- `include/aero_cfd/cfd_result.hpp`
+- `src/aero_cfd/mesh_metrics.cpp`
+- `tests/cfd/test_cfd_mesh.cpp`
 
-### 第四阶段：大规模加速与优化 (计划中)
-- [x] **CUDA 迁移**：核心物理算子（引力、坐标转换）已迁移至 GPU。
-- [ ] 实现大规模蒙特卡洛参数扫描。
-- [ ] 实现基于模板的逆向参数寻优算法。
+Tasks:
 
-### 扩展阶段：RoboMaster 飞镖系统 (进行中 🚧)
-- [x] **物理建模**：创建了 RM 飞镖专属配置 [rm_dart_config.hpp](file:///e:/missile/include/rm_dart_config.hpp)。
-- [x] **气动适配**：实现了亚音速细长体气动力模型 [rm_dart_aero.hpp](file:///e:/missile/include/rm_dart_aero.hpp)。
-- [x] **仿真入口**：开发了专用的高精度仿真程序 [rm_dart_sim.cpp](file:///e:/missile/src/rm_dart_sim.cpp)，支持 EGM2008 引力场与 USSA76 大气模型。
-- [ ] **误差分析**：计划开发蒙特卡洛脚本分析发射散布。
-- [ ] **引导算法**：计划实现针对飞镖的比例导引 (PN) 算法。
+- [ ] Define `CfdNode`, `CfdCell`, `CfdFace`, `BoundaryKind`
+- [ ] Implement structured cube mesh using hex-cull wall classification
+- [ ] Implement structured flat plate mesh
+- [ ] Compute face normals, areas, centers
+- [ ] Compute cell volumes, centers, `h_min`
+- [ ] Compute wall distance for wall-adjacent cells
+- [ ] Add mesh quality report
+- [ ] Add hard failure for negative/zero volume
+- [ ] Add tests for cube wall/farfield face counts
+- [ ] Add tests for flat plate wall area and first-layer height
 
-## 4. 精度保证体系
-- 所有的位置计算采用 `double`（64位浮点）。
-- 建立能量守恒检验机制，实时监控积分误差。
-- 通过 `test_gravity` 等自动化测试确保 CPU 与 GPU 计算结果的一致性。
+Gate:
+
+- Mesh tests pass.
+- Cube wall classification does not depend on vertices landing at `±1`.
+- Flat plate wall area equals `Lx * Ly` within tolerance.
+
+## Phase 2 — Euler First-Order Solver
+
+Goal: build the smallest trustworthy finite-volume Euler solver.
+
+Files planned:
+
+- `include/aero_cfd/cfd_config.hpp`
+- `include/aero_cfd/cfd_state.hpp`
+- `include/aero_cfd/cfd_solver.hpp`
+- `src/aero_cfd/cfd_solver.cu`
+- `src/aero_cfd/flux_euler.cu`
+- `src/aero_cfd/boundary_conditions.cu`
+- `src/aero_cfd/timestep.cu`
+- `src/aero_cfd/force_integrator.cu`
+- `tests/cfd/test_cfd_euler.cu`
+
+Tasks:
+
+- [ ] Define 5-variable Euler state only
+- [ ] Implement conservative-to-primitive with validity result
+- [ ] Implement HLLC flux
+- [ ] Implement farfield boundary for supported supersonic cases
+- [ ] Implement slip wall direct pressure flux or validated reflected ghost
+- [ ] Implement global inviscid timestep
+- [ ] Implement first-order update
+- [ ] Implement body force integration over wall faces only
+- [ ] Add residual history output
+- [ ] Add uniform freestream preservation test
+- [ ] Add slip wall zero mass flux test
+- [ ] Add symmetric cube force test
+
+Gate:
+
+- Freestream remains unchanged.
+- No negative rho/p in supported cases.
+- Symmetric cube has near-zero lateral force.
+
+## Phase 3 — Euler Reconstruction And Diagnostics
+
+Goal: add second-order reconstruction and diagnostics without changing Stage E1 behavior when disabled.
+
+Files planned:
+
+- `include/aero_cfd/diagnostics.hpp`
+- `src/aero_cfd/diagnostics.cpp`
+- `src/aero_cfd/reconstruction.cu`
+- `tests/cfd/test_cfd_diagnostics.cpp`
+
+Tasks:
+
+- [ ] Add Green-Gauss gradient
+- [ ] Add least-squares gradient option if needed
+- [ ] Add limiter
+- [ ] Add positive reconstruction guard
+- [ ] Add diagnostic levels OFF/BASIC/DETAILED/VERBOSE
+- [ ] Add state bounds history
+- [ ] Add dt limiter source history
+- [ ] Add failure snapshot for first bad state
+- [ ] Add VTK cell output
+
+Gate:
+
+- First-order mode remains bitwise or numerically unchanged.
+- Reconstruction never creates negative reconstructed rho/p in tests.
+- Injected bad state produces actionable diagnostic output.
+
+## Phase 4 — Laminar Navier-Stokes
+
+Goal: add viscous stress, heat conduction, no-slip wall, and thermal wall behavior.
+
+Files planned:
+
+- `src/aero_cfd/flux_viscous.cu`
+- `tests/cfd/test_cfd_viscous.cu`
+
+Tasks:
+
+- [ ] Implement Sutherland viscosity
+- [ ] Implement velocity and temperature gradients
+- [ ] Implement orthogonal face-gradient correction
+- [ ] Implement no-slip wall primitive
+- [ ] Implement isothermal wall
+- [ ] Implement adiabatic wall
+- [ ] Implement viscous timestep
+- [ ] Add wall shear and heat flux integration
+- [ ] Add flat plate laminar `Cf` sanity test
+- [ ] Add hot/cold wall heat flux sign test
+- [ ] Add Euler regression with `viscous=false`
+
+Gate:
+
+- Flat plate `CX/Cf_ref` initially within `[0.5, 2.0]`.
+- Heat flux sign changes correctly with wall temperature.
+- `viscous=false` returns Euler result.
+
+## Phase 5 — CFD Table Integration
+
+Goal: reconnect the rebuilt solver to aerodynamic table generation behind a strict feature gate.
+
+Tasks:
+
+- [ ] Add CFD capability query
+- [ ] Add supported-condition range
+- [ ] Add CSV fidelity source column
+- [ ] Fail or fallback for unsupported conditions
+- [ ] Add integration test with small Mach/alpha grid
+
+Gate:
+
+- `use_fvm=true` no longer fails for supported conditions.
+- Unsupported CFD requests do not silently produce results.
+
+## Phase 6 — RANS And Beyond
+
+Goal: add SA only after laminar NS is trustworthy.
+
+Tasks:
+
+- [ ] Extend state to 6 variables
+- [ ] Add SA transport
+- [ ] Add SA source treatment
+- [ ] Add SA wall/farfield conditions
+- [ ] Add turbulent flat plate tests
+- [ ] Add regression to laminar when disabled
+
+Gate:
+
+- `turbulence=false` matches laminar NS.
+- Turbulent flat plate `Cf` is physically plausible.
+
+## Work Rules
+
+- Do not add a new physics model until the previous phase has passing gates.
+- Do not accept tests that only assert finite/positive outputs.
+- Do not silently clamp bad states and report success.
+- Keep diagnostics read-only.
+- Update `progress.md` after completed work.
+- Add blockers to `ISSUES.md` when progress is blocked by a reproducible failure.

@@ -295,53 +295,10 @@ add_custom_command(TARGET TestAeroViscous POST_BUILD
     "$<TARGET_FILE_DIR:TestAeroViscous>/data"
 )
 
-# 8. Mesh Generator Test
-add_executable(TestMeshGen tests/test_mesh_generator.cpp)
-set_source_files_properties(tests/test_mesh_generator.cpp PROPERTIES LANGUAGE CUDA)
-target_link_libraries(TestMeshGen PRIVATE missile_lib)
-set_target_properties(TestMeshGen PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(TestMeshGen PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-add_test(NAME MeshGenTest COMMAND TestMeshGen)
-set_target_properties(TestMeshGen PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-# 9. Integrator Test (no CUDA device code — compiled as plain C++)
+# 8. Integrator Test (no CUDA device code — compiled as plain C++)
 add_executable(TestIntegrator tests/test_integrator.cpp)
 target_link_libraries(TestIntegrator PRIVATE missile_lib)
 add_test(NAME IntegratorTest COMMAND TestIntegrator)
 set_target_properties(TestIntegrator PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-# 10. FVM Solver Test
-add_executable(TestFvmSolver tests/test_fvm_solver.cu)
-set_source_files_properties(tests/test_fvm_solver.cu PROPERTIES LANGUAGE CUDA)
-target_link_libraries(TestFvmSolver PRIVATE missile_lib)
-set_target_properties(TestFvmSolver PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(TestFvmSolver PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-add_test(NAME FvmSolverTest COMMAND TestFvmSolver)
-set_target_properties(TestFvmSolver PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-add_custom_command(TARGET TestFvmSolver POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
-    $<TARGET_FILE_DIR:TestFvmSolver>
-)
-
-# 11. Cfd NS Solver Test (Stage C)
-add_executable(TestCfdNs tests/test_cfd_ns.cpp)
-set_source_files_properties(tests/test_cfd_ns.cpp PROPERTIES LANGUAGE CUDA)
-target_link_libraries(TestCfdNs PRIVATE missile_lib)
-set_target_properties(TestCfdNs PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(TestCfdNs PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-add_test(NAME CfdNsTest COMMAND TestCfdNs)
-set_target_properties(TestCfdNs PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-add_custom_command(TARGET TestCfdNs POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_SOURCE_DIR}/src/nrlmsise00.dll"
-    $<TARGET_FILE_DIR:TestCfdNs>
 )
