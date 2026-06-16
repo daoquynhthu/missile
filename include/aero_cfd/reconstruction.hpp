@@ -39,6 +39,11 @@ std::vector<PrimitiveGradient> compute_green_gauss_gradients(
     const std::vector<ConservativeState>& q,
     float gamma);
 
+std::vector<PrimitiveGradient> compute_least_squares_gradients(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    float gamma);
+
 std::vector<PrimitiveLimiter> compute_barth_jespersen_limiters(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,

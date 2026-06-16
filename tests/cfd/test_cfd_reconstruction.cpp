@@ -46,8 +46,55 @@ static int test_green_gauss() {
     return 0;
 }
 
+static int test_least_squares() {
+    TEST("CFD-RECON-3 least-squares recovers linear pressure gradient");
+    {
+        CfdMesh mesh;
+        mesh.cells.resize(4);
+        mesh.cells[0].cx = 0.0f;
+        mesh.cells[0].cy = 0.0f;
+        mesh.cells[0].cz = 0.0f;
+        mesh.cells[1].cx = 1.0f;
+        mesh.cells[1].cy = 0.0f;
+        mesh.cells[1].cz = 0.0f;
+        mesh.cells[2].cx = 0.0f;
+        mesh.cells[2].cy = 1.0f;
+        mesh.cells[2].cz = 0.0f;
+        mesh.cells[3].cx = 0.0f;
+        mesh.cells[3].cy = 0.0f;
+        mesh.cells[3].cz = 1.0f;
+
+        for (int i = 1; i < 4; ++i) {
+            CfdFace face;
+            face.left_cell = 0;
+            face.right_cell = i;
+            face.boundary = BoundaryKind::Interior;
+            mesh.faces.push_back(face);
+        }
+
+        std::vector<ConservativeState> q;
+        for (const auto& cell : mesh.cells) {
+            PrimitiveState w;
+            w.rho = 1.0f;
+            w.u = 0.0f;
+            w.v = 0.0f;
+            w.w = 0.0f;
+            w.p = 1.0f + 0.2f*cell.cx - 0.1f*cell.cy + 0.3f*cell.cz;
+            q.push_back(primitive_to_conservative(w, 1.4f));
+        }
+
+        auto gradients = compute_least_squares_gradients(mesh, q, 1.4f);
+        if (gradients.size() != mesh.cells.size()) FAIL("gradient size=%zu", gradients.size());
+        if (std::fabs(gradients[0].dp_dx - 0.2f) > 1e-6f) FAIL("dp_dx=%g", gradients[0].dp_dx);
+        if (std::fabs(gradients[0].dp_dy + 0.1f) > 1e-6f) FAIL("dp_dy=%g", gradients[0].dp_dy);
+        if (std::fabs(gradients[0].dp_dz - 0.3f) > 1e-6f) FAIL("dp_dz=%g", gradients[0].dp_dz);
+        PASS;
+    }
+    return 0;
+}
+
 static int test_positive_guard() {
-    TEST("CFD-RECON-3 positive guard limits density and pressure");
+    TEST("CFD-RECON-4 positive guard limits density and pressure");
     {
         PrimitiveState center;
         center.rho = 1.0f;
@@ -67,7 +114,7 @@ static int test_positive_guard() {
         PASS;
     }
 
-    TEST("CFD-RECON-4 positive guard preserves safe reconstruction");
+    TEST("CFD-RECON-5 positive guard preserves safe reconstruction");
     {
         PrimitiveState center;
         center.rho = 1.0f;
@@ -91,7 +138,7 @@ static int test_positive_guard() {
 }
 
 static int test_limiter() {
-    TEST("CFD-RECON-5 limiter is inactive for zero gradients");
+    TEST("CFD-RECON-6 limiter is inactive for zero gradients");
     {
         CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
         auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
@@ -106,7 +153,7 @@ static int test_limiter() {
         PASS;
     }
 
-    TEST("CFD-RECON-6 limiter suppresses new pressure extrema");
+    TEST("CFD-RECON-7 limiter suppresses new pressure extrema");
     {
         CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
         auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
@@ -134,6 +181,7 @@ static int test_limiter() {
 int main() {
     int result = 0;
     result |= test_green_gauss();
+    result |= test_least_squares();
     result |= test_positive_guard();
     result |= test_limiter();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);

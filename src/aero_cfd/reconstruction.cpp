@@ -68,6 +68,72 @@ PrimitiveGradient scale_gradient(const PrimitiveGradient& g, float theta) {
     return out;
 }
 
+bool solve_3x3(float a[3][3], float b[3], float x[3]) {
+    float m[3][4] = {
+        {a[0][0], a[0][1], a[0][2], b[0]},
+        {a[1][0], a[1][1], a[1][2], b[1]},
+        {a[2][0], a[2][1], a[2][2], b[2]}
+    };
+
+    for (int col = 0; col < 3; ++col) {
+        int pivot = col;
+        for (int row = col + 1; row < 3; ++row) {
+            if (std::fabs(m[row][col]) > std::fabs(m[pivot][col])) pivot = row;
+        }
+        if (std::fabs(m[pivot][col]) < 1e-20f) return false;
+        if (pivot != col) {
+            for (int j = col; j < 4; ++j) std::swap(m[col][j], m[pivot][j]);
+        }
+        float inv = 1.0f / m[col][col];
+        for (int j = col; j < 4; ++j) m[col][j] *= inv;
+        for (int row = 0; row < 3; ++row) {
+            if (row == col) continue;
+            float factor = m[row][col];
+            for (int j = col; j < 4; ++j) m[row][j] -= factor * m[col][j];
+        }
+    }
+
+    x[0] = m[0][3];
+    x[1] = m[1][3];
+    x[2] = m[2][3];
+    return std::isfinite(x[0]) && std::isfinite(x[1]) && std::isfinite(x[2]);
+}
+
+void accumulate_least_squares_matrix(float a[3][3], float dx, float dy, float dz) {
+    float d[3] = {dx, dy, dz};
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            a[r][c] += d[r] * d[c];
+        }
+    }
+}
+
+void accumulate_least_squares_rhs(float b[3], float dx, float dy, float dz, float dphi) {
+    b[0] += dx * dphi;
+    b[1] += dy * dphi;
+    b[2] += dz * dphi;
+}
+
+void assign_gradient_component(PrimitiveGradient& g, int component, const float x[3]) {
+    switch (component) {
+        case 0: g.drho_dx = x[0]; g.drho_dy = x[1]; g.drho_dz = x[2]; break;
+        case 1: g.du_dx = x[0]; g.du_dy = x[1]; g.du_dz = x[2]; break;
+        case 2: g.dv_dx = x[0]; g.dv_dy = x[1]; g.dv_dz = x[2]; break;
+        case 3: g.dw_dx = x[0]; g.dw_dy = x[1]; g.dw_dz = x[2]; break;
+        default: g.dp_dx = x[0]; g.dp_dy = x[1]; g.dp_dz = x[2]; break;
+    }
+}
+
+float primitive_component(const PrimitiveState& w, int component) {
+    switch (component) {
+        case 0: return w.rho;
+        case 1: return w.u;
+        case 2: return w.v;
+        case 3: return w.w;
+        default: return w.p;
+    }
+}
+
 float limiter_theta(float center, float reconstructed, float min_value, float max_value) {
     if (reconstructed > max_value) {
         float denom = reconstructed - center;
@@ -132,6 +198,57 @@ std::vector<PrimitiveGradient> compute_green_gauss_gradients(
             const PrimitiveState& wr = primitive[face.right_cell];
             float right_scale = -face.area / mesh.cells[face.right_cell].volume;
             add_face_contribution(gradients[face.right_cell], wf, wr, face.nx, face.ny, face.nz, right_scale);
+        }
+    }
+
+    return gradients;
+}
+
+std::vector<PrimitiveGradient> compute_least_squares_gradients(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    float gamma) {
+    if (q.size() != mesh.cells.size()) return {};
+
+    std::vector<PrimitiveState> primitive(q.size());
+    for (std::size_t i = 0; i < q.size(); ++i) {
+        if (!conservative_to_primitive(q[i], gamma, primitive[i])) return {};
+    }
+
+    struct CellSystem {
+        float a[3][3] = {};
+        float b[5][3] = {};
+    };
+
+    std::vector<CellSystem> systems(q.size());
+    for (const auto& face : mesh.faces) {
+        if (face.boundary != BoundaryKind::Interior) continue;
+        int left = face.left_cell;
+        int right = face.right_cell;
+        float dx = mesh.cells[right].cx - mesh.cells[left].cx;
+        float dy = mesh.cells[right].cy - mesh.cells[left].cy;
+        float dz = mesh.cells[right].cz - mesh.cells[left].cz;
+        accumulate_least_squares_matrix(systems[left].a, dx, dy, dz);
+        accumulate_least_squares_matrix(systems[right].a, -dx, -dy, -dz);
+        for (int component = 0; component < 5; ++component) {
+            float dphi = primitive_component(primitive[right], component) - primitive_component(primitive[left], component);
+            accumulate_least_squares_rhs(systems[left].b[component], dx, dy, dz, dphi);
+            accumulate_least_squares_rhs(systems[right].b[component], -dx, -dy, -dz, -dphi);
+        }
+    }
+
+    std::vector<PrimitiveGradient> gradients(q.size());
+    for (std::size_t i = 0; i < q.size(); ++i) {
+        for (int component = 0; component < 5; ++component) {
+            float a[3][3] = {
+                {systems[i].a[0][0], systems[i].a[0][1], systems[i].a[0][2]},
+                {systems[i].a[1][0], systems[i].a[1][1], systems[i].a[1][2]},
+                {systems[i].a[2][0], systems[i].a[2][1], systems[i].a[2][2]}
+            };
+            float x[3] = {};
+            if (solve_3x3(a, systems[i].b[component], x)) {
+                assign_gradient_component(gradients[i], component, x);
+            }
         }
     }
 

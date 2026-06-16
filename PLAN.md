@@ -106,7 +106,7 @@ Files planned:
 Tasks:
 
 - [x] Add Green-Gauss gradient
-- [ ] Add least-squares gradient option if needed
+- [x] Add least-squares gradient option if needed
 - [x] Add limiter
 - [x] Add positive reconstruction guard
 - [x] Add diagnostic levels OFF/BASIC/DETAILED/VERBOSE

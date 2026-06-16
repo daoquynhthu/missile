@@ -29,3 +29,7 @@
 - Added explicit VTK legacy unstructured-grid cell output for diagnostics with rho, pressure, and Mach cell fields.
 - Extended `TestCfdDiagnostics` to verify VTK dataset, cell data, and scalar field sections are written.
 - Verification: `cmake --build build --target TestCfdDiagnostics --config Release` passed; `TestCfdDiagnostics.exe` passed 4/4; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.
+- Added least-squares primitive gradient option as a Green-Gauss fallback for skewed or future mixed meshes.
+- Added manufactured linear-pressure stencil coverage for least-squares gradients. The first test run exposed a normal-matrix accumulation bug where the matrix was accumulated once per primitive component; fixed it so the matrix is accumulated once per neighbor and each component accumulates only its RHS.
+- Phase 3 task checklist is now complete.
+- Verification: `cmake --build build --target TestCfdReconstruction --config Release` passed; `TestCfdReconstruction.exe` passed 7/7; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.
