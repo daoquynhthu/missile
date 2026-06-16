@@ -36,3 +36,6 @@
 - Started Phase 4 laminar Navier-Stokes foundation with primitive temperature, nondimensional Sutherland viscosity, and no-slip wall primitive helpers for isothermal and adiabatic walls.
 - Added `TestCfdViscous` with coverage for `T=p/rho`, Sutherland normalization/monotonicity, and wall-state pressure/temperature/velocity invariants.
 - Verification: `cmake -B build` passed; `cmake --build build --target TestCfdViscous --config Release` passed; `TestCfdViscous.exe` passed 5/5; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction|Viscous)" --output-on-failure` passed 5/5.
+- Added viscous velocity-gradient and temperature-gradient utilities based on Phase 3 primitive gradients.
+- Temperature gradient is computed analytically from `T=p/rho`, using `gradT=(rho*gradp-p*gradrho)/rho^2`.
+- Verification: `cmake --build build --target TestCfdViscous --config Release` passed; `TestCfdViscous.exe` passed 7/7; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction|Viscous)" --output-on-failure` passed 5/5.

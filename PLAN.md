@@ -133,7 +133,7 @@ Files planned:
 Tasks:
 
 - [x] Implement Sutherland viscosity
-- [ ] Implement velocity and temperature gradients
+- [x] Implement velocity and temperature gradients
 - [ ] Implement orthogonal face-gradient correction
 - [x] Implement no-slip wall primitive
 - [x] Implement isothermal wall

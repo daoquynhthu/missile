@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 using namespace AeroSim::Cfd;
 
@@ -79,10 +80,62 @@ static int test_wall_states() {
     return 0;
 }
 
+static int test_viscous_gradients() {
+    TEST("CFD-VISC-6 viscous gradient maps velocity and temperature derivatives");
+    {
+        PrimitiveState w;
+        w.rho = 2.0f;
+        w.u = 1.0f;
+        w.v = -2.0f;
+        w.w = 0.5f;
+        w.p = 6.0f;
+
+        PrimitiveGradient primitive_gradient;
+        primitive_gradient.du_dx = 1.0f;
+        primitive_gradient.dv_dy = 2.0f;
+        primitive_gradient.dw_dz = 3.0f;
+        primitive_gradient.drho_dx = 0.5f;
+        primitive_gradient.dp_dx = 1.0f;
+        primitive_gradient.dp_dy = 2.0f;
+        primitive_gradient.dp_dz = 3.0f;
+
+        auto gradient = viscous_gradient_from_primitive_gradient(w, primitive_gradient);
+        if (std::fabs(gradient.du_dx - 1.0f) > 1e-6f) FAIL("du_dx=%g", gradient.du_dx);
+        if (std::fabs(gradient.dv_dy - 2.0f) > 1e-6f) FAIL("dv_dy=%g", gradient.dv_dy);
+        if (std::fabs(gradient.dw_dz - 3.0f) > 1e-6f) FAIL("dw_dz=%g", gradient.dw_dz);
+        if (std::fabs(gradient.dT_dx + 0.25f) > 1e-6f) FAIL("dT_dx=%g", gradient.dT_dx);
+        if (std::fabs(gradient.dT_dy - 1.0f) > 1e-6f) FAIL("dT_dy=%g", gradient.dT_dy);
+        if (std::fabs(gradient.dT_dz - 1.5f) > 1e-6f) FAIL("dT_dz=%g", gradient.dT_dz);
+        PASS;
+    }
+
+    TEST("CFD-VISC-7 constant state has zero viscous gradients");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
+        auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        auto gradients = compute_viscous_gradients(mesh, q, 1.4f);
+        if (gradients.size() != mesh.cells.size()) FAIL("gradient size=%zu", gradients.size());
+        for (const auto& gradient : gradients) {
+            if (std::fabs(gradient.du_dx) > 1e-6f || std::fabs(gradient.dv_dy) > 1e-6f ||
+                std::fabs(gradient.dw_dz) > 1e-6f) {
+                FAIL("velocity gradient=[%g,%g,%g]", gradient.du_dx, gradient.dv_dy, gradient.dw_dz);
+            }
+            if (std::fabs(gradient.dT_dx) > 1e-6f || std::fabs(gradient.dT_dy) > 1e-6f ||
+                std::fabs(gradient.dT_dz) > 1e-6f) {
+                FAIL("temperature gradient=[%g,%g,%g]", gradient.dT_dx, gradient.dT_dy, gradient.dT_dz);
+            }
+        }
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_sutherland();
     result |= test_wall_states();
+    result |= test_viscous_gradients();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
