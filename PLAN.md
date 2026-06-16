@@ -194,11 +194,11 @@ Tasks:
 
 - [ ] Define GPU-owned mesh/state/residual memory layout
 - [ ] Add CPU/GPU state transfer and ownership tests
-- [ ] Port Euler residual assembly to CUDA kernels
+- [x] Port Euler residual assembly to CUDA kernels
 - [ ] Port reconstruction and limiter to CUDA kernels
 - [ ] Port viscous residual and wall integration to CUDA kernels
 - [ ] Add CUDA error checks after every kernel launch
-- [ ] Add CPU/GPU residual equivalence tests on small meshes
+- [x] Add CPU/GPU residual equivalence tests on small meshes
 - [ ] Add GPU timing and memory-bandwidth diagnostics
 - [ ] Add multi-block/domain-decomposition design note
 

@@ -1,4 +1,5 @@
 #include "aero_cfd/cfd_solver.hpp"
+#include "aero_cfd/cfd_residual.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -227,49 +228,15 @@ CfdSolveSummary CfdSolver::solve_from_state(
             summary.diagnostics.dt_limiter_history.push_back(dt_limiter);
         }
 
-        std::vector<EulerFlux> residual(q.size());
-        for (const auto& face : mesh_.faces) {
-            PrimitiveState wl;
-            if (!conservative_to_primitive(q[face.left_cell], config.gamma, wl)) {
-                summary.failed = true;
-                if (diagnostics_enabled) {
-                    summary.diagnostics.failure = make_failure_snapshot(iter, face.left_cell, "invalid left face state", q[face.left_cell], config.gamma);
-                }
-                return summary;
+        std::vector<EulerFlux> residual;
+        if (!compute_euler_residual_cpu(mesh_, q, w_inf, config.gamma, residual)) {
+            summary.failed = true;
+            if (diagnostics_enabled) {
+                summary.diagnostics.failure.reason = "residual assembly failed";
+                summary.diagnostics.failure.valid = true;
+                summary.diagnostics.failure.iteration = iter;
             }
-
-            EulerFlux flux;
-            if (face.boundary == BoundaryKind::Interior) {
-                PrimitiveState wr;
-                if (!conservative_to_primitive(q[face.right_cell], config.gamma, wr)) {
-                    summary.failed = true;
-                    if (diagnostics_enabled) {
-                        summary.diagnostics.failure = make_failure_snapshot(iter, face.right_cell, "invalid right face state", q[face.right_cell], config.gamma);
-                    }
-                    return summary;
-                }
-                flux = hllc_flux(wl, wr, config.gamma, face.nx, face.ny, face.nz);
-            } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
-                flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
-            } else {
-                PrimitiveState wr = farfield_ghost_state(wl, w_inf, config.gamma, face.nx, face.ny, face.nz);
-                flux = hllc_flux(wl, wr, config.gamma, face.nx, face.ny, face.nz);
-            }
-
-            float area = face.area;
-            residual[face.left_cell].mass -= flux.mass * area;
-            residual[face.left_cell].mom_x -= flux.mom_x * area;
-            residual[face.left_cell].mom_y -= flux.mom_y * area;
-            residual[face.left_cell].mom_z -= flux.mom_z * area;
-            residual[face.left_cell].energy -= flux.energy * area;
-
-            if (face.boundary == BoundaryKind::Interior) {
-                residual[face.right_cell].mass += flux.mass * area;
-                residual[face.right_cell].mom_x += flux.mom_x * area;
-                residual[face.right_cell].mom_y += flux.mom_y * area;
-                residual[face.right_cell].mom_z += flux.mom_z * area;
-                residual[face.right_cell].energy += flux.energy * area;
-            }
+            return summary;
         }
 
         float l2 = 0.0f;

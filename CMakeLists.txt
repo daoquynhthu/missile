@@ -357,3 +357,14 @@ add_test(NAME CfdViscousTest COMMAND TestCfdViscous)
 set_target_properties(TestCfdViscous PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# 14. CFD GPU Production Path Test
+add_executable(TestCfdGpu tests/cfd/test_cfd_gpu.cpp)
+set_source_files_properties(tests/cfd/test_cfd_gpu.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(TestCfdGpu PRIVATE missile_lib)
+set_target_properties(TestCfdGpu PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestCfdGpu PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+add_test(NAME CfdGpuTest COMMAND TestCfdGpu)
+set_target_properties(TestCfdGpu PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)

@@ -42,3 +42,6 @@
 - Corrected the long-range architecture plan after identifying missing top-tier fidelity requirements: DNS-grade high-order/resolution route, explicit transition physics beyond SA, thermochemistry and wall-catalysis uncertainty for heat flux, and GPU-first production execution.
 - Updated `AERO_ACCURACY_UPGRADE.md` to define first-principles expectations, CPU/GPU roles, SA limitations, transition/DNS/high-order/thermal-chemistry stages, and heat-flux uncertainty constraints.
 - Updated `PLAN.md` with Phase 7 GPU Production Path, Phase 8 High-Order And DNS-Grade Verification, Phase 9 Transition Physics, and Phase 10 Thermochemistry And Wall Catalysis.
+- Switched implementation direction toward Phase 7 GPU production path: extracted CPU Euler residual assembly into `cfd_residual`, added CUDA Euler residual assembly, and added CPU/GPU residual equivalence test on a non-uniform interior-face case.
+- Added unified `scripts/check_cfd.ps1` verification script. It runs configure, CFD target builds, and CFD ctest while writing full logs under `build/logs/` and filtering Eigen/CMake dependency noise from terminal output.
+- Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.
