@@ -192,8 +192,8 @@ Goal: move from CPU reference implementation to GPU-first production solver with
 
 Tasks:
 
-- [ ] Define GPU-owned mesh/state/residual memory layout
-- [ ] Add CPU/GPU state transfer and ownership tests
+- [x] Define GPU-owned mesh/state/residual memory layout
+- [x] Add CPU/GPU state transfer and ownership tests
 - [x] Port Euler residual assembly to CUDA kernels
 - [ ] Port reconstruction and limiter to CUDA kernels
 - [ ] Port viscous residual and wall integration to CUDA kernels

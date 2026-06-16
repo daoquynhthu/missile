@@ -185,40 +185,33 @@ __global__ void euler_residual_kernel(
 } // namespace
 
 bool compute_euler_residual_gpu(
-    const CfdMesh& mesh,
-    const std::vector<ConservativeState>& q,
+    GpuCfdBuffers& buffers,
     const PrimitiveState& freestream,
     float gamma,
-    std::vector<EulerFlux>& residual,
     std::string* error) {
-    if (q.size() != mesh.cells.size()) {
-        if (error) *error = "state size does not match mesh cells";
+    if (buffers.cell_count() <= 0 || buffers.face_count() <= 0 ||
+        !buffers.faces_device() || !buffers.state_device() || !buffers.residual_device()) {
+        if (error) *error = "GPU buffers are not ready";
         return false;
     }
 
-    residual.assign(q.size(), EulerFlux{});
-    CfdFace* d_faces = nullptr;
-    ConservativeState* d_q = nullptr;
-    EulerFlux* d_residual = nullptr;
     int* d_failed = nullptr;
 
-    std::size_t face_bytes = mesh.faces.size() * sizeof(CfdFace);
-    std::size_t state_bytes = q.size() * sizeof(ConservativeState);
-    std::size_t residual_bytes = q.size() * sizeof(EulerFlux);
-
-    if (!cuda_ok(cudaMalloc(&d_faces, face_bytes), "cudaMalloc faces", error)) goto fail;
-    if (!cuda_ok(cudaMalloc(&d_q, state_bytes), "cudaMalloc state", error)) goto fail;
-    if (!cuda_ok(cudaMalloc(&d_residual, residual_bytes), "cudaMalloc residual", error)) goto fail;
     if (!cuda_ok(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
-    if (!cuda_ok(cudaMemcpy(d_faces, mesh.faces.data(), face_bytes, cudaMemcpyHostToDevice), "cudaMemcpy faces", error)) goto fail;
-    if (!cuda_ok(cudaMemcpy(d_q, q.data(), state_bytes, cudaMemcpyHostToDevice), "cudaMemcpy state", error)) goto fail;
-    if (!cuda_ok(cudaMemset(d_residual, 0, residual_bytes), "cudaMemset residual", error)) goto fail;
+    if (!buffers.clear_residual(error)) goto fail;
     if (!cuda_ok(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) goto fail;
 
     {
         int block = 128;
-        int grid = (static_cast<int>(mesh.faces.size()) + block - 1) / block;
-        euler_residual_kernel<<<grid, block>>>(d_faces, static_cast<int>(mesh.faces.size()), d_q, freestream, gamma, d_residual, d_failed);
+        int grid = (buffers.face_count() + block - 1) / block;
+        euler_residual_kernel<<<grid, block>>>(
+            buffers.faces_device(),
+            buffers.face_count(),
+            buffers.state_device(),
+            freestream,
+            gamma,
+            buffers.residual_device(),
+            d_failed);
     }
     if (!cuda_ok(cudaGetLastError(), "euler_residual_kernel launch", error)) goto fail;
     if (!cuda_ok(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) goto fail;
@@ -232,21 +225,26 @@ bool compute_euler_residual_gpu(
         }
     }
 
-    if (!cuda_ok(cudaMemcpy(residual.data(), d_residual, residual_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy residual", error)) goto fail;
-
-    cudaFree(d_faces);
-    cudaFree(d_q);
-    cudaFree(d_residual);
     cudaFree(d_failed);
     return true;
 
 fail:
-    cudaFree(d_faces);
-    cudaFree(d_q);
-    cudaFree(d_residual);
     cudaFree(d_failed);
-    residual.clear();
     return false;
+}
+
+bool compute_euler_residual_gpu(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    const PrimitiveState& freestream,
+    float gamma,
+    std::vector<EulerFlux>& residual,
+    std::string* error) {
+    GpuCfdBuffers buffers;
+    if (!buffers.upload_mesh(mesh, error)) return false;
+    if (!buffers.upload_state(q, error)) return false;
+    if (!compute_euler_residual_gpu(buffers, freestream, gamma, error)) return false;
+    return buffers.download_residual(residual, error);
 }
 
 } // namespace Cfd

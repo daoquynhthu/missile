@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace AeroSim::Cfd;
@@ -74,9 +75,60 @@ static int test_residual_equivalence() {
     return 0;
 }
 
+static int test_gpu_buffers() {
+    TEST("CFD-GPU-2 GPU buffers own mesh state and residual transfer");
+    {
+        CfdMesh mesh;
+        mesh.cells.resize(2);
+        CfdFace face;
+        face.left_cell = 0;
+        face.right_cell = 1;
+        face.boundary = BoundaryKind::Interior;
+        face.area = 1.0f;
+        face.nx = 1.0f;
+        face.ny = 0.0f;
+        face.nz = 0.0f;
+        mesh.faces.push_back(face);
+
+        PrimitiveState left;
+        left.rho = 1.0f;
+        left.u = 1.0f;
+        left.v = 0.0f;
+        left.w = 0.0f;
+        left.p = 1.0f;
+        PrimitiveState right = left;
+        right.u = -0.5f;
+        right.p = 0.75f;
+
+        std::vector<ConservativeState> q;
+        q.push_back(primitive_to_conservative(left, 1.4f));
+        q.push_back(primitive_to_conservative(right, 1.4f));
+
+        GpuCfdBuffers buffers;
+        std::string error;
+        if (!buffers.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (buffers.cell_count() != 2 || buffers.face_count() != 1) FAIL("counts cells=%d faces=%d", buffers.cell_count(), buffers.face_count());
+        if (buffers.faces_device() == nullptr || buffers.residual_device() == nullptr) FAIL("missing device buffers");
+        if (!buffers.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (buffers.state_device() == nullptr) FAIL("missing device state");
+        if (!compute_euler_residual_gpu(buffers, left, 1.4f, &error)) FAIL("%s", error.c_str());
+
+        GpuCfdBuffers moved = std::move(buffers);
+        std::vector<EulerFlux> residual;
+        if (!moved.download_residual(residual, &error)) FAIL("%s", error.c_str());
+        if (residual.size() != 2) FAIL("residual size=%zu", residual.size());
+        if (std::fabs(residual[0].mass + residual[1].mass) > 1e-6f) {
+            FAIL("mass conservation residual=[%g,%g]", residual[0].mass, residual[1].mass);
+        }
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence();
+    result |= test_gpu_buffers();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

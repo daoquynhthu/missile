@@ -45,3 +45,7 @@
 - Switched implementation direction toward Phase 7 GPU production path: extracted CPU Euler residual assembly into `cfd_residual`, added CUDA Euler residual assembly, and added CPU/GPU residual equivalence test on a non-uniform interior-face case.
 - Added unified `scripts/check_cfd.ps1` verification script. It runs configure, CFD target builds, and CFD ctest while writing full logs under `build/logs/` and filtering Eigen/CMake dependency noise from terminal output.
 - Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.
+- Added `GpuCfdBuffers` RAII ownership for uploaded face mesh, conservative state, and residual buffers.
+- Reworked GPU Euler residual to support pre-uploaded device buffers while keeping the host convenience wrapper for tests and debugging.
+- Extended `TestCfdGpu` with GPU buffer ownership, state transfer, residual download, and move-ownership checks.
+- Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.
