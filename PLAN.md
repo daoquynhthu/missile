@@ -197,7 +197,7 @@ Tasks:
 - [x] Port Euler residual assembly to CUDA kernels
 - [ ] Port reconstruction and limiter to CUDA kernels
 - [ ] Port viscous residual and wall integration to CUDA kernels
-- [ ] Add CUDA error checks after every kernel launch
+- [x] Add CUDA error checks after every kernel launch
 - [x] Add CPU/GPU residual equivalence tests on small meshes
 - [ ] Add GPU timing and memory-bandwidth diagnostics
 - [ ] Add multi-block/domain-decomposition design note

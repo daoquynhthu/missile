@@ -1,24 +1,11 @@
 #include "aero_cfd/gpu_buffers.hpp"
+#include "aero_cfd/cuda_utils.hpp"
 
 #include <cuda_runtime.h>
 #include <utility>
 
 namespace AeroSim {
 namespace Cfd {
-
-namespace {
-
-bool cuda_ok(cudaError_t error, const char* action, std::string* message) {
-    if (error == cudaSuccess) return true;
-    if (message) {
-        *message = action;
-        *message += ": ";
-        *message += cudaGetErrorString(error);
-    }
-    return false;
-}
-
-} // namespace
 
 GpuCfdBuffers::~GpuCfdBuffers() {
     release();
@@ -56,15 +43,15 @@ bool GpuCfdBuffers::upload_mesh(const CfdMesh& mesh, std::string* error) {
 
     std::size_t face_bytes = mesh.faces.size() * sizeof(CfdFace);
     std::size_t residual_bytes = mesh.cells.size() * sizeof(EulerFlux);
-    if (!cuda_ok(cudaMalloc(&d_faces_, face_bytes), "cudaMalloc faces", error)) {
+    if (!cuda_check(cudaMalloc(&d_faces_, face_bytes), "cudaMalloc faces", error)) {
         release();
         return false;
     }
-    if (!cuda_ok(cudaMalloc(&d_residual_, residual_bytes), "cudaMalloc residual", error)) {
+    if (!cuda_check(cudaMalloc(&d_residual_, residual_bytes), "cudaMalloc residual", error)) {
         release();
         return false;
     }
-    if (!cuda_ok(cudaMemcpy(d_faces_, mesh.faces.data(), face_bytes, cudaMemcpyHostToDevice), "cudaMemcpy faces", error)) {
+    if (!cuda_check(cudaMemcpy(d_faces_, mesh.faces.data(), face_bytes, cudaMemcpyHostToDevice), "cudaMemcpy faces", error)) {
         release();
         return false;
     }
@@ -82,8 +69,8 @@ bool GpuCfdBuffers::upload_state(const std::vector<ConservativeState>& q, std::s
         d_state_ = nullptr;
     }
     std::size_t state_bytes = q.size() * sizeof(ConservativeState);
-    if (!cuda_ok(cudaMalloc(&d_state_, state_bytes), "cudaMalloc state", error)) return false;
-    return cuda_ok(cudaMemcpy(d_state_, q.data(), state_bytes, cudaMemcpyHostToDevice), "cudaMemcpy state", error);
+    if (!cuda_check(cudaMalloc(&d_state_, state_bytes), "cudaMalloc state", error)) return false;
+    return cuda_check(cudaMemcpy(d_state_, q.data(), state_bytes, cudaMemcpyHostToDevice), "cudaMemcpy state", error);
 }
 
 bool GpuCfdBuffers::clear_residual(std::string* error) {
@@ -92,7 +79,7 @@ bool GpuCfdBuffers::clear_residual(std::string* error) {
         return false;
     }
     std::size_t residual_bytes = static_cast<std::size_t>(cell_count_) * sizeof(EulerFlux);
-    return cuda_ok(cudaMemset(d_residual_, 0, residual_bytes), "cudaMemset residual", error);
+    return cuda_check(cudaMemset(d_residual_, 0, residual_bytes), "cudaMemset residual", error);
 }
 
 bool GpuCfdBuffers::download_residual(std::vector<EulerFlux>& residual, std::string* error) const {
@@ -102,7 +89,7 @@ bool GpuCfdBuffers::download_residual(std::vector<EulerFlux>& residual, std::str
     }
     residual.assign(static_cast<std::size_t>(cell_count_), EulerFlux{});
     std::size_t residual_bytes = residual.size() * sizeof(EulerFlux);
-    return cuda_ok(cudaMemcpy(residual.data(), d_residual_, residual_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy residual", error);
+    return cuda_check(cudaMemcpy(residual.data(), d_residual_, residual_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy residual", error);
 }
 
 void GpuCfdBuffers::release() {

@@ -49,3 +49,6 @@
 - Reworked GPU Euler residual to support pre-uploaded device buffers while keeping the host convenience wrapper for tests and debugging.
 - Extended `TestCfdGpu` with GPU buffer ownership, state transfer, residual download, and move-ownership checks.
 - Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.
+- Added shared CUDA error-check helper and refactored GPU buffer/residual code to use it.
+- Initial `.cu` helper implementation caused an RDC link failure in `TestCfdGpu`; corrected the helper to a host-only `.cpp` translation unit.
+- Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.

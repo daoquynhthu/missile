@@ -1,4 +1,5 @@
 #include "aero_cfd/cfd_residual.hpp"
+#include "aero_cfd/cuda_utils.hpp"
 
 #include <cuda_runtime.h>
 
@@ -6,16 +7,6 @@ namespace AeroSim {
 namespace Cfd {
 
 namespace {
-
-bool cuda_ok(cudaError_t error, const char* action, std::string* message) {
-    if (error == cudaSuccess) return true;
-    if (message) {
-        *message = action;
-        *message += ": ";
-        *message += cudaGetErrorString(error);
-    }
-    return false;
-}
 
 __device__ bool d_conservative_to_primitive(ConservativeState q, float gamma, PrimitiveState& w) {
     if (q.rho <= 0.0f || !isfinite(q.rho)) return false;
@@ -197,9 +188,9 @@ bool compute_euler_residual_gpu(
 
     int* d_failed = nullptr;
 
-    if (!cuda_ok(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
+    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
     if (!buffers.clear_residual(error)) goto fail;
-    if (!cuda_ok(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) goto fail;
+    if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) goto fail;
 
     {
         int block = 128;
@@ -213,12 +204,12 @@ bool compute_euler_residual_gpu(
             buffers.residual_device(),
             d_failed);
     }
-    if (!cuda_ok(cudaGetLastError(), "euler_residual_kernel launch", error)) goto fail;
-    if (!cuda_ok(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) goto fail;
+    if (!cuda_check(cudaGetLastError(), "euler_residual_kernel launch", error)) goto fail;
+    if (!cuda_check(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) goto fail;
 
     {
         int failed = 0;
-        if (!cuda_ok(cudaMemcpy(&failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy failed", error)) goto fail;
+        if (!cuda_check(cudaMemcpy(&failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy failed", error)) goto fail;
         if (failed != 0) {
             if (error) *error = "GPU residual encountered invalid state";
             goto fail;
