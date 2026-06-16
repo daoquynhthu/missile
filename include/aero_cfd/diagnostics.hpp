@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_state.hpp"
 
 #include <string>
@@ -57,6 +58,13 @@ FailureSnapshot make_failure_snapshot(
     const char* reason,
     const ConservativeState& q,
     float gamma);
+
+bool write_vtk_cells(
+    const char* path,
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    float gamma,
+    std::string* error = nullptr);
 
 } // namespace Cfd
 } // namespace AeroSim

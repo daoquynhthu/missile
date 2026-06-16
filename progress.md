@@ -26,3 +26,6 @@
 - Added Barth-Jespersen-style primitive limiters using neighbor extrema and per-variable gradient scaling.
 - Extended `TestCfdReconstruction` with limiter-inactive and new-pressure-extrema suppression tests.
 - Verification: `cmake --build build --target TestCfdReconstruction --config Release` passed; `TestCfdReconstruction.exe` passed 6/6; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.
+- Added explicit VTK legacy unstructured-grid cell output for diagnostics with rho, pressure, and Mach cell fields.
+- Extended `TestCfdDiagnostics` to verify VTK dataset, cell data, and scalar field sections are written.
+- Verification: `cmake --build build --target TestCfdDiagnostics --config Release` passed; `TestCfdDiagnostics.exe` passed 4/4; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <limits>
 
 namespace AeroSim {
@@ -55,6 +56,79 @@ FailureSnapshot make_failure_snapshot(
     snapshot.state = q;
     conservative_to_primitive(q, gamma, snapshot.primitive);
     return snapshot;
+}
+
+bool write_vtk_cells(
+    const char* path,
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    float gamma,
+    std::string* error) {
+    if (!path || !path[0]) {
+        if (error) *error = "empty path";
+        return false;
+    }
+    if (q.size() != mesh.cells.size()) {
+        if (error) *error = "state size does not match mesh cells";
+        return false;
+    }
+
+    std::vector<PrimitiveState> primitive(q.size());
+    std::vector<float> mach(q.size(), 0.0f);
+    for (std::size_t i = 0; i < q.size(); ++i) {
+        if (!conservative_to_primitive(q[i], gamma, primitive[i])) {
+            if (error) *error = "invalid state";
+            return false;
+        }
+        float a = speed_of_sound(primitive[i], gamma);
+        float vmag = std::sqrt(
+            primitive[i].u*primitive[i].u +
+            primitive[i].v*primitive[i].v +
+            primitive[i].w*primitive[i].w);
+        mach[i] = vmag / std::max(a, 1e-30f);
+    }
+
+    std::ofstream out(path);
+    if (!out) {
+        if (error) *error = "failed to open path";
+        return false;
+    }
+
+    out << "# vtk DataFile Version 3.0\n";
+    out << "AeroSim CFD cell diagnostics\n";
+    out << "ASCII\n";
+    out << "DATASET UNSTRUCTURED_GRID\n";
+    out << "POINTS " << mesh.nodes.size() << " float\n";
+    for (const auto& node : mesh.nodes) {
+        out << node.x << " " << node.y << " " << node.z << "\n";
+    }
+
+    out << "CELLS " << mesh.cells.size() << " " << mesh.cells.size() * 5 << "\n";
+    for (const auto& cell : mesh.cells) {
+        out << "4 " << cell.node[0] << " " << cell.node[1] << " " << cell.node[2] << " " << cell.node[3] << "\n";
+    }
+
+    out << "CELL_TYPES " << mesh.cells.size() << "\n";
+    for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+        out << "10\n";
+    }
+
+    out << "CELL_DATA " << mesh.cells.size() << "\n";
+    out << "SCALARS rho float 1\n";
+    out << "LOOKUP_TABLE default\n";
+    for (const auto& w : primitive) out << w.rho << "\n";
+    out << "SCALARS pressure float 1\n";
+    out << "LOOKUP_TABLE default\n";
+    for (const auto& w : primitive) out << w.p << "\n";
+    out << "SCALARS mach float 1\n";
+    out << "LOOKUP_TABLE default\n";
+    for (float value : mach) out << value << "\n";
+
+    if (!out) {
+        if (error) *error = "failed while writing";
+        return false;
+    }
+    return true;
 }
 
 } // namespace Cfd

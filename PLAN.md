@@ -113,7 +113,7 @@ Tasks:
 - [x] Add state bounds history
 - [x] Add dt limiter source history
 - [x] Add failure snapshot for first bad state
-- [ ] Add VTK cell output
+- [x] Add VTK cell output
 
 Gate:
 

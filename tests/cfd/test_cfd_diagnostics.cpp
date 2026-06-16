@@ -3,6 +3,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <vector>
 
 using namespace AeroSim::Cfd;
@@ -104,10 +107,39 @@ static int test_solver_diagnostics() {
     return 0;
 }
 
+static int test_vtk_output() {
+    TEST("CFD-DIAG-4 VTK cell output writes mesh and primitive fields");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
+        auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        const char* path = "cfd_diagnostics_test.vtk";
+        std::remove(path);
+        std::string error;
+        if (!write_vtk_cells(path, mesh, q, 1.4f, &error)) FAIL("%s", error.c_str());
+
+        std::ifstream in(path);
+        if (!in) FAIL("failed to read vtk");
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+        std::remove(path);
+
+        if (text.find("DATASET UNSTRUCTURED_GRID") == std::string::npos) FAIL("missing dataset");
+        if (text.find("CELL_DATA") == std::string::npos) FAIL("missing cell data");
+        if (text.find("SCALARS rho float 1") == std::string::npos) FAIL("missing rho");
+        if (text.find("SCALARS pressure float 1") == std::string::npos) FAIL("missing pressure");
+        if (text.find("SCALARS mach float 1") == std::string::npos) FAIL("missing mach");
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_state_bounds();
     result |= test_solver_diagnostics();
+    result |= test_vtk_output();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
