@@ -88,6 +88,14 @@ PrimitiveState make_freestream(float mach, float alpha_deg, float beta_deg, floa
     return w;
 }
 
+PrimitiveState farfield_ghost_state(const PrimitiveState& left, const PrimitiveState& freestream, float gamma,
+    float nx, float ny, float nz) {
+    float vn_inf = freestream.u*nx + freestream.v*ny + freestream.w*nz;
+    float a_inf = speed_of_sound(freestream, gamma);
+    if (vn_inf >= a_inf) return left;
+    return freestream;
+}
+
 EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, float gamma, float nx, float ny, float nz) {
     float vn_l = left.u*nx + left.v*ny + left.w*nz;
     float vn_r = right.u*nx + right.v*ny + right.w*nz;
@@ -198,7 +206,8 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
             } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
                 flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
             } else {
-                flux = hllc_flux(wl, w_inf, config.gamma, face.nx, face.ny, face.nz);
+                PrimitiveState wr = farfield_ghost_state(wl, w_inf, config.gamma, face.nx, face.ny, face.nz);
+                flux = hllc_flux(wl, wr, config.gamma, face.nx, face.ny, face.nz);
             }
 
             float area = face.area;

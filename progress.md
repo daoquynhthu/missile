@@ -13,3 +13,5 @@
 - Replaced the hex split with a consistent 6-tet body-diagonal pattern and added cube wall normal-area closure coverage.
 - Added symmetric cube uniform-pressure force test and farfield-only zero-force test.
 - Verification: `cmake --build build --target TestCfdMesh --config Release` passed; `cmake --build build --target TestCfdEuler --config Release` passed; `TestCfdMesh.exe` passed 5/5; `TestCfdEuler.exe` passed 6/6; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler)" --output-on-failure` passed 2/2.
+- Added explicit farfield ghost-state selection for supported supersonic normal inflow/outflow. Inflow uses freestream state; outflow extrapolates the interior state. Non-supersonic-normal farfield remains a limited freestream fallback, not a full characteristic boundary.
+- Verification: `cmake --build build --target TestCfdEuler --config Release` passed; `TestCfdEuler.exe` passed 8/8; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler)" --output-on-failure` passed 2/2.

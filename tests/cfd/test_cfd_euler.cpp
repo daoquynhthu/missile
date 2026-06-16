@@ -80,8 +80,44 @@ static int test_solver_uniform() {
     return 0;
 }
 
+static int test_farfield_boundary() {
+    TEST("CFD-EULER-5 supersonic farfield inflow uses freestream state");
+    {
+        PrimitiveState left;
+        left.rho = 0.7f;
+        left.u = -0.4f;
+        left.v = 0.2f;
+        left.w = 0.0f;
+        left.p = 0.5f;
+        auto inf = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        auto ghost = farfield_ghost_state(left, inf, 1.4f, 1.0f, 0.0f, 0.0f);
+        if (std::fabs(ghost.rho - inf.rho) > 1e-6f) FAIL("rho=%g", ghost.rho);
+        if (std::fabs(ghost.u - inf.u) > 1e-6f) FAIL("u=%g", ghost.u);
+        if (std::fabs(ghost.p - inf.p) > 1e-6f) FAIL("p=%g", ghost.p);
+        PASS;
+    }
+
+    TEST("CFD-EULER-6 supersonic farfield outflow extrapolates interior state");
+    {
+        PrimitiveState left;
+        left.rho = 0.7f;
+        left.u = -0.4f;
+        left.v = 0.2f;
+        left.w = 0.0f;
+        left.p = 0.5f;
+        auto inf = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        auto ghost = farfield_ghost_state(left, inf, 1.4f, -1.0f, 0.0f, 0.0f);
+        if (std::fabs(ghost.rho - left.rho) > 1e-6f) FAIL("rho=%g", ghost.rho);
+        if (std::fabs(ghost.u - left.u) > 1e-6f) FAIL("u=%g", ghost.u);
+        if (std::fabs(ghost.p - left.p) > 1e-6f) FAIL("p=%g", ghost.p);
+        PASS;
+    }
+
+    return 0;
+}
+
 static int test_wall_forces() {
-    TEST("CFD-EULER-5 symmetric cube has zero lateral force in uniform pressure field");
+    TEST("CFD-EULER-7 symmetric cube has zero lateral force in uniform pressure field");
     {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
         CfdSolver solver;
@@ -111,7 +147,7 @@ static int test_wall_forces() {
         PASS;
     }
 
-    TEST("CFD-EULER-6 farfield-only mesh contributes no body force");
+    TEST("CFD-EULER-8 farfield-only mesh contributes no body force");
     {
         CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
         for (auto& face : mesh.faces) {
@@ -140,6 +176,7 @@ int main() {
     result |= test_state_roundtrip();
     result |= test_fluxes();
     result |= test_solver_uniform();
+    result |= test_farfield_boundary();
     result |= test_wall_forces();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;

@@ -90,6 +90,8 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, flo
 
 PrimitiveState make_freestream(float mach, float alpha_deg, float beta_deg, float gamma);
 
+PrimitiveState farfield_ghost_state(const PrimitiveState& left, const PrimitiveState& freestream, float gamma,
+    float nx, float ny, float nz);
+
 } // namespace Cfd
 } // namespace AeroSim
-

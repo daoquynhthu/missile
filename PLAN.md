@@ -76,7 +76,7 @@ Tasks:
 - [x] Define 5-variable Euler state only
 - [x] Implement conservative-to-primitive with validity result
 - [x] Implement HLLC flux
-- [ ] Implement farfield boundary for supported supersonic cases
+- [x] Implement farfield boundary for supported supersonic cases
 - [x] Implement slip wall direct pressure flux or validated reflected ghost
 - [x] Implement global inviscid timestep
 - [x] Implement first-order update
