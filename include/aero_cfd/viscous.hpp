@@ -23,6 +23,15 @@ struct ViscousGradient {
     float dT_dz = 0.0f;
 };
 
+struct WallFlux {
+    float tau_x = 0.0f;
+    float tau_y = 0.0f;
+    float tau_z = 0.0f;
+    float q_wall = 0.0f;
+    float cf = 0.0f;
+    float st = 0.0f;
+};
+
 float primitive_temperature(const PrimitiveState& w);
 
 float sutherland_viscosity(
@@ -43,6 +52,29 @@ std::vector<ViscousGradient> compute_viscous_gradients(
     const std::vector<ConservativeState>& q,
     float gamma,
     bool use_least_squares = false);
+
+ViscousGradient orthogonal_face_gradient_correction(
+    const PrimitiveState& left,
+    const PrimitiveState& right,
+    const ViscousGradient& averaged_gradient,
+    float dx,
+    float dy,
+    float dz);
+
+float inviscid_timestep(const PrimitiveState& w, float h, float gamma, float cfl);
+
+float viscous_timestep(float rho, float h, float reynolds, float mu, float cfl);
+
+WallFlux compute_wall_flux(
+    const PrimitiveState& interior,
+    const ViscousGradient& gradient,
+    float nx,
+    float ny,
+    float nz,
+    float mu,
+    float conductivity,
+    float q_ref,
+    float heat_ref);
 
 } // namespace Cfd
 } // namespace AeroSim

@@ -305,10 +305,7 @@ set_target_properties(TestIntegrator PROPERTIES
 
 # 9. CFD Mesh Foundation Test
 add_executable(TestCfdMesh tests/cfd/test_cfd_mesh.cpp)
-set_source_files_properties(tests/cfd/test_cfd_mesh.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdMesh PRIVATE missile_lib)
-set_target_properties(TestCfdMesh PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(TestCfdMesh PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_test(NAME CfdMeshTest COMMAND TestCfdMesh)
 set_target_properties(TestCfdMesh PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -316,10 +313,7 @@ set_target_properties(TestCfdMesh PROPERTIES
 
 # 10. CFD Euler Foundation Test
 add_executable(TestCfdEuler tests/cfd/test_cfd_euler.cpp)
-set_source_files_properties(tests/cfd/test_cfd_euler.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdEuler PRIVATE missile_lib)
-set_target_properties(TestCfdEuler PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(TestCfdEuler PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_test(NAME CfdEulerTest COMMAND TestCfdEuler)
 set_target_properties(TestCfdEuler PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -327,10 +321,7 @@ set_target_properties(TestCfdEuler PROPERTIES
 
 # 11. CFD Diagnostics Test
 add_executable(TestCfdDiagnostics tests/cfd/test_cfd_diagnostics.cpp)
-set_source_files_properties(tests/cfd/test_cfd_diagnostics.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdDiagnostics PRIVATE missile_lib)
-set_target_properties(TestCfdDiagnostics PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(TestCfdDiagnostics PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_test(NAME CfdDiagnosticsTest COMMAND TestCfdDiagnostics)
 set_target_properties(TestCfdDiagnostics PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -338,10 +329,7 @@ set_target_properties(TestCfdDiagnostics PROPERTIES
 
 # 12. CFD Reconstruction Test
 add_executable(TestCfdReconstruction tests/cfd/test_cfd_reconstruction.cpp)
-set_source_files_properties(tests/cfd/test_cfd_reconstruction.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdReconstruction PRIVATE missile_lib)
-set_target_properties(TestCfdReconstruction PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(TestCfdReconstruction PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_test(NAME CfdReconstructionTest COMMAND TestCfdReconstruction)
 set_target_properties(TestCfdReconstruction PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -349,10 +337,7 @@ set_target_properties(TestCfdReconstruction PROPERTIES
 
 # 13. CFD Viscous Foundation Test
 add_executable(TestCfdViscous tests/cfd/test_cfd_viscous.cpp)
-set_source_files_properties(tests/cfd/test_cfd_viscous.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdViscous PRIVATE missile_lib)
-set_target_properties(TestCfdViscous PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(TestCfdViscous PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_test(NAME CfdViscousTest COMMAND TestCfdViscous)
 set_target_properties(TestCfdViscous PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"

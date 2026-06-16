@@ -4,6 +4,7 @@
 #include "aero_cfd/cfd_state.hpp"
 #include "aero_cfd/gpu_buffers.hpp"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,15 @@ bool compute_euler_residual_gpu(
     const PrimitiveState& freestream,
     float gamma,
     std::string* error = nullptr);
+
+bool compute_euler_residual_gpu_timed(
+    GpuCfdBuffers& buffers,
+    const PrimitiveState& freestream,
+    float gamma,
+    float* elapsed_ms,
+    std::string* error = nullptr);
+
+std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh);
 
 bool compute_euler_residual_gpu(
     const CfdMesh& mesh,

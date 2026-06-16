@@ -3,6 +3,7 @@
 #include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_state.hpp"
 
+#include <string>
 #include <vector>
 
 namespace AeroSim {
@@ -34,6 +35,8 @@ struct PrimitiveLimiter {
     float p = 1.0f;
 };
 
+class GpuCfdBuffers;
+
 std::vector<PrimitiveGradient> compute_green_gauss_gradients(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
@@ -51,6 +54,8 @@ std::vector<PrimitiveLimiter> compute_barth_jespersen_limiters(
     float gamma);
 
 PrimitiveGradient apply_limiter(const PrimitiveGradient& gradient, const PrimitiveLimiter& limiter);
+
+bool apply_limiter_gpu(GpuCfdBuffers& buffers, std::string* error = nullptr);
 
 PrimitiveState reconstruct_primitive(
     const PrimitiveState& center,

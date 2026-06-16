@@ -76,5 +76,89 @@ std::vector<ViscousGradient> compute_viscous_gradients(
     return gradients;
 }
 
+ViscousGradient orthogonal_face_gradient_correction(
+    const PrimitiveState& left,
+    const PrimitiveState& right,
+    const ViscousGradient& averaged_gradient,
+    float dx,
+    float dy,
+    float dz) {
+    ViscousGradient corrected = averaged_gradient;
+    float d2 = dx*dx + dy*dy + dz*dz;
+    if (d2 <= 1e-30f) return corrected;
+
+    float inv_d2 = 1.0f / d2;
+    float projected_du = averaged_gradient.du_dx*dx + averaged_gradient.du_dy*dy + averaged_gradient.du_dz*dz;
+    float projected_dv = averaged_gradient.dv_dx*dx + averaged_gradient.dv_dy*dy + averaged_gradient.dv_dz*dz;
+    float projected_dw = averaged_gradient.dw_dx*dx + averaged_gradient.dw_dy*dy + averaged_gradient.dw_dz*dz;
+    float projected_dT = averaged_gradient.dT_dx*dx + averaged_gradient.dT_dy*dy + averaged_gradient.dT_dz*dz;
+
+    float left_T = primitive_temperature(left);
+    float right_T = primitive_temperature(right);
+    float du_corr = ((right.u - left.u) - projected_du) * inv_d2;
+    float dv_corr = ((right.v - left.v) - projected_dv) * inv_d2;
+    float dw_corr = ((right.w - left.w) - projected_dw) * inv_d2;
+    float dT_corr = ((right_T - left_T) - projected_dT) * inv_d2;
+
+    corrected.du_dx += du_corr * dx;
+    corrected.du_dy += du_corr * dy;
+    corrected.du_dz += du_corr * dz;
+    corrected.dv_dx += dv_corr * dx;
+    corrected.dv_dy += dv_corr * dy;
+    corrected.dv_dz += dv_corr * dz;
+    corrected.dw_dx += dw_corr * dx;
+    corrected.dw_dy += dw_corr * dy;
+    corrected.dw_dz += dw_corr * dz;
+    corrected.dT_dx += dT_corr * dx;
+    corrected.dT_dy += dT_corr * dy;
+    corrected.dT_dz += dT_corr * dz;
+    return corrected;
+}
+
+float inviscid_timestep(const PrimitiveState& w, float h, float gamma, float cfl) {
+    float vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
+    return cfl * h / std::max(vmag + speed_of_sound(w, gamma), 1e-30f);
+}
+
+float viscous_timestep(float rho, float h, float reynolds, float mu, float cfl) {
+    if (rho <= 0.0f || h <= 0.0f || reynolds <= 0.0f || mu <= 0.0f) return 0.0f;
+    return cfl * rho * h * h * reynolds / mu;
+}
+
+WallFlux compute_wall_flux(
+    const PrimitiveState& interior,
+    const ViscousGradient& gradient,
+    float nx,
+    float ny,
+    float nz,
+    float mu,
+    float conductivity,
+    float q_ref,
+    float heat_ref) {
+    WallFlux out;
+    float div_u = gradient.du_dx + gradient.dv_dy + gradient.dw_dz;
+    float tauxx = 2.0f * mu * (gradient.du_dx - div_u / 3.0f);
+    float tauyy = 2.0f * mu * (gradient.dv_dy - div_u / 3.0f);
+    float tauzz = 2.0f * mu * (gradient.dw_dz - div_u / 3.0f);
+    float tauxy = mu * (gradient.du_dy + gradient.dv_dx);
+    float tauxz = mu * (gradient.du_dz + gradient.dw_dx);
+    float tauyz = mu * (gradient.dv_dz + gradient.dw_dy);
+
+    float tx = tauxx*nx + tauxy*ny + tauxz*nz;
+    float ty = tauxy*nx + tauyy*ny + tauyz*nz;
+    float tz = tauxz*nx + tauyz*ny + tauzz*nz;
+    float normal_tau = tx*nx + ty*ny + tz*nz;
+    out.tau_x = tx - normal_tau*nx;
+    out.tau_y = ty - normal_tau*ny;
+    out.tau_z = tz - normal_tau*nz;
+
+    out.q_wall = -conductivity * (gradient.dT_dx*nx + gradient.dT_dy*ny + gradient.dT_dz*nz);
+    float tau_mag = std::sqrt(out.tau_x*out.tau_x + out.tau_y*out.tau_y + out.tau_z*out.tau_z);
+    out.cf = tau_mag / std::max(q_ref, 1e-30f);
+    out.st = out.q_wall / std::max(heat_ref, 1e-30f);
+    (void)interior;
+    return out;
+}
+
 } // namespace Cfd
 } // namespace AeroSim

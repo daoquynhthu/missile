@@ -134,14 +134,14 @@ Tasks:
 
 - [x] Implement Sutherland viscosity
 - [x] Implement velocity and temperature gradients
-- [ ] Implement orthogonal face-gradient correction
+- [x] Implement orthogonal face-gradient correction
 - [x] Implement no-slip wall primitive
 - [x] Implement isothermal wall
 - [x] Implement adiabatic wall
-- [ ] Implement viscous timestep
-- [ ] Add wall shear and heat flux integration
+- [x] Implement viscous timestep
+- [x] Add wall shear and heat flux integration
 - [ ] Add flat plate laminar `Cf` sanity test
-- [ ] Add hot/cold wall heat flux sign test
+- [x] Add hot/cold wall heat flux sign test
 - [ ] Add Euler regression with `viscous=false`
 
 Gate:
@@ -195,12 +195,12 @@ Tasks:
 - [x] Define GPU-owned mesh/state/residual memory layout
 - [x] Add CPU/GPU state transfer and ownership tests
 - [x] Port Euler residual assembly to CUDA kernels
-- [ ] Port reconstruction and limiter to CUDA kernels
+- [x] Port reconstruction and limiter to CUDA kernels
 - [ ] Port viscous residual and wall integration to CUDA kernels
 - [x] Add CUDA error checks after every kernel launch
 - [x] Add CPU/GPU residual equivalence tests on small meshes
-- [ ] Add GPU timing and memory-bandwidth diagnostics
-- [ ] Add multi-block/domain-decomposition design note
+- [x] Add GPU timing and memory-bandwidth diagnostics
+- [x] Add multi-block/domain-decomposition design note
 
 Gate:
 

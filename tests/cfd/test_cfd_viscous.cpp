@@ -131,11 +131,78 @@ static int test_viscous_gradients() {
     return 0;
 }
 
+static int test_viscous_flux_and_timestep() {
+    TEST("CFD-VISC-8 orthogonal correction matches cell-to-cell jump");
+    {
+        PrimitiveState left;
+        left.rho = 1.0f;
+        left.u = 1.0f;
+        left.v = 0.0f;
+        left.w = 0.0f;
+        left.p = 1.0f;
+        PrimitiveState right = left;
+        right.u = 3.0f;
+        right.p = 2.0f;
+        ViscousGradient averaged;
+        auto corrected = orthogonal_face_gradient_correction(left, right, averaged, 2.0f, 0.0f, 0.0f);
+        if (std::fabs(corrected.du_dx - 1.0f) > 1e-6f) FAIL("du_dx=%g", corrected.du_dx);
+        if (std::fabs(corrected.dT_dx - 0.5f) > 1e-6f) FAIL("dT_dx=%g", corrected.dT_dx);
+        PASS;
+    }
+
+    TEST("CFD-VISC-9 viscous timestep scales with h squared");
+    {
+        float dt1 = viscous_timestep(1.0f, 0.01f, 1000.0f, 0.5f, 0.25f);
+        float dt2 = viscous_timestep(1.0f, 0.02f, 1000.0f, 0.5f, 0.25f);
+        if (std::fabs(dt2 / dt1 - 4.0f) > 1e-5f) FAIL("ratio=%g", dt2 / dt1);
+        PrimitiveState w;
+        w.rho = 1.0f;
+        w.u = 2.0f;
+        w.p = 1.0f;
+        if (inviscid_timestep(w, 0.1f, 1.4f, 0.5f) <= 0.0f) FAIL("invalid inviscid timestep");
+        PASS;
+    }
+
+    TEST("CFD-VISC-10 wall flux returns shear magnitude and heat-flux sign");
+    {
+        PrimitiveState interior;
+        interior.rho = 1.0f;
+        interior.u = 2.0f;
+        interior.p = 1.0f;
+        ViscousGradient gradient;
+        gradient.du_dz = 4.0f;
+        gradient.dT_dz = -3.0f;
+        auto flux = compute_wall_flux(interior, gradient, 0.0f, 0.0f, 1.0f, 0.5f, 0.2f, 2.0f, 1.0f);
+        if (std::fabs(flux.tau_x - 2.0f) > 1e-6f) FAIL("tau_x=%g", flux.tau_x);
+        if (std::fabs(flux.cf - 1.0f) > 1e-6f) FAIL("cf=%g", flux.cf);
+        if (flux.q_wall <= 0.0f) FAIL("q_wall=%g", flux.q_wall);
+        if (flux.st <= 0.0f) FAIL("st=%g", flux.st);
+        PASS;
+    }
+
+    TEST("CFD-VISC-11 heat flux sign changes with wall-normal temperature gradient");
+    {
+        PrimitiveState interior;
+        interior.rho = 1.0f;
+        interior.p = 1.0f;
+        ViscousGradient hot_wall;
+        hot_wall.dT_dz = 2.0f;
+        ViscousGradient cold_wall;
+        cold_wall.dT_dz = -2.0f;
+        auto hot = compute_wall_flux(interior, hot_wall, 0.0f, 0.0f, 1.0f, 0.5f, 0.2f, 1.0f, 1.0f);
+        auto cold = compute_wall_flux(interior, cold_wall, 0.0f, 0.0f, 1.0f, 0.5f, 0.2f, 1.0f, 1.0f);
+        if (!(hot.q_wall < 0.0f && cold.q_wall > 0.0f)) FAIL("hot=%g cold=%g", hot.q_wall, cold.q_wall);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_sutherland();
     result |= test_wall_states();
     result |= test_viscous_gradients();
+    result |= test_viscous_flux_and_timestep();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

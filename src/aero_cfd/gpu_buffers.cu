@@ -21,11 +21,15 @@ GpuCfdBuffers& GpuCfdBuffers::operator=(GpuCfdBuffers&& other) noexcept {
     d_faces_ = other.d_faces_;
     d_state_ = other.d_state_;
     d_residual_ = other.d_residual_;
+    d_gradients_ = other.d_gradients_;
+    d_limiters_ = other.d_limiters_;
     cell_count_ = other.cell_count_;
     face_count_ = other.face_count_;
     other.d_faces_ = nullptr;
     other.d_state_ = nullptr;
     other.d_residual_ = nullptr;
+    other.d_gradients_ = nullptr;
+    other.d_limiters_ = nullptr;
     other.cell_count_ = 0;
     other.face_count_ = 0;
     return *this;
@@ -73,6 +77,36 @@ bool GpuCfdBuffers::upload_state(const std::vector<ConservativeState>& q, std::s
     return cuda_check(cudaMemcpy(d_state_, q.data(), state_bytes, cudaMemcpyHostToDevice), "cudaMemcpy state", error);
 }
 
+bool GpuCfdBuffers::upload_gradients(const std::vector<PrimitiveGradient>& gradients, std::string* error) {
+    if (cell_count_ <= 0 || static_cast<int>(gradients.size()) != cell_count_) {
+        if (error) *error = "gradient size does not match uploaded mesh";
+        return false;
+    }
+
+    if (d_gradients_) {
+        cudaFree(d_gradients_);
+        d_gradients_ = nullptr;
+    }
+    std::size_t bytes = gradients.size() * sizeof(PrimitiveGradient);
+    if (!cuda_check(cudaMalloc(&d_gradients_, bytes), "cudaMalloc gradients", error)) return false;
+    return cuda_check(cudaMemcpy(d_gradients_, gradients.data(), bytes, cudaMemcpyHostToDevice), "cudaMemcpy gradients", error);
+}
+
+bool GpuCfdBuffers::upload_limiters(const std::vector<PrimitiveLimiter>& limiters, std::string* error) {
+    if (cell_count_ <= 0 || static_cast<int>(limiters.size()) != cell_count_) {
+        if (error) *error = "limiter size does not match uploaded mesh";
+        return false;
+    }
+
+    if (d_limiters_) {
+        cudaFree(d_limiters_);
+        d_limiters_ = nullptr;
+    }
+    std::size_t bytes = limiters.size() * sizeof(PrimitiveLimiter);
+    if (!cuda_check(cudaMalloc(&d_limiters_, bytes), "cudaMalloc limiters", error)) return false;
+    return cuda_check(cudaMemcpy(d_limiters_, limiters.data(), bytes, cudaMemcpyHostToDevice), "cudaMemcpy limiters", error);
+}
+
 bool GpuCfdBuffers::clear_residual(std::string* error) {
     if (!d_residual_ || cell_count_ <= 0) {
         if (error) *error = "residual buffer is not allocated";
@@ -92,13 +126,27 @@ bool GpuCfdBuffers::download_residual(std::vector<EulerFlux>& residual, std::str
     return cuda_check(cudaMemcpy(residual.data(), d_residual_, residual_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy residual", error);
 }
 
+bool GpuCfdBuffers::download_gradients(std::vector<PrimitiveGradient>& gradients, std::string* error) const {
+    if (!d_gradients_ || cell_count_ <= 0) {
+        if (error) *error = "gradient buffer is not allocated";
+        return false;
+    }
+    gradients.assign(static_cast<std::size_t>(cell_count_), PrimitiveGradient{});
+    std::size_t bytes = gradients.size() * sizeof(PrimitiveGradient);
+    return cuda_check(cudaMemcpy(gradients.data(), d_gradients_, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy gradients", error);
+}
+
 void GpuCfdBuffers::release() {
     cudaFree(d_faces_);
     cudaFree(d_state_);
     cudaFree(d_residual_);
+    cudaFree(d_gradients_);
+    cudaFree(d_limiters_);
     d_faces_ = nullptr;
     d_state_ = nullptr;
     d_residual_ = nullptr;
+    d_gradients_ = nullptr;
+    d_limiters_ = nullptr;
     cell_count_ = 0;
     face_count_ = 0;
 }

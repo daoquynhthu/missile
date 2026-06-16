@@ -173,6 +173,39 @@ __global__ void euler_residual_kernel(
     }
 }
 
+bool launch_euler_residual_kernel(
+    GpuCfdBuffers& buffers,
+    const PrimitiveState& freestream,
+    float gamma,
+    int* d_failed,
+    std::string* error) {
+    if (!buffers.clear_residual(error)) return false;
+    if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) return false;
+
+    int block = 128;
+    int grid = (buffers.face_count() + block - 1) / block;
+    euler_residual_kernel<<<grid, block>>>(
+        buffers.faces_device(),
+        buffers.face_count(),
+        buffers.state_device(),
+        freestream,
+        gamma,
+        buffers.residual_device(),
+        d_failed);
+    if (!cuda_check(cudaGetLastError(), "euler_residual_kernel launch", error)) return false;
+    return true;
+}
+
+bool read_kernel_failed_flag(int* d_failed, std::string* error) {
+    int failed = 0;
+    if (!cuda_check(cudaMemcpy(&failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy failed", error)) return false;
+    if (failed != 0) {
+        if (error) *error = "GPU residual encountered invalid state";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool compute_euler_residual_gpu(
@@ -189,37 +222,53 @@ bool compute_euler_residual_gpu(
     int* d_failed = nullptr;
 
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
-    if (!buffers.clear_residual(error)) goto fail;
-    if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) goto fail;
-
-    {
-        int block = 128;
-        int grid = (buffers.face_count() + block - 1) / block;
-        euler_residual_kernel<<<grid, block>>>(
-            buffers.faces_device(),
-            buffers.face_count(),
-            buffers.state_device(),
-            freestream,
-            gamma,
-            buffers.residual_device(),
-            d_failed);
-    }
-    if (!cuda_check(cudaGetLastError(), "euler_residual_kernel launch", error)) goto fail;
+    if (!launch_euler_residual_kernel(buffers, freestream, gamma, d_failed, error)) goto fail;
     if (!cuda_check(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) goto fail;
-
-    {
-        int failed = 0;
-        if (!cuda_check(cudaMemcpy(&failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy failed", error)) goto fail;
-        if (failed != 0) {
-            if (error) *error = "GPU residual encountered invalid state";
-            goto fail;
-        }
-    }
+    if (!read_kernel_failed_flag(d_failed, error)) goto fail;
 
     cudaFree(d_failed);
     return true;
 
 fail:
+    cudaFree(d_failed);
+    return false;
+}
+
+bool compute_euler_residual_gpu_timed(
+    GpuCfdBuffers& buffers,
+    const PrimitiveState& freestream,
+    float gamma,
+    float* elapsed_ms,
+    std::string* error) {
+    if (elapsed_ms) *elapsed_ms = 0.0f;
+    if (buffers.cell_count() <= 0 || buffers.face_count() <= 0 ||
+        !buffers.faces_device() || !buffers.state_device() || !buffers.residual_device()) {
+        if (error) *error = "GPU buffers are not ready";
+        return false;
+    }
+
+    int* d_failed = nullptr;
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
+    if (!cuda_check(cudaEventCreate(&start), "cudaEventCreate start", error)) goto fail;
+    if (!cuda_check(cudaEventCreate(&stop), "cudaEventCreate stop", error)) goto fail;
+    if (!cuda_check(cudaEventRecord(start), "cudaEventRecord start", error)) goto fail;
+    if (!launch_euler_residual_kernel(buffers, freestream, gamma, d_failed, error)) goto fail;
+    if (!cuda_check(cudaEventRecord(stop), "cudaEventRecord stop", error)) goto fail;
+    if (!cuda_check(cudaEventSynchronize(stop), "cudaEventSynchronize stop", error)) goto fail;
+    if (elapsed_ms) {
+        if (!cuda_check(cudaEventElapsedTime(elapsed_ms, start, stop), "cudaEventElapsedTime", error)) goto fail;
+    }
+    if (!read_kernel_failed_flag(d_failed, error)) goto fail;
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    cudaFree(d_failed);
+    return true;
+
+fail:
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     cudaFree(d_failed);
     return false;
 }
@@ -236,6 +285,21 @@ bool compute_euler_residual_gpu(
     if (!buffers.upload_state(q, error)) return false;
     if (!compute_euler_residual_gpu(buffers, freestream, gamma, error)) return false;
     return buffers.download_residual(residual, error);
+}
+
+std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh) {
+    std::size_t face_bytes = mesh.faces.size() * sizeof(CfdFace);
+    std::size_t state_reads = 0;
+    std::size_t residual_writes = 0;
+    for (const auto& face : mesh.faces) {
+        state_reads += sizeof(ConservativeState);
+        residual_writes += sizeof(EulerFlux);
+        if (face.boundary == BoundaryKind::Interior) {
+            state_reads += sizeof(ConservativeState);
+            residual_writes += sizeof(EulerFlux);
+        }
+    }
+    return face_bytes + state_reads + residual_writes;
 }
 
 } // namespace Cfd

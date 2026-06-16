@@ -111,6 +111,15 @@ tests/cfd/
 - 不允许为了 CPU 简单性选择会阻碍 GPU memory layout、kernel fusion、coalescing、multi-GPU domain decomposition 的数据结构。
 - 早期 CPU 实现存在的唯一理由是降低物理和数值公式验证成本；一旦公式门禁通过，必须迁移到 GPU 并用 CPU/GPU bitwise 或容差回归约束。
 
+GPU 域分解策略：
+
+- 网格必须支持 block/partition ownership，cell、face、boundary face 和 halo cell 分开存储。
+- 单 GPU 内部采用 face-list residual assembly 作为第一版，后续根据 atomic contention 切换到 coloring 或 cell-based gather。
+- 多 GPU 路线采用 partition-local owned cells + halo ghost cells；每个 pseudo-time step 交换 conservative state halo。
+- 边界积分和残差归约必须支持分块归约，不能依赖单个全局 host loop。
+- 所有 GPU kernel 必须有 CPU reference equivalence test；性能优化不能改变物理离散。
+- 高阶/DNS 阶段的 GPU 数据结构必须能承载高阶 DOF，不允许只为一阶 tet FV 写死布局。
+
 ## 3. 数据模型
 
 ### 3.1 Mesh

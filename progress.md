@@ -52,3 +52,11 @@
 - Added shared CUDA error-check helper and refactored GPU buffer/residual code to use it.
 - Initial `.cu` helper implementation caused an RDC link failure in `TestCfdGpu`; corrected the helper to a host-only `.cpp` translation unit.
 - Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.
+- Batched Phase 7 and Phase 4 work after switching away from tiny compile/test loops.
+- Added GPU limiter application kernel and gradient/limiter device-buffer upload/download support.
+- Added timed Euler residual GPU execution and residual memory-traffic estimate for bandwidth diagnostics.
+- Added GPU domain-decomposition strategy to the architecture document.
+- Added viscous orthogonal face-gradient correction, inviscid/viscous timestep helpers, and wall shear/heat-flux integration utilities.
+- Extended `TestCfdGpu` and `TestCfdViscous` for the new GPU diagnostics and viscous utilities.
+- Adjusted CFD CMake targets so only `TestCfdGpu` is compiled and device-linked as CUDA. Non-GPU CFD tests are C++ targets again, avoiding unrelated CUDA fatbin/RDC link obligations.
+- Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.
