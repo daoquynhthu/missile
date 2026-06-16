@@ -8,6 +8,9 @@ struct CfdConfig {
     int max_iter = 1000;
     float convergence_tol = 1e-8f;
     float gamma = 1.4f;
+    float ref_area = 1.0f;
+    float ref_length = 1.0f;
+    float ref_span = 1.0f;
 };
 
 struct FreestreamCondition {
@@ -18,4 +21,3 @@ struct FreestreamCondition {
 
 } // namespace Cfd
 } // namespace AeroSim
-

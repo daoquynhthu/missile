@@ -38,11 +38,29 @@ static int test_cube_mesh() {
         PASS;
     }
 
+    TEST("CFD-MESH-3 cube wall normal area is closed");
+    {
+        auto mesh = generate_structured_cube_mesh(5.0f, 13);
+        float sx = 0.0f;
+        float sy = 0.0f;
+        float sz = 0.0f;
+        for (const auto& face : mesh.faces) {
+            if (face.boundary != BoundaryKind::SlipWall) continue;
+            sx += face.nx * face.area;
+            sy += face.ny * face.area;
+            sz += face.nz * face.area;
+        }
+        if (std::fabs(sx) > 1e-5f) FAIL("sx=%g", sx);
+        if (std::fabs(sy) > 1e-5f) FAIL("sy=%g", sy);
+        if (std::fabs(sz) > 1e-5f) FAIL("sz=%g", sz);
+        PASS;
+    }
+
     return 0;
 }
 
 static int test_flat_plate_mesh() {
-    TEST("CFD-MESH-3 flat plate wall area matches geometry");
+    TEST("CFD-MESH-4 flat plate wall area matches geometry");
     {
         float length = 0.5f;
         float width = 0.05f;
@@ -61,7 +79,7 @@ static int test_flat_plate_mesh() {
         PASS;
     }
 
-    TEST("CFD-MESH-4 flat plate farfield exists and mesh is positive");
+    TEST("CFD-MESH-5 flat plate farfield exists and mesh is positive");
     {
         auto mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 10, 3, 12);
         auto report = compute_mesh_metrics(mesh);

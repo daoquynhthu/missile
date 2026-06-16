@@ -80,12 +80,67 @@ static int test_solver_uniform() {
     return 0;
 }
 
+static int test_wall_forces() {
+    TEST("CFD-EULER-5 symmetric cube has zero lateral force in uniform pressure field");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        CfdConfig cfg;
+        cfg.max_iter = 0;
+        cfg.ref_area = 4.0f;
+        cfg.ref_length = 2.0f;
+        cfg.ref_span = 2.0f;
+        auto summary = solver.solve({2.0f, 0.0f, 0.0f}, cfg);
+        if (summary.failed) FAIL("solver failed");
+        if (std::fabs(summary.forces.CY) > 1e-6f) {
+            float sx = 0.0f;
+            float sy = 0.0f;
+            float sz = 0.0f;
+            for (const auto& face : mesh.faces) {
+                if (face.boundary != BoundaryKind::SlipWall) continue;
+                sx += face.nx * face.area;
+                sy += face.ny * face.area;
+                sz += face.nz * face.area;
+            }
+            FAIL("CY=%g normal_area=[%g,%g,%g]", summary.forces.CY, sx, sy, sz);
+        }
+        if (std::fabs(summary.forces.CZ) > 1e-6f) FAIL("CZ=%g", summary.forces.CZ);
+        if (std::fabs(summary.forces.CX) > 1e-5f) FAIL("CX=%g", summary.forces.CX);
+        PASS;
+    }
+
+    TEST("CFD-EULER-6 farfield-only mesh contributes no body force");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
+        for (auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::NoSlipWall) face.boundary = BoundaryKind::Farfield;
+        }
+        compute_mesh_metrics(mesh);
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        CfdConfig cfg;
+        cfg.max_iter = 0;
+        cfg.ref_area = 0.025f;
+        auto summary = solver.solve({2.0f, 0.0f, 0.0f}, cfg);
+        if (summary.failed) FAIL("solver failed");
+        if (std::fabs(summary.forces.CX) > 1e-8f) FAIL("CX=%g", summary.forces.CX);
+        if (std::fabs(summary.forces.CY) > 1e-8f) FAIL("CY=%g", summary.forces.CY);
+        if (std::fabs(summary.forces.CZ) > 1e-8f) FAIL("CZ=%g", summary.forces.CZ);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_state_roundtrip();
     result |= test_fluxes();
     result |= test_solver_uniform();
+    result |= test_wall_forces();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
-

@@ -94,12 +94,12 @@ void add_tet(CfdMesh& mesh, int a, int b, int c, int d) {
 }
 
 void add_hex_tets(CfdMesh& mesh, int p0, int p1, int p2, int p3, int p4, int p5, int p6, int p7) {
-    add_tet(mesh, p0, p1, p2, p4);
-    add_tet(mesh, p1, p2, p4, p5);
-    add_tet(mesh, p2, p4, p5, p6);
-    add_tet(mesh, p0, p2, p3, p4);
-    add_tet(mesh, p2, p3, p4, p6);
-    add_tet(mesh, p3, p4, p6, p7);
+    add_tet(mesh, p0, p1, p2, p6);
+    add_tet(mesh, p0, p2, p3, p6);
+    add_tet(mesh, p0, p3, p7, p6);
+    add_tet(mesh, p0, p7, p4, p6);
+    add_tet(mesh, p0, p4, p5, p6);
+    add_tet(mesh, p0, p5, p1, p6);
 }
 
 BoundaryKind classify_cube_boundary(Vec3 fc, Vec3 outward, float outer_scale, float delta, const std::vector<bool>& is_body, int n_hex) {

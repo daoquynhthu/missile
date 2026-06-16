@@ -45,6 +45,7 @@ Tasks:
 - [x] Add mesh quality report
 - [x] Add hard failure for negative/zero volume
 - [x] Add tests for cube wall/farfield face counts
+- [x] Add cube wall normal-area closure test
 - [x] Add tests for flat plate wall area and first-layer height
 
 Gate:
@@ -52,6 +53,7 @@ Gate:
 - Mesh tests pass.
 - Cube wall classification does not depend on vertices landing at `±1`.
 - Flat plate wall area equals `Lx * Ly` within tolerance.
+- Cube wall `sum(n * area)` is near zero.
 
 ## Phase 2 — Euler First-Order Solver
 
@@ -78,11 +80,11 @@ Tasks:
 - [x] Implement slip wall direct pressure flux or validated reflected ghost
 - [x] Implement global inviscid timestep
 - [x] Implement first-order update
-- [ ] Implement body force integration over wall faces only
+- [x] Implement body force integration over wall faces only
 - [x] Add residual history output
 - [x] Add uniform freestream preservation test
 - [x] Add slip wall zero mass flux test
-- [ ] Add symmetric cube force test
+- [x] Add symmetric cube force test
 
 Gate:
 

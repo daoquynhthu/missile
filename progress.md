@@ -7,3 +7,9 @@
 - Committed Phase 1 as `8fb9c10`.
 - Started Phase 2 Euler foundation with 5-variable state, primitive/conservative conversion, HLLC flux, slip-wall direct pressure flux, CPU first-order update skeleton, residual history, and `TestCfdEuler`.
 - Verification: `cmake -B build` passed; `cmake --build build --target TestCfdEuler --config Release` passed; `TestCfdEuler.exe` passed 4/4; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler)" --output-on-failure` passed 2/2.
+- Committed Phase 2 Euler foundation as `3f5b801`.
+- Added wall-force integration over slip/no-slip wall faces with configurable reference area/length/span.
+- Found and fixed a mesh geometry-conservation defect: the previous structured-hex-to-tet split used inconsistent face diagonals across neighboring hexes, producing a nonzero cube wall normal-area sum and a false lateral force under uniform pressure.
+- Replaced the hex split with a consistent 6-tet body-diagonal pattern and added cube wall normal-area closure coverage.
+- Added symmetric cube uniform-pressure force test and farfield-only zero-force test.
+- Verification: `cmake --build build --target TestCfdMesh --config Release` passed; `cmake --build build --target TestCfdEuler --config Release` passed; `TestCfdMesh.exe` passed 5/5; `TestCfdEuler.exe` passed 6/6; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler)" --output-on-failure` passed 2/2.

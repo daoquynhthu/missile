@@ -27,6 +27,52 @@ float state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
     return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4;
 }
 
+void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
+    const CfdConfig& config, CfdForceResult& result) {
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float fz = 0.0f;
+    float mx = 0.0f;
+    float my = 0.0f;
+    float mz = 0.0f;
+
+    for (const auto& face : mesh.faces) {
+        if (face.boundary != BoundaryKind::SlipWall && face.boundary != BoundaryKind::NoSlipWall) continue;
+        PrimitiveState w;
+        if (!conservative_to_primitive(q[face.left_cell], config.gamma, w)) continue;
+
+        float px = -w.p * face.nx * face.area;
+        float py = -w.p * face.ny * face.area;
+        float pz = -w.p * face.nz * face.area;
+        fx += px;
+        fy += py;
+        fz += pz;
+        mx += face.cy * pz - face.cz * py;
+        my += face.cz * px - face.cx * pz;
+        mz += face.cx * py - face.cy * px;
+    }
+
+    float q_inf = 0.5f * condition.mach * condition.mach;
+    float inv_force_ref = 1.0f / std::max(q_inf * config.ref_area, 1e-30f);
+    result.CX = fx * inv_force_ref;
+    result.CY = fy * inv_force_ref;
+    result.CZ = fz * inv_force_ref;
+    result.Cl = mx / std::max(q_inf * config.ref_area * config.ref_span, 1e-30f);
+    result.Cm = my / std::max(q_inf * config.ref_area * config.ref_length, 1e-30f);
+    result.Cn = mz / std::max(q_inf * config.ref_area * config.ref_span, 1e-30f);
+
+    float alpha = condition.alpha_deg * 3.14159265358979323846f / 180.0f;
+    float beta = condition.beta_deg * 3.14159265358979323846f / 180.0f;
+    float ca = std::cos(alpha);
+    float sa = std::sin(alpha);
+    float cb = std::cos(beta);
+    float sb = std::sin(beta);
+    float fsx = result.CX * ca * cb + result.CY * sb + result.CZ * sa * cb;
+    float fsz = -result.CX * sa + result.CZ * ca;
+    result.CD = -fsx;
+    result.CL = -fsz;
+}
+
 } // namespace
 
 PrimitiveState make_freestream(float mach, float alpha_deg, float beta_deg, float gamma) {
@@ -187,6 +233,7 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
         }
     }
 
+    integrate_wall_forces(mesh_, q, condition, config, summary.forces);
     summary.forces.iterations = static_cast<int>(summary.residual_history.size());
     summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
     return summary;
