@@ -335,3 +335,14 @@ add_test(NAME CfdDiagnosticsTest COMMAND TestCfdDiagnostics)
 set_target_properties(TestCfdDiagnostics PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# 12. CFD Reconstruction Test
+add_executable(TestCfdReconstruction tests/cfd/test_cfd_reconstruction.cpp)
+set_source_files_properties(tests/cfd/test_cfd_reconstruction.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(TestCfdReconstruction PRIVATE missile_lib)
+set_target_properties(TestCfdReconstruction PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestCfdReconstruction PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+add_test(NAME CfdReconstructionTest COMMAND TestCfdReconstruction)
+set_target_properties(TestCfdReconstruction PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)

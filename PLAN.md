@@ -105,10 +105,10 @@ Files planned:
 
 Tasks:
 
-- [ ] Add Green-Gauss gradient
+- [x] Add Green-Gauss gradient
 - [ ] Add least-squares gradient option if needed
 - [ ] Add limiter
-- [ ] Add positive reconstruction guard
+- [x] Add positive reconstruction guard
 - [x] Add diagnostic levels OFF/BASIC/DETAILED/VERBOSE
 - [x] Add state bounds history
 - [x] Add dt limiter source history

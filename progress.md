@@ -19,3 +19,7 @@
 - Added `solve_from_state` for diagnostic injection/restart-style tests without changing the default `solve` entry point.
 - Added `TestCfdDiagnostics` with coverage for state bound extrema, diagnostics not changing first-order results, and injected invalid-state failure snapshots.
 - Verification: `cmake -B build` passed; `cmake --build build --target TestCfdDiagnostics --config Release` passed; `TestCfdDiagnostics.exe` passed 3/3; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics)" --output-on-failure` passed 3/3.
+- Added Phase 3 reconstruction helpers with Green-Gauss primitive gradients, direct primitive reconstruction, and positivity-preserving gradient scaling for rho/p floors.
+- Initial constant-state Green-Gauss test exposed amplified floating-point closure error in thin cells when using direct `sum(phi_f nA) / V`; changed implementation to the invariant-preserving difference form `sum((phi_f - phi_c) nA) / V`.
+- Added `TestCfdReconstruction` coverage for constant-state zero gradients, invalid-state fail-closed behavior, and positive reconstruction guard behavior.
+- Verification: `cmake --build build --target TestCfdReconstruction --config Release` passed; `TestCfdReconstruction.exe` passed 4/4; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.

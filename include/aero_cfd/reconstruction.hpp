@@ -1,0 +1,52 @@
+#pragma once
+
+#include "aero_cfd/cfd_mesh.hpp"
+#include "aero_cfd/cfd_state.hpp"
+
+#include <vector>
+
+namespace AeroSim {
+namespace Cfd {
+
+struct PrimitiveGradient {
+    float drho_dx = 0.0f;
+    float drho_dy = 0.0f;
+    float drho_dz = 0.0f;
+    float du_dx = 0.0f;
+    float du_dy = 0.0f;
+    float du_dz = 0.0f;
+    float dv_dx = 0.0f;
+    float dv_dy = 0.0f;
+    float dv_dz = 0.0f;
+    float dw_dx = 0.0f;
+    float dw_dy = 0.0f;
+    float dw_dz = 0.0f;
+    float dp_dx = 0.0f;
+    float dp_dy = 0.0f;
+    float dp_dz = 0.0f;
+};
+
+std::vector<PrimitiveGradient> compute_green_gauss_gradients(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    float gamma);
+
+PrimitiveState reconstruct_primitive(
+    const PrimitiveState& center,
+    const PrimitiveGradient& gradient,
+    float dx,
+    float dy,
+    float dz);
+
+PrimitiveState reconstruct_primitive_positive(
+    const PrimitiveState& center,
+    const PrimitiveGradient& gradient,
+    float dx,
+    float dy,
+    float dz,
+    float rho_floor,
+    float p_floor,
+    float* theta = nullptr);
+
+} // namespace Cfd
+} // namespace AeroSim

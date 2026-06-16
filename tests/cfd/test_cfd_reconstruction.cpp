@@ -1,0 +1,98 @@
+#include "aero_cfd/reconstruction.hpp"
+
+#include <cmath>
+#include <cstdio>
+#include <vector>
+
+using namespace AeroSim::Cfd;
+
+static int test_count = 0;
+static int pass_count = 0;
+
+#define TEST(name) do { test_count++; std::printf("[Test] %s ... ", name); } while(0)
+#define PASS do { pass_count++; std::printf("PASS\n"); } while(0)
+#define FAIL(fmt, ...) do { std::printf("FAIL: " fmt "\n", ##__VA_ARGS__); return 1; } while(0)
+
+static int test_green_gauss() {
+    TEST("CFD-RECON-1 Green-Gauss gradient is zero for constant primitive state");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
+        auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        auto gradients = compute_green_gauss_gradients(mesh, q, 1.4f);
+        if (gradients.size() != mesh.cells.size()) FAIL("gradient size=%zu cells=%zu", gradients.size(), mesh.cells.size());
+        for (const auto& g : gradients) {
+            if (std::fabs(g.drho_dx) > 1e-5f || std::fabs(g.drho_dy) > 1e-5f || std::fabs(g.drho_dz) > 1e-5f) {
+                FAIL("rho gradient=[%g,%g,%g]", g.drho_dx, g.drho_dy, g.drho_dz);
+            }
+            if (std::fabs(g.dp_dx) > 1e-5f || std::fabs(g.dp_dy) > 1e-5f || std::fabs(g.dp_dz) > 1e-5f) {
+                FAIL("p gradient=[%g,%g,%g]", g.dp_dx, g.dp_dy, g.dp_dz);
+            }
+        }
+        PASS;
+    }
+
+    TEST("CFD-RECON-2 invalid state makes Green-Gauss fail closed");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
+        auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        q[0].rho = -1.0f;
+        auto gradients = compute_green_gauss_gradients(mesh, q, 1.4f);
+        if (!gradients.empty()) FAIL("expected empty gradients");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_positive_guard() {
+    TEST("CFD-RECON-3 positive guard limits density and pressure");
+    {
+        PrimitiveState center;
+        center.rho = 1.0f;
+        center.u = 0.0f;
+        center.v = 0.0f;
+        center.w = 0.0f;
+        center.p = 1.0f;
+
+        PrimitiveGradient g;
+        g.drho_dx = -10.0f;
+        g.dp_dx = -20.0f;
+        float theta = 1.0f;
+        auto out = reconstruct_primitive_positive(center, g, 0.1f, 0.0f, 0.0f, 0.2f, 0.2f, &theta);
+        if (theta >= 1.0f || theta <= 0.0f) FAIL("theta=%g", theta);
+        if (out.rho < 0.2f - 1e-6f) FAIL("rho=%g", out.rho);
+        if (out.p < 0.2f - 1e-6f) FAIL("p=%g", out.p);
+        PASS;
+    }
+
+    TEST("CFD-RECON-4 positive guard preserves safe reconstruction");
+    {
+        PrimitiveState center;
+        center.rho = 1.0f;
+        center.u = 0.0f;
+        center.v = 0.0f;
+        center.w = 0.0f;
+        center.p = 1.0f;
+
+        PrimitiveGradient g;
+        g.drho_dx = 0.5f;
+        g.dp_dx = -0.5f;
+        float theta = 0.0f;
+        auto guarded = reconstruct_primitive_positive(center, g, 0.1f, 0.0f, 0.0f, 0.2f, 0.2f, &theta);
+        auto raw = reconstruct_primitive(center, g, 0.1f, 0.0f, 0.0f);
+        if (std::fabs(theta - 1.0f) > 1e-6f) FAIL("theta=%g", theta);
+        if (std::fabs(guarded.rho - raw.rho) > 1e-6f) FAIL("rho=%g raw=%g", guarded.rho, raw.rho);
+        if (std::fabs(guarded.p - raw.p) > 1e-6f) FAIL("p=%g raw=%g", guarded.p, raw.p);
+        PASS;
+    }
+    return 0;
+}
+
+int main() {
+    int result = 0;
+    result |= test_green_gauss();
+    result |= test_positive_guard();
+    std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
+    return result == 0 && pass_count == test_count ? 0 : 1;
+}
