@@ -26,10 +26,26 @@ struct PrimitiveGradient {
     float dp_dz = 0.0f;
 };
 
+struct PrimitiveLimiter {
+    float rho = 1.0f;
+    float u = 1.0f;
+    float v = 1.0f;
+    float w = 1.0f;
+    float p = 1.0f;
+};
+
 std::vector<PrimitiveGradient> compute_green_gauss_gradients(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     float gamma);
+
+std::vector<PrimitiveLimiter> compute_barth_jespersen_limiters(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    const std::vector<PrimitiveGradient>& gradients,
+    float gamma);
+
+PrimitiveGradient apply_limiter(const PrimitiveGradient& gradient, const PrimitiveLimiter& limiter);
 
 PrimitiveState reconstruct_primitive(
     const PrimitiveState& center,

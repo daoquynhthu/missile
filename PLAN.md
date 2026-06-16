@@ -107,7 +107,7 @@ Tasks:
 
 - [x] Add Green-Gauss gradient
 - [ ] Add least-squares gradient option if needed
-- [ ] Add limiter
+- [x] Add limiter
 - [x] Add positive reconstruction guard
 - [x] Add diagnostic levels OFF/BASIC/DETAILED/VERBOSE
 - [x] Add state bounds history

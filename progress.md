@@ -23,3 +23,6 @@
 - Initial constant-state Green-Gauss test exposed amplified floating-point closure error in thin cells when using direct `sum(phi_f nA) / V`; changed implementation to the invariant-preserving difference form `sum((phi_f - phi_c) nA) / V`.
 - Added `TestCfdReconstruction` coverage for constant-state zero gradients, invalid-state fail-closed behavior, and positive reconstruction guard behavior.
 - Verification: `cmake --build build --target TestCfdReconstruction --config Release` passed; `TestCfdReconstruction.exe` passed 4/4; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.
+- Added Barth-Jespersen-style primitive limiters using neighbor extrema and per-variable gradient scaling.
+- Extended `TestCfdReconstruction` with limiter-inactive and new-pressure-extrema suppression tests.
+- Verification: `cmake --build build --target TestCfdReconstruction --config Release` passed; `TestCfdReconstruction.exe` passed 6/6; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.

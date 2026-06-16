@@ -1,5 +1,6 @@
 #include "aero_cfd/reconstruction.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -89,10 +90,52 @@ static int test_positive_guard() {
     return 0;
 }
 
+static int test_limiter() {
+    TEST("CFD-RECON-5 limiter is inactive for zero gradients");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
+        auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        std::vector<PrimitiveGradient> gradients(mesh.cells.size());
+        auto limiters = compute_barth_jespersen_limiters(mesh, q, gradients, 1.4f);
+        if (limiters.size() != mesh.cells.size()) FAIL("limiter size=%zu", limiters.size());
+        for (const auto& limiter : limiters) {
+            if (std::fabs(limiter.rho - 1.0f) > 1e-6f) FAIL("rho limiter=%g", limiter.rho);
+            if (std::fabs(limiter.p - 1.0f) > 1e-6f) FAIL("p limiter=%g", limiter.p);
+        }
+        PASS;
+    }
+
+    TEST("CFD-RECON-6 limiter suppresses new pressure extrema");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 5, 3, 6);
+        auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        std::vector<PrimitiveGradient> gradients(mesh.cells.size());
+        for (auto& gradient : gradients) {
+            gradient.dp_dx = 100.0f;
+            gradient.dp_dy = 100.0f;
+            gradient.dp_dz = 100.0f;
+        }
+        auto limiters = compute_barth_jespersen_limiters(mesh, q, gradients, 1.4f);
+        if (limiters.size() != mesh.cells.size()) FAIL("limiter size=%zu", limiters.size());
+
+        float min_p_limiter = 1.0f;
+        for (const auto& limiter : limiters) min_p_limiter = std::min(min_p_limiter, limiter.p);
+        if (min_p_limiter >= 1.0f) FAIL("min pressure limiter=%g", min_p_limiter);
+
+        auto limited = apply_limiter(gradients[0], limiters[0]);
+        if (std::fabs(limited.dp_dx) > std::fabs(gradients[0].dp_dx) + 1e-6f) FAIL("limited dp_dx=%g", limited.dp_dx);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_green_gauss();
     result |= test_positive_guard();
+    result |= test_limiter();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
