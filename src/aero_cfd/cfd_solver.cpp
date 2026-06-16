@@ -163,28 +163,68 @@ bool CfdSolver::load_mesh(const CfdMesh& mesh) {
 }
 
 CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const CfdConfig& config) {
+    PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
+    ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
+    std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
+    return solve_from_state(condition, config, q);
+}
+
+CfdSolveSummary CfdSolver::solve_from_state(
+    const FreestreamCondition& condition,
+    const CfdConfig& config,
+    const std::vector<ConservativeState>& initial_state) {
     CfdSolveSummary summary;
     if (mesh_.cells.empty() || mesh_.faces.empty()) {
         summary.failed = true;
         return summary;
     }
+    if (initial_state.size() != mesh_.cells.size()) {
+        summary.failed = true;
+        return summary;
+    }
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
-    ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
-    std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
-    std::vector<ConservativeState> q_next(mesh_.cells.size(), q_inf);
+    std::vector<ConservativeState> q = initial_state;
+    std::vector<ConservativeState> q_next = initial_state;
+    bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
+
+    if (diagnostics_enabled) {
+        StateBounds bounds = compute_state_bounds(q, config.gamma);
+        summary.diagnostics.state_bounds_history.push_back(bounds);
+        if (!bounds.valid) {
+            int cell = bounds.bad_cell >= 0 ? bounds.bad_cell : 0;
+            summary.failed = true;
+            summary.diagnostics.failure = make_failure_snapshot(0, cell, "invalid initial state", q[cell], config.gamma);
+            return summary;
+        }
+    }
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
         float min_dt = std::numeric_limits<float>::max();
+        DtLimiterSnapshot dt_limiter;
+        dt_limiter.iteration = iter;
         for (std::size_t i = 0; i < q.size(); ++i) {
             PrimitiveState w;
             if (!conservative_to_primitive(q[i], config.gamma, w)) {
                 summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure = make_failure_snapshot(iter, static_cast<int>(i), "invalid state before timestep", q[i], config.gamma);
+                }
                 return summary;
             }
             float vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
-            float dt = config.cfl * mesh_.cells[i].h_min / (vmag + speed_of_sound(w, config.gamma));
-            min_dt = std::min(min_dt, dt);
+            float signal_speed = vmag + speed_of_sound(w, config.gamma);
+            float dt = config.cfl * mesh_.cells[i].h_min / signal_speed;
+            if (dt < min_dt) {
+                min_dt = dt;
+                dt_limiter.cell = static_cast<int>(i);
+                dt_limiter.dt = dt;
+                dt_limiter.h_min = mesh_.cells[i].h_min;
+                dt_limiter.signal_speed = signal_speed;
+            }
+        }
+        if (diagnostics_enabled) {
+            summary.diagnostics.dt_limiter_history.push_back(dt_limiter);
         }
 
         std::vector<EulerFlux> residual(q.size());
@@ -192,6 +232,9 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
             PrimitiveState wl;
             if (!conservative_to_primitive(q[face.left_cell], config.gamma, wl)) {
                 summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure = make_failure_snapshot(iter, face.left_cell, "invalid left face state", q[face.left_cell], config.gamma);
+                }
                 return summary;
             }
 
@@ -200,6 +243,9 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
                 PrimitiveState wr;
                 if (!conservative_to_primitive(q[face.right_cell], config.gamma, wr)) {
                     summary.failed = true;
+                    if (diagnostics_enabled) {
+                        summary.diagnostics.failure = make_failure_snapshot(iter, face.right_cell, "invalid right face state", q[face.right_cell], config.gamma);
+                    }
                     return summary;
                 }
                 flux = hllc_flux(wl, wr, config.gamma, face.nx, face.ny, face.nz);
@@ -235,6 +281,17 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
         float residual_l2 = std::sqrt(l2 / (5.0f * static_cast<float>(q.size())));
         summary.residual_history.push_back(residual_l2);
         q.swap(q_next);
+
+        if (diagnostics_enabled) {
+            StateBounds bounds = compute_state_bounds(q, config.gamma);
+            summary.diagnostics.state_bounds_history.push_back(bounds);
+            if (!bounds.valid) {
+                int cell = bounds.bad_cell >= 0 ? bounds.bad_cell : 0;
+                summary.failed = true;
+                summary.diagnostics.failure = make_failure_snapshot(iter + 1, cell, "invalid state after update", q[cell], config.gamma);
+                return summary;
+            }
+        }
 
         if (residual_l2 < config.convergence_tol) {
             summary.converged = true;

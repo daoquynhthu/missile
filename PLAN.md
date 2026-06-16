@@ -109,10 +109,10 @@ Tasks:
 - [ ] Add least-squares gradient option if needed
 - [ ] Add limiter
 - [ ] Add positive reconstruction guard
-- [ ] Add diagnostic levels OFF/BASIC/DETAILED/VERBOSE
-- [ ] Add state bounds history
-- [ ] Add dt limiter source history
-- [ ] Add failure snapshot for first bad state
+- [x] Add diagnostic levels OFF/BASIC/DETAILED/VERBOSE
+- [x] Add state bounds history
+- [x] Add dt limiter source history
+- [x] Add failure snapshot for first bad state
 - [ ] Add VTK cell output
 
 Gate:

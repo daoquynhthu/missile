@@ -324,3 +324,14 @@ add_test(NAME CfdEulerTest COMMAND TestCfdEuler)
 set_target_properties(TestCfdEuler PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# 11. CFD Diagnostics Test
+add_executable(TestCfdDiagnostics tests/cfd/test_cfd_diagnostics.cpp)
+set_source_files_properties(tests/cfd/test_cfd_diagnostics.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(TestCfdDiagnostics PRIVATE missile_lib)
+set_target_properties(TestCfdDiagnostics PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestCfdDiagnostics PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+add_test(NAME CfdDiagnosticsTest COMMAND TestCfdDiagnostics)
+set_target_properties(TestCfdDiagnostics PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)

@@ -12,6 +12,7 @@ namespace Cfd {
 
 struct CfdSolveSummary {
     CfdForceResult forces;
+    CfdDiagnostics diagnostics;
     std::vector<float> residual_history;
     bool converged = false;
     bool failed = false;
@@ -23,6 +24,11 @@ public:
 
     CfdSolveSummary solve(const FreestreamCondition& condition, const CfdConfig& config);
 
+    CfdSolveSummary solve_from_state(
+        const FreestreamCondition& condition,
+        const CfdConfig& config,
+        const std::vector<ConservativeState>& initial_state);
+
     const CfdMesh& mesh() const { return mesh_; }
 
 private:
@@ -31,4 +37,3 @@ private:
 
 } // namespace Cfd
 } // namespace AeroSim
-

@@ -15,3 +15,7 @@
 - Verification: `cmake --build build --target TestCfdMesh --config Release` passed; `cmake --build build --target TestCfdEuler --config Release` passed; `TestCfdMesh.exe` passed 5/5; `TestCfdEuler.exe` passed 6/6; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler)" --output-on-failure` passed 2/2.
 - Added explicit farfield ghost-state selection for supported supersonic normal inflow/outflow. Inflow uses freestream state; outflow extrapolates the interior state. Non-supersonic-normal farfield remains a limited freestream fallback, not a full characteristic boundary.
 - Verification: `cmake --build build --target TestCfdEuler --config Release` passed; `TestCfdEuler.exe` passed 8/8; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler)" --output-on-failure` passed 2/2.
+- Started Phase 3 diagnostics foundation with `DiagnosticLevel`, state bounds history, dt limiter history, and first bad-state failure snapshot.
+- Added `solve_from_state` for diagnostic injection/restart-style tests without changing the default `solve` entry point.
+- Added `TestCfdDiagnostics` with coverage for state bound extrema, diagnostics not changing first-order results, and injected invalid-state failure snapshots.
+- Verification: `cmake -B build` passed; `cmake --build build --target TestCfdDiagnostics --config Release` passed; `TestCfdDiagnostics.exe` passed 3/3; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics)" --output-on-failure` passed 3/3.
