@@ -36,16 +36,16 @@ Files planned:
 
 Tasks:
 
-- [ ] Define `CfdNode`, `CfdCell`, `CfdFace`, `BoundaryKind`
-- [ ] Implement structured cube mesh using hex-cull wall classification
-- [ ] Implement structured flat plate mesh
-- [ ] Compute face normals, areas, centers
-- [ ] Compute cell volumes, centers, `h_min`
-- [ ] Compute wall distance for wall-adjacent cells
-- [ ] Add mesh quality report
-- [ ] Add hard failure for negative/zero volume
-- [ ] Add tests for cube wall/farfield face counts
-- [ ] Add tests for flat plate wall area and first-layer height
+- [x] Define `CfdNode`, `CfdCell`, `CfdFace`, `BoundaryKind`
+- [x] Implement structured cube mesh using hex-cull wall classification
+- [x] Implement structured flat plate mesh
+- [x] Compute face normals, areas, centers
+- [x] Compute cell volumes, centers, `h_min`
+- [x] Compute wall distance for wall-adjacent cells
+- [x] Add mesh quality report
+- [x] Add hard failure for negative/zero volume
+- [x] Add tests for cube wall/farfield face counts
+- [x] Add tests for flat plate wall area and first-layer height
 
 Gate:
 
