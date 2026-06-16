@@ -71,17 +71,17 @@ Files planned:
 
 Tasks:
 
-- [ ] Define 5-variable Euler state only
-- [ ] Implement conservative-to-primitive with validity result
-- [ ] Implement HLLC flux
+- [x] Define 5-variable Euler state only
+- [x] Implement conservative-to-primitive with validity result
+- [x] Implement HLLC flux
 - [ ] Implement farfield boundary for supported supersonic cases
-- [ ] Implement slip wall direct pressure flux or validated reflected ghost
-- [ ] Implement global inviscid timestep
-- [ ] Implement first-order update
+- [x] Implement slip wall direct pressure flux or validated reflected ghost
+- [x] Implement global inviscid timestep
+- [x] Implement first-order update
 - [ ] Implement body force integration over wall faces only
-- [ ] Add residual history output
-- [ ] Add uniform freestream preservation test
-- [ ] Add slip wall zero mass flux test
+- [x] Add residual history output
+- [x] Add uniform freestream preservation test
+- [x] Add slip wall zero mass flux test
 - [ ] Add symmetric cube force test
 
 Gate:

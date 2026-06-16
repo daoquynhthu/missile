@@ -313,3 +313,14 @@ add_test(NAME CfdMeshTest COMMAND TestCfdMesh)
 set_target_properties(TestCfdMesh PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# 10. CFD Euler Foundation Test
+add_executable(TestCfdEuler tests/cfd/test_cfd_euler.cpp)
+set_source_files_properties(tests/cfd/test_cfd_euler.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(TestCfdEuler PRIVATE missile_lib)
+set_target_properties(TestCfdEuler PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(TestCfdEuler PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+add_test(NAME CfdEulerTest COMMAND TestCfdEuler)
+set_target_properties(TestCfdEuler PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
