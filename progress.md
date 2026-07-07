@@ -60,3 +60,12 @@
 - Extended `TestCfdGpu` and `TestCfdViscous` for the new GPU diagnostics and viscous utilities.
 - Adjusted CFD CMake targets so only `TestCfdGpu` is compiled and device-linked as CUDA. Non-GPU CFD tests are C++ targets again, avoiding unrelated CUDA fatbin/RDC link obligations.
 - Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.
+
+2026-07-07
+- PLAN.md rewritten with GPU-first architecture decision; 10-phase plan defined.
+- Phase 1 (SoA Refactoring) completed.
+- Created `device_mesh.hpp`/`.cu` with `DeviceFaceData`/`DeviceCellData`/`DeviceState` SoA layout.
+- Replaced `gpu_buffers.hpp`/`.cu` (now typedef + stub); rewrote `cfd_residual_gpu.cu` flat SoA kernel; rewrote `reconstruction_gpu.cu` SoA limiter kernel.
+- Created `gpu_solver.hpp` skeleton; updated headers to use `DeviceMesh`.
+- CPU/GPU equivalence test on 13^3 cube mesh added (CFD-GPU-5).
+- Verification: `cmake -B build` passed; `cmake --build build --target TestCfdGpu --config Release` passed; `TestCfdGpu.exe` passed 5/5; `TestCfdMesh.exe` passed 5/5.

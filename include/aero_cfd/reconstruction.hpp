@@ -35,7 +35,7 @@ struct PrimitiveLimiter {
     float p = 1.0f;
 };
 
-class GpuCfdBuffers;
+class DeviceMesh;
 
 std::vector<PrimitiveGradient> compute_green_gauss_gradients(
     const CfdMesh& mesh,
@@ -55,7 +55,7 @@ std::vector<PrimitiveLimiter> compute_barth_jespersen_limiters(
 
 PrimitiveGradient apply_limiter(const PrimitiveGradient& gradient, const PrimitiveLimiter& limiter);
 
-bool apply_limiter_gpu(GpuCfdBuffers& buffers, std::string* error = nullptr);
+bool apply_limiter_gpu(DeviceMesh& mesh, std::string* error = nullptr);
 
 PrimitiveState reconstruct_primitive(
     const PrimitiveState& center,

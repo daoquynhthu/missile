@@ -1,6 +1,6 @@
 #include "aero_cfd/reconstruction.hpp"
 #include "aero_cfd/cuda_utils.hpp"
-#include "aero_cfd/gpu_buffers.hpp"
+#include "aero_cfd/device_mesh.hpp"
 
 #include <cuda_runtime.h>
 
@@ -36,15 +36,18 @@ __global__ void apply_limiter_kernel(PrimitiveGradient* gradients, const Primiti
 
 } // namespace
 
-bool apply_limiter_gpu(GpuCfdBuffers& buffers, std::string* error) {
-    if (buffers.cell_count() <= 0 || !buffers.gradients_device() || !buffers.limiters_device()) {
+bool apply_limiter_gpu(DeviceMesh& mesh, std::string* error) {
+    if (mesh.cell_count() <= 0 || !mesh.gradients_device() || !mesh.limiters_device()) {
         if (error) *error = "GPU gradient/limiter buffers are not ready";
         return false;
     }
 
     int block = 128;
-    int grid = (buffers.cell_count() + block - 1) / block;
-    apply_limiter_kernel<<<grid, block>>>(buffers.gradients_device(), buffers.limiters_device(), buffers.cell_count());
+    int grid = (mesh.cell_count() + block - 1) / block;
+    apply_limiter_kernel<<<grid, block>>>(
+        reinterpret_cast<PrimitiveGradient*>(mesh.gradients_device()),
+        reinterpret_cast<const PrimitiveLimiter*>(mesh.limiters_device()),
+        mesh.cell_count());
     if (!cuda_check(cudaGetLastError(), "apply_limiter_kernel launch", error)) return false;
     return cuda_check(cudaDeviceSynchronize(), "apply_limiter_kernel synchronize", error);
 }

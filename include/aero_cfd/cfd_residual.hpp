@@ -2,7 +2,7 @@
 
 #include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_state.hpp"
-#include "aero_cfd/gpu_buffers.hpp"
+#include "aero_cfd/device_mesh.hpp"
 
 #include <cstddef>
 #include <string>
@@ -19,13 +19,13 @@ bool compute_euler_residual_cpu(
     std::vector<EulerFlux>& residual);
 
 bool compute_euler_residual_gpu(
-    GpuCfdBuffers& buffers,
+    DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
     std::string* error = nullptr);
 
 bool compute_euler_residual_gpu_timed(
-    GpuCfdBuffers& buffers,
+    DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
     float* elapsed_ms,

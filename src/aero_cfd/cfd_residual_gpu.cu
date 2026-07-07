@@ -8,189 +8,221 @@ namespace Cfd {
 
 namespace {
 
-__device__ bool d_conservative_to_primitive(ConservativeState q, float gamma, PrimitiveState& w) {
-    if (q.rho <= 0.0f || !isfinite(q.rho)) return false;
-    float inv_rho = 1.0f / q.rho;
-    w.rho = q.rho;
-    w.u = q.rho_u * inv_rho;
-    w.v = q.rho_v * inv_rho;
-    w.w = q.rho_w * inv_rho;
-    float kinetic = 0.5f * (w.u*w.u + w.v*w.v + w.w*w.w);
-    w.p = (gamma - 1.0f) * (q.rho_E - q.rho * kinetic);
-    return isfinite(w.rho) && isfinite(w.u) && isfinite(w.v) && isfinite(w.w) &&
-        isfinite(w.p) && w.p > 0.0f;
+__device__ bool d_conservative_to_primitive(const float* q, int cell, int nvar, float gamma, float& rho, float& u, float& v, float& w, float& p) {
+    rho = q[cell * nvar + 0];
+    if (rho <= 0.0f || !isfinite(rho)) return false;
+    float inv_rho = 1.0f / rho;
+    u = q[cell * nvar + 1] * inv_rho;
+    v = q[cell * nvar + 2] * inv_rho;
+    w = q[cell * nvar + 3] * inv_rho;
+    float kinetic = 0.5f * (u*u + v*v + w*w);
+    p = (gamma - 1.0f) * (q[cell * nvar + 4] - rho * kinetic);
+    return isfinite(rho) && isfinite(u) && isfinite(v) && isfinite(w) && isfinite(p) && p > 0.0f;
 }
 
-__device__ ConservativeState d_primitive_to_conservative(PrimitiveState w, float gamma) {
-    float kinetic = 0.5f * (w.u*w.u + w.v*w.v + w.w*w.w);
-    ConservativeState q;
-    q.rho = w.rho;
-    q.rho_u = w.rho * w.u;
-    q.rho_v = w.rho * w.v;
-    q.rho_w = w.rho * w.w;
-    q.rho_E = w.p / (gamma - 1.0f) + w.rho * kinetic;
-    return q;
+__device__ float d_speed_of_sound(float rho, float p, float gamma) {
+    return sqrtf(gamma * p / rho);
 }
 
-__device__ float d_speed_of_sound(PrimitiveState w, float gamma) {
-    return sqrtf(gamma * w.p / w.rho);
+__device__ void d_physical_flux(float rho, float u, float v, float w, float p, float gamma,
+    float nx, float ny, float nz, float& mass, float& mom_x, float& mom_y, float& mom_z, float& energy) {
+    float vn = u*nx + v*ny + w*nz;
+    float kinetic = 0.5f * (u*u + v*v + w*w);
+    float rho_E = p / (gamma - 1.0f) + rho * kinetic;
+    mass = rho * vn;
+    mom_x = rho * u * vn + p * nx;
+    mom_y = rho * v * vn + p * ny;
+    mom_z = rho * w * vn + p * nz;
+    energy = (rho_E + p) * vn;
 }
 
-__device__ EulerFlux d_physical_flux(PrimitiveState w, float gamma, float nx, float ny, float nz) {
-    float vn = w.u*nx + w.v*ny + w.w*nz;
-    float kinetic = 0.5f * (w.u*w.u + w.v*w.v + w.w*w.w);
-    float rho_E = w.p / (gamma - 1.0f) + w.rho * kinetic;
-
-    EulerFlux f;
-    f.mass = w.rho * vn;
-    f.mom_x = w.rho * w.u * vn + w.p * nx;
-    f.mom_y = w.rho * w.v * vn + w.p * ny;
-    f.mom_z = w.rho * w.w * vn + w.p * nz;
-    f.energy = (rho_E + w.p) * vn;
-    return f;
+__device__ void d_slip_wall_flux(float p, float nx, float ny, float nz,
+    float& mass, float& mom_x, float& mom_y, float& mom_z, float& energy) {
+    mass = 0.0f;
+    mom_x = p * nx;
+    mom_y = p * ny;
+    mom_z = p * nz;
+    energy = 0.0f;
 }
 
-__device__ EulerFlux d_slip_wall_flux(PrimitiveState w, float nx, float ny, float nz) {
-    EulerFlux f;
-    f.mass = 0.0f;
-    f.mom_x = w.p * nx;
-    f.mom_y = w.p * ny;
-    f.mom_z = w.p * nz;
-    f.energy = 0.0f;
-    return f;
+__device__ void d_farfield_ghost_state(float /*left_rho*/, float left_u, float left_v, float left_w, float /*left_p*/,
+    float /*left_a*/, float inf_u, float inf_v, float inf_w, float inf_a,
+    float nx, float ny, float nz,
+    float& ghost_u, float& ghost_v, float& ghost_w) {
+    float vn_inf = inf_u*nx + inf_v*ny + inf_w*nz;
+    if (vn_inf >= inf_a) {
+        ghost_u = left_u;
+        ghost_v = left_v;
+        ghost_w = left_w;
+    } else {
+        ghost_u = inf_u;
+        ghost_v = inf_v;
+        ghost_w = inf_w;
+    }
 }
 
-__device__ PrimitiveState d_farfield_ghost_state(PrimitiveState left, PrimitiveState freestream, float gamma,
-    float nx, float ny, float nz) {
-    float vn_inf = freestream.u*nx + freestream.v*ny + freestream.w*nz;
-    float a_inf = d_speed_of_sound(freestream, gamma);
-    if (vn_inf >= a_inf) return left;
-    return freestream;
-}
-
-__device__ EulerFlux d_hllc_flux(PrimitiveState left, PrimitiveState right, float gamma, float nx, float ny, float nz) {
-    float vn_l = left.u*nx + left.v*ny + left.w*nz;
-    float vn_r = right.u*nx + right.v*ny + right.w*nz;
-    float a_l = d_speed_of_sound(left, gamma);
-    float a_r = d_speed_of_sound(right, gamma);
+__device__ void d_hllc_flux(
+    float rhoL, float uL, float vL, float wL, float pL,
+    float rhoR, float uR, float vR, float wR, float pR,
+    float gamma, float nx, float ny, float nz,
+    float& mass, float& mom_x, float& mom_y, float& mom_z, float& energy) {
+    float vn_l = uL*nx + vL*ny + wL*nz;
+    float vn_r = uR*nx + vR*ny + wR*nz;
+    float a_l = d_speed_of_sound(rhoL, pL, gamma);
+    float a_r = d_speed_of_sound(rhoR, pR, gamma);
     float s_l = fminf(vn_l - a_l, vn_r - a_r);
     float s_r = fmaxf(vn_l + a_l, vn_r + a_r);
 
-    EulerFlux f_l = d_physical_flux(left, gamma, nx, ny, nz);
-    EulerFlux f_r = d_physical_flux(right, gamma, nx, ny, nz);
-    ConservativeState q_l = d_primitive_to_conservative(left, gamma);
-    ConservativeState q_r = d_primitive_to_conservative(right, gamma);
+    float fL_mass, fL_mx, fL_my, fL_mz, fL_en;
+    float fR_mass, fR_mx, fR_my, fR_mz, fR_en;
+    d_physical_flux(rhoL, uL, vL, wL, pL, gamma, nx, ny, nz, fL_mass, fL_mx, fL_my, fL_mz, fL_en);
+    d_physical_flux(rhoR, uR, vR, wR, pR, gamma, nx, ny, nz, fR_mass, fR_mx, fR_my, fR_mz, fR_en);
 
-    if (s_l >= 0.0f) return f_l;
-    if (s_r <= 0.0f) return f_r;
+    if (s_l >= 0.0f) { mass = fL_mass; mom_x = fL_mx; mom_y = fL_my; mom_z = fL_mz; energy = fL_en; return; }
+    if (s_r <= 0.0f) { mass = fR_mass; mom_x = fR_mx; mom_y = fR_my; mom_z = fR_mz; energy = fR_en; return; }
 
-    float denom = left.rho * (s_l - vn_l) - right.rho * (s_r - vn_r);
-    float s_m = (right.p - left.p + left.rho*vn_l*(s_l - vn_l) - right.rho*vn_r*(s_r - vn_r)) / denom;
+    float denom = rhoL * (s_l - vn_l) - rhoR * (s_r - vn_r);
+    float s_m = (pR - pL + rhoL*vn_l*(s_l - vn_l) - rhoR*vn_r*(s_r - vn_r)) / denom;
 
     if (s_m >= 0.0f) {
-        float rho_star = left.rho * (s_l - vn_l) / (s_l - s_m);
-        float e_l = q_l.rho_E / left.rho;
-        float e_star = e_l + (s_m - vn_l) * (s_m + left.p / (left.rho * (s_l - vn_l)));
-        ConservativeState q_star;
-        q_star.rho = rho_star;
-        q_star.rho_u = rho_star * (left.u + (s_m - vn_l) * nx);
-        q_star.rho_v = rho_star * (left.v + (s_m - vn_l) * ny);
-        q_star.rho_w = rho_star * (left.w + (s_m - vn_l) * nz);
-        q_star.rho_E = rho_star * e_star;
+        float rho_star = rhoL * (s_l - vn_l) / (s_l - s_m);
+        float kineticL = 0.5f * (uL*uL + vL*vL + wL*wL);
+        float e_l = pL / ((gamma - 1.0f) * rhoL) + kineticL;
+        float e_star = e_l + (s_m - vn_l) * (s_m + pL / (rhoL * (s_l - vn_l)));
+        float qL_rho = rhoL;
+        float qL_rhou = rhoL * uL;
+        float qL_rhov = rhoL * vL;
+        float qL_rhow = rhoL * wL;
+        float qL_rhoE = pL / (gamma - 1.0f) + rhoL * kineticL;
 
-        EulerFlux f = f_l;
-        f.mass += s_l * (q_star.rho - q_l.rho);
-        f.mom_x += s_l * (q_star.rho_u - q_l.rho_u);
-        f.mom_y += s_l * (q_star.rho_v - q_l.rho_v);
-        f.mom_z += s_l * (q_star.rho_w - q_l.rho_w);
-        f.energy += s_l * (q_star.rho_E - q_l.rho_E);
-        return f;
+        float qs_rho = rho_star;
+        float qs_rhou = rho_star * (uL + (s_m - vn_l) * nx);
+        float qs_rhov = rho_star * (vL + (s_m - vn_l) * ny);
+        float qs_rhow = rho_star * (wL + (s_m - vn_l) * nz);
+        float qs_rhoE = rho_star * e_star;
+
+        mass = fL_mass + s_l * (qs_rho - qL_rho);
+        mom_x = fL_mx + s_l * (qs_rhou - qL_rhou);
+        mom_y = fL_my + s_l * (qs_rhov - qL_rhov);
+        mom_z = fL_mz + s_l * (qs_rhow - qL_rhow);
+        energy = fL_en + s_l * (qs_rhoE - qL_rhoE);
+    } else {
+        float rho_star = rhoR * (s_r - vn_r) / (s_r - s_m);
+        float kineticR = 0.5f * (uR*uR + vR*vR + wR*wR);
+        float e_r = pR / ((gamma - 1.0f) * rhoR) + kineticR;
+        float e_star = e_r + (s_m - vn_r) * (s_m + pR / (rhoR * (s_r - vn_r)));
+        float qR_rho = rhoR;
+        float qR_rhou = rhoR * uR;
+        float qR_rhov = rhoR * vR;
+        float qR_rhow = rhoR * wR;
+        float qR_rhoE = pR / (gamma - 1.0f) + rhoR * kineticR;
+
+        float qs_rho = rho_star;
+        float qs_rhou = rho_star * (uR + (s_m - vn_r) * nx);
+        float qs_rhov = rho_star * (vR + (s_m - vn_r) * ny);
+        float qs_rhow = rho_star * (wR + (s_m - vn_r) * nz);
+        float qs_rhoE = rho_star * e_star;
+
+        mass = fR_mass + s_r * (qs_rho - qR_rho);
+        mom_x = fR_mx + s_r * (qs_rhou - qR_rhou);
+        mom_y = fR_my + s_r * (qs_rhov - qR_rhov);
+        mom_z = fR_mz + s_r * (qs_rhow - qR_rhow);
+        energy = fR_en + s_r * (qs_rhoE - qR_rhoE);
     }
-
-    float rho_star = right.rho * (s_r - vn_r) / (s_r - s_m);
-    float e_r = q_r.rho_E / right.rho;
-    float e_star = e_r + (s_m - vn_r) * (s_m + right.p / (right.rho * (s_r - vn_r)));
-    ConservativeState q_star;
-    q_star.rho = rho_star;
-    q_star.rho_u = rho_star * (right.u + (s_m - vn_r) * nx);
-    q_star.rho_v = rho_star * (right.v + (s_m - vn_r) * ny);
-    q_star.rho_w = rho_star * (right.w + (s_m - vn_r) * nz);
-    q_star.rho_E = rho_star * e_star;
-
-    EulerFlux f = f_r;
-    f.mass += s_r * (q_star.rho - q_r.rho);
-    f.mom_x += s_r * (q_star.rho_u - q_r.rho_u);
-    f.mom_y += s_r * (q_star.rho_v - q_r.rho_v);
-    f.mom_z += s_r * (q_star.rho_w - q_r.rho_w);
-    f.energy += s_r * (q_star.rho_E - q_r.rho_E);
-    return f;
-}
-
-__device__ void d_add_scaled(EulerFlux* residual, int cell, EulerFlux flux, float scale) {
-    atomicAdd(&residual[cell].mass, flux.mass * scale);
-    atomicAdd(&residual[cell].mom_x, flux.mom_x * scale);
-    atomicAdd(&residual[cell].mom_y, flux.mom_y * scale);
-    atomicAdd(&residual[cell].mom_z, flux.mom_z * scale);
-    atomicAdd(&residual[cell].energy, flux.energy * scale);
 }
 
 __global__ void euler_residual_kernel(
-    const CfdFace* faces,
-    int face_count,
-    const ConservativeState* q,
-    PrimitiveState freestream,
+    const float* d_nx, const float* d_ny, const float* d_nz,
+    const float* d_area,
+    const int* d_left_cell, const int* d_right_cell,
+    const int* d_boundary,
+    const float* d_q,
+    int face_count, int nvar,
     float gamma,
-    EulerFlux* residual,
-    int* failed) {
+    float inf_u, float inf_v, float inf_w, float inf_a,
+    float* d_residual,
+    int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
 
-    CfdFace face = faces[idx];
-    PrimitiveState wl;
-    if (!d_conservative_to_primitive(q[face.left_cell], gamma, wl)) {
-        atomicExch(failed, 1);
+    int left = d_left_cell[idx];
+    int bnd = d_boundary[idx];
+    float nx = d_nx[idx];
+    float ny = d_ny[idx];
+    float nz = d_nz[idx];
+    float area = d_area[idx];
+
+    float rhoL, uL, vL, wL, pL;
+    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+        atomicExch(d_failed, 1);
         return;
     }
 
-    EulerFlux flux;
-    if (face.boundary == BoundaryKind::Interior) {
-        PrimitiveState wr;
-        if (!d_conservative_to_primitive(q[face.right_cell], gamma, wr)) {
-            atomicExch(failed, 1);
+    float mass, mom_x, mom_y, mom_z, energy;
+
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        float rhoR, uR, vR, wR, pR;
+        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+            atomicExch(d_failed, 1);
             return;
         }
-        flux = d_hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
-    } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
-        flux = d_slip_wall_flux(wl, face.nx, face.ny, face.nz);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, rhoR, uR, vR, wR, pR, gamma, nx, ny, nz,
+            mass, mom_x, mom_y, mom_z, energy);
+    } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall)) {
+        d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy);
     } else {
-        PrimitiveState wr = d_farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
-        flux = d_hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
+        float aL = d_speed_of_sound(rhoL, pL, gamma);
+        float ghu, ghv, ghw;
+        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, aL, inf_u, inf_v, inf_w, inf_a, nx, ny, nz, ghu, ghv, ghw);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, 1.0f, ghu, ghv, ghw, 1.0f / gamma, gamma, nx, ny, nz,
+            mass, mom_x, mom_y, mom_z, energy);
     }
 
-    d_add_scaled(residual, face.left_cell, flux, -face.area);
-    if (face.boundary == BoundaryKind::Interior) {
-        d_add_scaled(residual, face.right_cell, flux, face.area);
+    float fmass = mass * area;
+    float fmx = mom_x * area;
+    float fmy = mom_y * area;
+    float fmz = mom_z * area;
+    float fen = energy * area;
+
+    atomicAdd(&d_residual[left * nvar + 0], -fmass);
+    atomicAdd(&d_residual[left * nvar + 1], -fmx);
+    atomicAdd(&d_residual[left * nvar + 2], -fmy);
+    atomicAdd(&d_residual[left * nvar + 3], -fmz);
+    atomicAdd(&d_residual[left * nvar + 4], -fen);
+
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        atomicAdd(&d_residual[right * nvar + 0], fmass);
+        atomicAdd(&d_residual[right * nvar + 1], fmx);
+        atomicAdd(&d_residual[right * nvar + 2], fmy);
+        atomicAdd(&d_residual[right * nvar + 3], fmz);
+        atomicAdd(&d_residual[right * nvar + 4], fen);
     }
 }
 
 bool launch_euler_residual_kernel(
-    GpuCfdBuffers& buffers,
+    DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
     int* d_failed,
     std::string* error) {
-    if (!buffers.clear_residual(error)) return false;
+    if (!mesh.clear_residual(error)) return false;
     if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) return false;
 
+    DeviceFaceData fd = mesh.face_data();
+    float a_inf = speed_of_sound(freestream, gamma);
+
     int block = 128;
-    int grid = (buffers.face_count() + block - 1) / block;
+    int grid = (mesh.face_count() + block - 1) / block;
     euler_residual_kernel<<<grid, block>>>(
-        buffers.faces_device(),
-        buffers.face_count(),
-        buffers.state_device(),
-        freestream,
+        fd.nx, fd.ny, fd.nz, fd.area,
+        fd.left_cell, fd.right_cell, fd.boundary,
+        mesh.state_device(),
+        mesh.face_count(), DeviceMesh::NVAR,
         gamma,
-        buffers.residual_device(),
+        freestream.u, freestream.v, freestream.w, a_inf,
+        mesh.residual_device(),
         d_failed);
     if (!cuda_check(cudaGetLastError(), "euler_residual_kernel launch", error)) return false;
     return true;
@@ -209,41 +241,42 @@ bool read_kernel_failed_flag(int* d_failed, std::string* error) {
 } // namespace
 
 bool compute_euler_residual_gpu(
-    GpuCfdBuffers& buffers,
+    DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
     std::string* error) {
-    if (buffers.cell_count() <= 0 || buffers.face_count() <= 0 ||
-        !buffers.faces_device() || !buffers.state_device() || !buffers.residual_device()) {
-        if (error) *error = "GPU buffers are not ready";
+    if (mesh.cell_count() <= 0 || mesh.face_count() <= 0) {
+        if (error) *error = "DeviceMesh is not ready";
         return false;
     }
 
     int* d_failed = nullptr;
-
-    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
-    if (!launch_euler_residual_kernel(buffers, freestream, gamma, d_failed, error)) goto fail;
-    if (!cuda_check(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) goto fail;
-    if (!read_kernel_failed_flag(d_failed, error)) goto fail;
-
+    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) return false;
+    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, error)) {
+        cudaFree(d_failed);
+        return false;
+    }
+    if (!cuda_check(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) {
+        cudaFree(d_failed);
+        return false;
+    }
+    if (!read_kernel_failed_flag(d_failed, error)) {
+        cudaFree(d_failed);
+        return false;
+    }
     cudaFree(d_failed);
     return true;
-
-fail:
-    cudaFree(d_failed);
-    return false;
 }
 
 bool compute_euler_residual_gpu_timed(
-    GpuCfdBuffers& buffers,
+    DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
     float* elapsed_ms,
     std::string* error) {
     if (elapsed_ms) *elapsed_ms = 0.0f;
-    if (buffers.cell_count() <= 0 || buffers.face_count() <= 0 ||
-        !buffers.faces_device() || !buffers.state_device() || !buffers.residual_device()) {
-        if (error) *error = "GPU buffers are not ready";
+    if (mesh.cell_count() <= 0 || mesh.face_count() <= 0) {
+        if (error) *error = "DeviceMesh is not ready";
         return false;
     }
 
@@ -254,7 +287,7 @@ bool compute_euler_residual_gpu_timed(
     if (!cuda_check(cudaEventCreate(&start), "cudaEventCreate start", error)) goto fail;
     if (!cuda_check(cudaEventCreate(&stop), "cudaEventCreate stop", error)) goto fail;
     if (!cuda_check(cudaEventRecord(start), "cudaEventRecord start", error)) goto fail;
-    if (!launch_euler_residual_kernel(buffers, freestream, gamma, d_failed, error)) goto fail;
+    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, error)) goto fail;
     if (!cuda_check(cudaEventRecord(stop), "cudaEventRecord stop", error)) goto fail;
     if (!cuda_check(cudaEventSynchronize(stop), "cudaEventSynchronize stop", error)) goto fail;
     if (elapsed_ms) {
@@ -280,25 +313,23 @@ bool compute_euler_residual_gpu(
     float gamma,
     std::vector<EulerFlux>& residual,
     std::string* error) {
-    GpuCfdBuffers buffers;
-    if (!buffers.upload_mesh(mesh, error)) return false;
-    if (!buffers.upload_state(q, error)) return false;
-    if (!compute_euler_residual_gpu(buffers, freestream, gamma, error)) return false;
-    return buffers.download_residual(residual, error);
+    DeviceMesh device_mesh;
+    if (!device_mesh.upload_mesh(mesh, error)) return false;
+    if (!device_mesh.upload_state(q, error)) return false;
+    if (!compute_euler_residual_gpu(device_mesh, freestream, gamma, error)) return false;
+    return device_mesh.download_residual(residual, error);
 }
 
 std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh) {
-    std::size_t face_bytes = mesh.faces.size() * sizeof(CfdFace);
+    std::size_t face_bytes = mesh.faces.size() * 7 * sizeof(float);
     std::size_t state_reads = 0;
-    std::size_t residual_writes = 0;
     for (const auto& face : mesh.faces) {
-        state_reads += sizeof(ConservativeState);
-        residual_writes += sizeof(EulerFlux);
+        state_reads += DeviceMesh::NVAR * sizeof(float);
         if (face.boundary == BoundaryKind::Interior) {
-            state_reads += sizeof(ConservativeState);
-            residual_writes += sizeof(EulerFlux);
+            state_reads += DeviceMesh::NVAR * sizeof(float);
         }
     }
+    std::size_t residual_writes = state_reads;
     return face_bytes + state_reads + residual_writes;
 }
 
