@@ -18,6 +18,9 @@ struct DeviceFaceData {
     int* left_cell = nullptr;
     int* right_cell = nullptr;
     int* boundary = nullptr;
+    float* cx = nullptr;
+    float* cy = nullptr;
+    float* cz = nullptr;
 };
 
 struct DeviceCellData {
@@ -84,6 +87,10 @@ private:
     float* d_cx_ = nullptr;
     float* d_cy_ = nullptr;
     float* d_cz_ = nullptr;
+
+    float* d_face_cx_ = nullptr;
+    float* d_face_cy_ = nullptr;
+    float* d_face_cz_ = nullptr;
 
     float* d_gradients_ = nullptr;
     float* d_limiters_ = nullptr;

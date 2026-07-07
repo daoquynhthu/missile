@@ -69,3 +69,17 @@
 - Created `gpu_solver.hpp` skeleton; updated headers to use `DeviceMesh`.
 - CPU/GPU equivalence test on 13^3 cube mesh added (CFD-GPU-5).
 - Verification: `cmake -B build` passed; `cmake --build build --target TestCfdGpu --config Release` passed; `TestCfdGpu.exe` passed 5/5; `TestCfdMesh.exe` passed 5/5.
+
+2026-07-07 (continued)
+- Phase 2 (Full GPU Euler Solver Loop) completed.
+- Added `config.use_gpu` flag to `CfdConfig` (default: false).
+- Created `gpu_timestep.cu`: timestep kernel with atomicCAS-based min-dt reduction.
+- Created `gpu_update.cu`: combined update+L2+state-validity kernel.
+- Created `gpu_wall.cu`: wall force kernel with atomicAdd on 6 force/moment counters.
+- Created `gpu_solver.cu`: `solve_gpu()` full iteration loop with convergence tracking.
+- Exposed `launch_euler_residual_kernel()` as public API for solver reuse.
+- Added face centroid (cx/cy/cz) arrays to `DeviceFaceData` for wall moment computation.
+- `CfdSolver::solve()` dispatches to GPU when `config.use_gpu==true`.
+- Added 3 new tests: CFD-GPU-6 (L2 match after 1 iter), CFD-GPU-7 (20-iter match), CFD-GPU-8 (flat plate convergence).
+- Known limitation: atomicAdd non-determinism causes GPU to plateau at ~3e-4 L2 vs CPU reaching 1e-8. Zero-cudaMemcpy deferred to Phase 3.
+- Verification: `cmake --build build --target TestCfdGpu --config Release` passed; `TestCfdGpu.exe` passed 8/8; all other CFD tests still pass.

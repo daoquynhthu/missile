@@ -1,4 +1,6 @@
+#include "aero_cfd/cfd_config.hpp"
 #include "aero_cfd/cfd_residual.hpp"
+#include "aero_cfd/cfd_solver.hpp"
 #include "aero_cfd/reconstruction.hpp"
 #include "aero_cfd/device_mesh.hpp"
 
@@ -221,6 +223,131 @@ static int test_real_mesh_equivalence() {
     return 0;
 }
 
+static int test_gpu_solver_equivalence_cube() {
+    TEST("CFD-GPU-6 GPU solver L2 matches CPU after 1 iteration on cube mesh");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 0.0f;
+        cond.beta_deg = 0.0f;
+
+        CfdConfig gpu_cfg;
+        gpu_cfg.use_gpu = true;
+        gpu_cfg.max_iter = 1;
+
+        CfdConfig cpu_cfg = gpu_cfg;
+        cpu_cfg.use_gpu = false;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary gpu_result = solver.solve(cond, gpu_cfg);
+        if (gpu_result.failed) FAIL("GPU solve failed");
+
+        CfdSolveSummary cpu_result = solver.solve(cond, cpu_cfg);
+        if (cpu_result.failed) FAIL("CPU solve failed");
+
+        float gpu_l2 = gpu_result.residual_history.empty() ? 0.0f : gpu_result.residual_history.back();
+        float cpu_l2 = cpu_result.residual_history.empty() ? 0.0f : cpu_result.residual_history.back();
+
+        if (std::fabs(gpu_l2 - cpu_l2) > 1e-6f) FAIL("L2 mismatch GPU=%g CPU=%g", gpu_l2, cpu_l2);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_gpu_cpu_convergence_match() {
+    TEST("CFD-GPU-7 GPU-CPU convergence match: 20 iterations on cube mesh");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.cfl = 0.4f;
+        cfg.max_iter = 20;
+        cfg.convergence_tol = 1e-12f;
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 3.0f;
+        cond.beta_deg = 0.0f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdConfig gpu_cfg = cfg; gpu_cfg.use_gpu = true;
+        CfdConfig cpu_cfg = cfg; cpu_cfg.use_gpu = false;
+
+        CfdSolveSummary gpu_result = solver.solve(cond, gpu_cfg);
+        if (gpu_result.failed) FAIL("GPU solve failed");
+
+        CfdSolveSummary cpu_result = solver.solve(cond, cpu_cfg);
+        if (cpu_result.failed) FAIL("CPU solve failed");
+
+        if (cpu_result.residual_history.empty() || gpu_result.residual_history.empty()) FAIL("no convergence history");
+
+        std::size_t n = std::min(gpu_result.residual_history.size(), cpu_result.residual_history.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            if (std::fabs(gpu_result.residual_history[i] - cpu_result.residual_history[i]) > 1e-6f) {
+                FAIL("iter=%zu L2 GPU=%g CPU=%g diff=%g", i,
+                    gpu_result.residual_history[i], cpu_result.residual_history[i],
+                    std::fabs(gpu_result.residual_history[i] - cpu_result.residual_history[i]));
+            }
+        }
+
+        PASS;
+    }
+    return 0;
+}
+
+static int test_gpu_flat_plate_convergence() {
+    TEST("CFD-GPU-8 GPU and CPU converge to similar residual level on flat plate");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 0.0f;
+        cond.beta_deg = 0.0f;
+
+        CfdConfig gpu_cfg;
+        gpu_cfg.use_gpu = true;
+        gpu_cfg.cfl = 0.4f;
+        gpu_cfg.max_iter = 500;
+        gpu_cfg.convergence_tol = 1e-8f;
+
+        CfdConfig cpu_cfg = gpu_cfg;
+        cpu_cfg.use_gpu = false;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary gpu_result = solver.solve(cond, gpu_cfg);
+        if (gpu_result.failed) FAIL("GPU solve failed");
+
+        CfdSolveSummary cpu_result = solver.solve(cond, cpu_cfg);
+        if (cpu_result.failed) FAIL("CPU solve failed");
+
+        if (cpu_result.residual_history.empty() || gpu_result.residual_history.empty()) FAIL("no convergence history");
+
+        float cpu_l2 = cpu_result.residual_history.back();
+        float gpu_l2 = gpu_result.residual_history.back();
+        float ratio = cpu_l2 > 0.0f ? gpu_l2 / cpu_l2 : 1.0f;
+
+        if (ratio > 1e3f) FAIL("GPU/Cpu L2 ratio=%g (GPU=%g CPU=%g)", ratio, gpu_l2, cpu_l2);
+        if (gpu_l2 > 1.0f) FAIL("GPU L2=%g not converged", gpu_l2);
+
+        float cx_tol = 0.1f;
+        if (std::fabs(gpu_result.forces.CX - cpu_result.forces.CX) > cx_tol) FAIL("CX GPU=%g CPU=%g", gpu_result.forces.CX, cpu_result.forces.CX);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -228,6 +355,9 @@ int main() {
     result |= test_gpu_limiter();
     result |= test_gpu_timing();
     result |= test_real_mesh_equivalence();
+    result |= test_gpu_solver_equivalence_cube();
+    result |= test_gpu_cpu_convergence_match();
+    result |= test_gpu_flat_plate_convergence();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

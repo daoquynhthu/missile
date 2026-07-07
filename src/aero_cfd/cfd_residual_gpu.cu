@@ -201,6 +201,8 @@ __global__ void euler_residual_kernel(
     }
 }
 
+} // namespace
+
 bool launch_euler_residual_kernel(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
@@ -227,6 +229,8 @@ bool launch_euler_residual_kernel(
     if (!cuda_check(cudaGetLastError(), "euler_residual_kernel launch", error)) return false;
     return true;
 }
+
+namespace {
 
 bool read_kernel_failed_flag(int* d_failed, std::string* error) {
     int failed = 0;

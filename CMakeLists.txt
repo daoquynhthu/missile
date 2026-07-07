@@ -345,6 +345,8 @@ set_target_properties(TestCfdViscous PROPERTIES
 
 # 14. CFD GPU Production Path Test
 add_executable(TestCfdGpu tests/cfd/test_cfd_gpu.cpp)
+
+
 set_source_files_properties(tests/cfd/test_cfd_gpu.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdGpu PRIVATE missile_lib)
 set_target_properties(TestCfdGpu PROPERTIES CUDA_SEPARABLE_COMPILATION ON)

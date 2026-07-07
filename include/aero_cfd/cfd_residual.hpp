@@ -18,6 +18,13 @@ bool compute_euler_residual_cpu(
     float gamma,
     std::vector<EulerFlux>& residual);
 
+bool launch_euler_residual_kernel(
+    DeviceMesh& mesh,
+    const PrimitiveState& freestream,
+    float gamma,
+    int* d_failed,
+    std::string* error = nullptr);
+
 bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,

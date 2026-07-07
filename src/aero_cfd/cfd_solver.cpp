@@ -1,5 +1,6 @@
 #include "aero_cfd/cfd_solver.hpp"
 #include "aero_cfd/cfd_residual.hpp"
+#include "aero_cfd/gpu_solver.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -164,6 +165,24 @@ bool CfdSolver::load_mesh(const CfdMesh& mesh) {
 }
 
 CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const CfdConfig& config) {
+    if (config.use_gpu) {
+        DeviceMesh d_mesh;
+        if (!d_mesh.upload_mesh(mesh_)) {
+            CfdSolveSummary s;
+            s.failed = true;
+            return s;
+        }
+        PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
+        ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
+        std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
+        if (!d_mesh.upload_state(q)) {
+            CfdSolveSummary s;
+            s.failed = true;
+            return s;
+        }
+        return solve_gpu(d_mesh, condition, config);
+    }
+
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
     std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);

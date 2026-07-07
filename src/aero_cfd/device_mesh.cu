@@ -34,6 +34,9 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     d_cx_ = other.d_cx_;
     d_cy_ = other.d_cy_;
     d_cz_ = other.d_cz_;
+    d_face_cx_ = other.d_face_cx_;
+    d_face_cy_ = other.d_face_cy_;
+    d_face_cz_ = other.d_face_cz_;
     d_gradients_ = other.d_gradients_;
     d_limiters_ = other.d_limiters_;
     other.cell_count_ = 0;
@@ -46,6 +49,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_boundary_ = nullptr;
     other.d_volume_ = other.d_h_min_ = nullptr;
     other.d_cx_ = other.d_cy_ = other.d_cz_ = nullptr;
+    other.d_face_cx_ = other.d_face_cy_ = other.d_face_cz_ = nullptr;
     other.d_gradients_ = nullptr;
     other.d_limiters_ = nullptr;
     return *this;
@@ -60,6 +64,9 @@ DeviceFaceData DeviceMesh::face_data() const {
     fd.left_cell = d_left_cell_;
     fd.right_cell = d_right_cell_;
     fd.boundary = d_boundary_;
+    fd.cx = d_face_cx_;
+    fd.cy = d_face_cy_;
+    fd.cz = d_face_cz_;
     return fd;
 }
 
@@ -97,6 +104,9 @@ void DeviceMesh::release() {
     cuda_free_and_null(reinterpret_cast<void*&>(d_cx_));
     cuda_free_and_null(reinterpret_cast<void*&>(d_cy_));
     cuda_free_and_null(reinterpret_cast<void*&>(d_cz_));
+    cuda_free_and_null(reinterpret_cast<void*&>(d_face_cx_));
+    cuda_free_and_null(reinterpret_cast<void*&>(d_face_cy_));
+    cuda_free_and_null(reinterpret_cast<void*&>(d_face_cz_));
     cuda_free_and_null(reinterpret_cast<void*&>(d_gradients_));
     cuda_free_and_null(reinterpret_cast<void*&>(d_limiters_));
     cell_count_ = 0;
@@ -139,6 +149,10 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error) {
         temp_boundary[i] = static_cast<int>(mesh.faces[i].boundary);
     }
 
+    if (!alloc(d_face_cx_, nf * sizeof(float), "cudaMalloc face cx")) return false;
+    if (!alloc(d_face_cy_, nf * sizeof(float), "cudaMalloc face cy")) return false;
+    if (!alloc(d_face_cz_, nf * sizeof(float), "cudaMalloc face cz")) return false;
+
     if (!alloc(d_volume_, nc * sizeof(float), "cudaMalloc cell volume")) return false;
     if (!alloc(d_h_min_, nc * sizeof(float), "cudaMalloc cell h_min")) return false;
     if (!alloc(d_cx_, nc * sizeof(float), "cudaMalloc cell cx")) return false;
@@ -158,6 +172,13 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error) {
         if (!copy(&d_right_cell_[i], &f.right_cell, sizeof(int), "cudaMemcpy right_cell")) return false;
     }
     if (!copy(d_boundary_, temp_boundary.data(), nf * sizeof(int), "cudaMemcpy boundary")) return false;
+
+    for (std::size_t i = 0; i < nf; ++i) {
+        const auto& f = mesh.faces[i];
+        if (!copy(&d_face_cx_[i], &f.cx, sizeof(float), "cudaMemcpy face cx")) return false;
+        if (!copy(&d_face_cy_[i], &f.cy, sizeof(float), "cudaMemcpy face cy")) return false;
+        if (!copy(&d_face_cz_[i], &f.cz, sizeof(float), "cudaMemcpy face cz")) return false;
+    }
 
     for (std::size_t i = 0; i < nc; ++i) {
         const auto& c = mesh.cells[i];

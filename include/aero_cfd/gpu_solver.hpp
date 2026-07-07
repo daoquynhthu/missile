@@ -3,6 +3,7 @@
 #include "aero_cfd/cfd_config.hpp"
 #include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_result.hpp"
+#include "aero_cfd/cfd_solver.hpp"
 #include "aero_cfd/cfd_state.hpp"
 #include "aero_cfd/device_mesh.hpp"
 
@@ -12,11 +13,11 @@
 namespace AeroSim {
 namespace Cfd {
 
-struct CfdSolveSummary;
-
-// GPU solver loop — Phase 2 target.
-// Currently a placeholder; the full implementation will replace CfdSolver::solve()
-// with a device-side iteration loop in Phase 2.
+CfdSolveSummary solve_gpu(
+    DeviceMesh& d_mesh,
+    const FreestreamCondition& condition,
+    const CfdConfig& config,
+    std::string* error = nullptr);
 
 } // namespace Cfd
 } // namespace AeroSim
