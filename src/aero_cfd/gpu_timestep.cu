@@ -22,7 +22,7 @@ __global__ void timestep_kernel(
     if (idx >= n_cells) return;
 
     float rho = d_q[idx * nvar + 0];
-    if (rho <= 0.0f) return;
+    if (!__finitef(rho) || rho <= 0.0f) return;
     float inv_rho = 1.0f / rho;
     float u = d_q[idx * nvar + 1] * inv_rho;
     float v = d_q[idx * nvar + 2] * inv_rho;
@@ -30,7 +30,7 @@ __global__ void timestep_kernel(
     float E = d_q[idx * nvar + 4];
     float kinetic = 0.5f * (u*u + v*v + w*w);
     float p = (gamma - 1.0f) * (E - rho * kinetic);
-    if (p <= 0.0f) return;
+    if (!__finitef(p) || p <= 0.0f) return;
 
     float vmag = sqrtf(u*u + v*v + w*w);
     float a = sqrtf(gamma * p / rho);

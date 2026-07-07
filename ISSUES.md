@@ -295,10 +295,100 @@ All 11 previous fixes verified PASS. New re-audit found 11 additional items (3 H
 | Severity | Count | Status |
 |----------|-------|--------|
 | CRITICAL | 0 | |
-| HIGH (open) | 0 | |
-| MEDIUM (open) | 1 | PH2-E-2 (atomicAdd, deferred to Phase 4) |
-| LOW (open) | 1 | PH2-G-1 (cudaMemcpy in loop, deferred to Phase 3) |
-| FIXED (all sessions) | 25 | 11 original + 10 re-audit + PH2-RA-M5 + PH2-A-3 + PH2-F-3 |
+| HIGH (open) | 1 | PH3-H-1 (CfdSolveSummary init, allocation failure) |
+| MEDIUM (open) | 6 | PH2-E-2 (atomicAdd, deferred to Phase 4), PH3-M-1..M-5 |
+| LOW (open) | 4 | PH2-G-1 (cudaMemcpy, deferred), PH3-L-1..L-3 |
+| INFO | 1 | PH3-I-1 (estimate undercount) |
+| FIXED (all sessions) | 25 | All previous |
 | NOT-A-BUG | 5 | Previous 4 + PH2-RA-H4 |
 
-Total: 2 open + 25 fixed + 5 wont-fix = 32 tracked items
+Total: 11 open + 25 fixed + 5 wont-fix = 41 tracked items
+
+## Post-Commit Audit (2026-07-07)
+
+### Verification Results
+
+All 24 previously-fixed issues verified as correctly applied: PH2-A-1, PH2-A-2, PH2-A-3, PH2-A-4, PH2-B-1, PH2-E-1, PH2-E-3, PH2-F-1, PH2-F-2, PH2-F-3, PH2-F-4, PH2-H-1, PH2-H-2, PH2-RA-H1, PH2-RA-H2, PH2-RA-H3, PH2-RA-M1, PH2-RA-M2, PH2-RA-M3, PH2-RA-M4, PH2-RA-M5, PH2-RA-L1, PH2-RA-L2, PH2-RA-L3. No regressions found.
+
+### Free Audit: New Findings
+
+#### HIGH
+
+**PH3-H-1: CfdSolveSummary{true} silently reports success on allocation failure** [HIGH]
+`src/aero_cfd/gpu_solver.cu:149-152`
+
+`CfdSolveSummary{true}` uses aggregate initialization — `true` converts to `float(1.0f)` and initializes `CfdForceResult::CX`. The `failed` member stays `false` (default member initializer). If `cudaMalloc` fails, the caller receives a summary with `failed = false` and `forces.CX = 1.0f` (garbage).
+
+Fix: `CfdSolveSummary s; s.failed = true; return s;`
+
+#### MEDIUM
+
+**PH3-M-1: Missing NaN guard in gpu_timestep.cu kernel checks** [MEDIUM]
+`src/aero_cfd/gpu_timestep.cu:25,33`
+
+`if (rho <= 0.0f) return;` and `if (p <= 0.0f) return;` do not catch NaN — `NaN <= 0.0f` evaluates to `false`. NaN rho/p flows through to produce a finite but wrong dt. Same pattern in `gpu_wall.cu:38,46,56`.
+
+Fix: Replace `<= 0.0f` with `!(x > 0.0f)` or add `|| !__finitef(x)`.
+
+**PH3-M-2: Missing NaN guard in wall force gradient extrapolation fallback** [MEDIUM]
+`src/aero_cfd/gpu_wall.cu:48-56`
+
+If gradients contain NaN, extrapolated `p` becomes NaN. The check `p <= 0.0f` does not catch NaN, so NaN pressure propagates into force coefficients.
+
+Fix: `if (!__finitef(p) || p <= 0.0f)`
+
+**PH3-M-3: Missing cell-index bounds check in euler_residual_kernel** [MEDIUM]
+`src/aero_cfd/cfd_residual_gpu.cu:152,168,199`
+
+`d_left_cell[idx]` and `d_right_cell[idx]` used as array indices without validation. A corrupted mesh causes out-of-bounds device memory access (hard GPU context loss). Same issue in `gpu_wall.cu:37`.
+
+Fix: Add `if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }` (requires passing `n_cells` to kernel).
+
+**PH3-M-4: reinterpret_cast<void*&> strict-aliasing violation in FREE_AND_ASSERT** [MEDIUM]
+`src/aero_cfd/device_mesh.cu:119`
+
+Casting `float*`/`int*` lvalues to `void*&` violates C++ strict aliasing rules (UB). Formal UB though accepted by all CUDA compilers in practice.
+
+Fix: Replace with template `cuda_free_and_null<T>(T*& ptr)`.
+
+**PH3-M-5: Hardcoded 15 for gradient stride (fragile against struct changes)** [MEDIUM]
+`src/aero_cfd/gpu_wall.cu:52`, `src/aero_cfd/device_mesh.cu:257`
+
+`PrimitiveGradient` has 15 float members, but the code uses magic number `15` instead of `sizeof(PrimitiveGradient)/sizeof(float)`. If struct is extended, these sites silently misalign.
+
+Fix: Use a named constant, e.g. `DeviceMesh::NGRAD`.
+
+#### LOW
+
+**PH3-L-1: Redundant __finitef(rho) in d_conservative_to_primitive return** [LOW]
+`src/aero_cfd/cfd_residual_gpu.cu:20`
+
+`rho` already checked at line 13 before any modification; return check is dead code.
+
+**PH3-L-2: #include <cuda_runtime_api.h> placed between function declarations** [LOW]
+`include/aero_cfd/cfd_residual.hpp:21`
+
+Include in the middle of the namespace, unconventional. Should be at top of file.
+
+**PH3-L-3: Hardcoded pi constant** [LOW]
+`src/aero_cfd/gpu_solver.cu:107`
+
+`3.14159265358979323846f` instead of `M_PI` from `<cmath>`.
+
+#### INFO
+
+**PH3-I-1: estimate_euler_residual_gpu_bytes undercounts memory traffic** [INFO]
+`src/aero_cfd/cfd_residual_gpu.cu:333-344`
+
+Omits 3 int arrays (left_cell, right_cell, boundary) from face memory estimate. Used only for test bandwidth calculation.
+
+### Summary
+
+| Severity | Count | IDs |
+|----------|-------|------|
+| HIGH     | 1 | PH3-H-1 (CfdSolveSummary init) |
+| MEDIUM   | 5 | PH3-M-1 (NaN in timestep), PH3-M-2 (NaN in wall gradient), PH3-M-3 (cell index bounds), PH3-M-4 (strict-aliasing), PH3-M-5 (magic 15) |
+| LOW      | 3 | PH3-L-1 (redundant __finitef), PH3-L-2 (include placement), PH3-L-3 (hardcoded pi) |
+| INFO     | 1 | PH3-I-1 (estimate undercount) |
+
+Total: 10 new findings.

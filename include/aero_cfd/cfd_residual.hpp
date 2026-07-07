@@ -5,6 +5,7 @@
 #include "aero_cfd/device_mesh.hpp"
 
 #include <cstddef>
+#include <cuda_runtime_api.h>
 #include <string>
 #include <vector>
 
@@ -17,8 +18,6 @@ bool compute_euler_residual_cpu(
     const PrimitiveState& freestream,
     float gamma,
     std::vector<EulerFlux>& residual);
-
-#include <cuda_runtime_api.h>
 
 bool launch_euler_residual_kernel(
     DeviceMesh& mesh,

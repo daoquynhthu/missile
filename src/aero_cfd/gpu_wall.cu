@@ -22,7 +22,7 @@ __global__ void wall_force_kernel(
     const int* d_left_cell,
     const int* d_boundary,
     const float* d_cx, const float* d_cy, const float* d_cz,
-    int face_count,
+    int face_count, int n_cells,
     float* d_forces,
     const float* d_gradients,
     const float* d_cell_cx, const float* d_cell_cy, const float* d_cell_cz) {
@@ -34,8 +34,9 @@ __global__ void wall_force_kernel(
         bnd != static_cast<int>(BoundaryKind::NoSlipWall)) return;
 
     int left = d_left_cell[idx];
+    if (left < 0 || left >= n_cells) return;
     float rho = d_q[left * nvar + 0];
-    if (rho <= 0.0f) return;
+    if (!__finitef(rho) || rho <= 0.0f) return;
     float inv_rho = 1.0f / rho;
     float u = d_q[left * nvar + 1] * inv_rho;
     float v = d_q[left * nvar + 2] * inv_rho;
@@ -43,17 +44,17 @@ __global__ void wall_force_kernel(
     float E = d_q[left * nvar + 4];
     float kinetic = 0.5f * (u*u + v*v + w*w);
     float p = (gamma - 1.0f) * (E - rho * kinetic);
-    if (p <= 0.0f) return;
+    if (!__finitef(p) || p <= 0.0f) return;
 
     if (d_gradients) {
         float dr = d_cx[idx] - d_cell_cx[left];
         float ds = d_cy[idx] - d_cell_cy[left];
         float dt = d_cz[idx] - d_cell_cz[left];
-        int g_base = left * 15;
+        int g_base = left * DeviceMesh::NGRAD;
         p += d_gradients[g_base + 12] * dr;
         p += d_gradients[g_base + 13] * ds;
         p += d_gradients[g_base + 14] * dt;
-        if (p <= 0.0f) p = (gamma - 1.0f) * (E - rho * kinetic);
+        if (!__finitef(p) || p <= 0.0f) p = (gamma - 1.0f) * (E - rho * kinetic);
     }
 
     float nx = d_nx[idx];
@@ -89,12 +90,13 @@ bool compute_wall_forces_gpu(DeviceMesh& mesh, float gamma, float* d_forces) {
     DeviceFaceData fd = mesh.face_data();
     DeviceCellData cd = mesh.cell_data();
 
+    int nc = static_cast<int>(mesh.cell_count());
     wall_force_kernel<<<grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, gamma,
         fd.nx, fd.ny, fd.nz, fd.area,
         fd.left_cell, fd.boundary,
         fd.cx, fd.cy, fd.cz,
-        nf, d_forces,
+        nf, nc, d_forces,
         mesh.gradients_device(),
         cd.cx, cd.cy, cd.cz);
     if (!cuda_check(cudaGetLastError(), "wall_force kernel launch")) return false;

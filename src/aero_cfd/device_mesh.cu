@@ -106,17 +106,16 @@ ConstDeviceCellData DeviceMesh::cell_data() const {
     return cd;
 }
 
-static bool cuda_free_and_null(void*& ptr) {
-    if (ptr) {
-        cudaError_t err = cudaFree(ptr);
-        ptr = nullptr;
-        return err == cudaSuccess;
-    }
-    return true;
+template <typename T>
+static bool cuda_free_and_null(T*& ptr) {
+    if (!ptr) return true;
+    cudaError_t err = cudaFree(ptr);
+    ptr = nullptr;
+    return err == cudaSuccess;
 }
 
 void DeviceMesh::release() {
-#define FREE_AND_ASSERT(ptr) do { bool ok = cuda_free_and_null(reinterpret_cast<void*&>(ptr)); assert(ok); } while(0)
+#define FREE_AND_ASSERT(ptr) do { bool ok = cuda_free_and_null(ptr); assert(ok); } while(0)
     FREE_AND_ASSERT(d_q_);
     FREE_AND_ASSERT(d_residual_);
     FREE_AND_ASSERT(d_nx_);
@@ -254,7 +253,7 @@ bool DeviceMesh::upload_gradients(const std::vector<PrimitiveGradient>& gradient
     }
     std::size_t nc = static_cast<std::size_t>(cell_count_);
     if (!d_gradients_) {
-        if (!cuda_check(cudaMalloc(&d_gradients_, nc * 15 * sizeof(float)), "cudaMalloc gradients", error)) return false;
+        if (!cuda_check(cudaMalloc(&d_gradients_, nc * DeviceMesh::NGRAD * sizeof(float)), "cudaMalloc gradients", error)) return false;
     }
     return cuda_check(cudaMemcpy(d_gradients_, gradients.data(), nc * sizeof(PrimitiveGradient), cudaMemcpyHostToDevice), "cudaMemcpy upload_gradients", error);
 }

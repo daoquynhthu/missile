@@ -56,6 +56,7 @@ struct ConstDeviceCellData {
 class DeviceMesh {
 public:
     static constexpr int NVAR = 5;
+    static constexpr int NGRAD = 15;
 
     DeviceMesh() = default;
     ~DeviceMesh();

@@ -17,7 +17,7 @@ __device__ bool d_conservative_to_primitive(const float* q, int cell, int nvar, 
     w = q[cell * nvar + 3] * inv_rho;
     float kinetic = 0.5f * (u*u + v*v + w*w);
     p = (gamma - 1.0f) * (q[cell * nvar + 4] - rho * kinetic);
-    return __finitef(rho) && __finitef(u) && __finitef(v) && __finitef(w) && __finitef(p) && p > 0.0f;
+    return __finitef(u) && __finitef(v) && __finitef(w) && __finitef(p) && p > 0.0f;
 }
 
 __device__ float d_speed_of_sound(float rho, float p, float gamma) {
@@ -140,7 +140,7 @@ __global__ void euler_residual_kernel(
     const int* d_left_cell, const int* d_right_cell,
     const int* d_boundary,
     const float* d_q,
-    int face_count, int nvar,
+    int face_count, int nvar, int n_cells,
     float gamma,
     float inf_rho, float inf_p,
     float inf_u, float inf_v, float inf_w, float inf_a,
@@ -150,6 +150,7 @@ __global__ void euler_residual_kernel(
     if (idx >= face_count) return;
 
     int left = d_left_cell[idx];
+    if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
     int bnd = d_boundary[idx];
     float nx = d_nx[idx];
     float ny = d_ny[idx];
@@ -166,6 +167,7 @@ __global__ void euler_residual_kernel(
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
+        if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
         float rhoR, uR, vR, wR, pR;
         if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
             atomicExch(d_failed, 1);
@@ -197,11 +199,13 @@ __global__ void euler_residual_kernel(
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
+        if (right >= 0 && right < n_cells) {
         atomicAdd(&d_residual[right * nvar + 0], fmass);
         atomicAdd(&d_residual[right * nvar + 1], fmx);
         atomicAdd(&d_residual[right * nvar + 2], fmy);
         atomicAdd(&d_residual[right * nvar + 3], fmz);
         atomicAdd(&d_residual[right * nvar + 4], fen);
+        }
     }
 }
 
@@ -224,11 +228,12 @@ bool launch_euler_residual_kernel(
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
     int grid = (nf + block - 1) / block;
+    int nc = static_cast<int>(mesh.cell_count());
     euler_residual_kernel<<<grid, block>>>(
         fd.nx, fd.ny, fd.nz, fd.area,
         fd.left_cell, fd.right_cell, fd.boundary,
         mesh.state_device(),
-        nf, DeviceMesh::NVAR,
+        nf, DeviceMesh::NVAR, nc,
         gamma,
         freestream.rho, freestream.p,
         freestream.u, freestream.v, freestream.w, a_inf,

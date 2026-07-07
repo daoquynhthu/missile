@@ -104,8 +104,9 @@ static CfdSolveSummary solve_gpu_impl(
         summary.forces.Cm = forces[4] / std::max(q_inf * config.ref_area * config.ref_length, 1e-30f);
         summary.forces.Cn = forces[5] / std::max(q_inf * config.ref_area * config.ref_span, 1e-30f);
 
-        float alpha = condition.alpha_deg * 3.14159265358979323846f / 180.0f;
-        float beta = condition.beta_deg * 3.14159265358979323846f / 180.0f;
+        constexpr float kPi = 3.14159265358979323846f;
+        float alpha = condition.alpha_deg * kPi / 180.0f;
+        float beta = condition.beta_deg * kPi / 180.0f;
         float ca = std::cos(alpha);
         float sa = std::sin(alpha);
         float cb = std::cos(beta);
@@ -146,10 +147,10 @@ CfdSolveSummary solve_gpu(
     float* d_l2_sum = nullptr;
     float* d_forces = nullptr;
 
-    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); return CfdSolveSummary{true}; }
-    if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(float)), "cudaMalloc d_min_dt", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); return CfdSolveSummary{true}; }
-    if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(float)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); return CfdSolveSummary{true}; }
-    if (!cuda_check(cudaMalloc(&d_forces, 6 * sizeof(float)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); return CfdSolveSummary{true}; }
+    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(float)), "cudaMalloc d_min_dt", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(float)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_forces, 6 * sizeof(float)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); CfdSolveSummary s; s.failed = true; return s; }
 
     return solve_gpu_impl(d_mesh, condition, config, d_failed, d_min_dt, d_l2_sum, d_forces, true, error);
 }
