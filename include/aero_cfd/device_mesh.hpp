@@ -4,6 +4,7 @@
 #include "aero_cfd/cfd_state.hpp"
 #include "aero_cfd/reconstruction.hpp"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -23,12 +24,33 @@ struct DeviceFaceData {
     float* cz = nullptr;
 };
 
+struct ConstDeviceFaceData {
+    const float* nx = nullptr;
+    const float* ny = nullptr;
+    const float* nz = nullptr;
+    const float* area = nullptr;
+    const int* left_cell = nullptr;
+    const int* right_cell = nullptr;
+    const int* boundary = nullptr;
+    const float* cx = nullptr;
+    const float* cy = nullptr;
+    const float* cz = nullptr;
+};
+
 struct DeviceCellData {
     float* volume = nullptr;
     float* h_min = nullptr;
     float* cx = nullptr;
     float* cy = nullptr;
     float* cz = nullptr;
+};
+
+struct ConstDeviceCellData {
+    const float* volume = nullptr;
+    const float* h_min = nullptr;
+    const float* cx = nullptr;
+    const float* cy = nullptr;
+    const float* cz = nullptr;
 };
 
 class DeviceMesh {
@@ -56,11 +78,13 @@ public:
 
     void release();
 
-    int cell_count() const { return cell_count_; }
-    int face_count() const { return face_count_; }
+    std::size_t cell_count() const { return cell_count_; }
+    std::size_t face_count() const { return face_count_; }
 
-    DeviceFaceData face_data() const;
-    DeviceCellData cell_data() const;
+    DeviceFaceData face_data();
+    ConstDeviceFaceData face_data() const;
+    DeviceCellData cell_data();
+    ConstDeviceCellData cell_data() const;
 
     float* state_device() const { return d_q_; }
     float* residual_device() const { return d_residual_; }
@@ -68,8 +92,8 @@ public:
     float* limiters_device() const { return d_limiters_; }
 
 private:
-    int cell_count_ = 0;
-    int face_count_ = 0;
+    std::size_t cell_count_ = 0;
+    std::size_t face_count_ = 0;
 
     float* d_q_ = nullptr;
     float* d_residual_ = nullptr;

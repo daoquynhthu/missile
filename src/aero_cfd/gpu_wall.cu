@@ -1,5 +1,6 @@
 #include "aero_cfd/cuda_utils.hpp"
 #include "aero_cfd/device_mesh.hpp"
+#include "aero_cfd/gpu_solver_internal.hpp"
 
 #include <cuda_runtime.h>
 
@@ -22,7 +23,9 @@ __global__ void wall_force_kernel(
     const int* d_boundary,
     const float* d_cx, const float* d_cy, const float* d_cz,
     int face_count,
-    float* d_forces) {
+    float* d_forces,
+    const float* d_gradients,
+    const float* d_cell_cx, const float* d_cell_cy, const float* d_cell_cz) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
 
@@ -41,6 +44,17 @@ __global__ void wall_force_kernel(
     float kinetic = 0.5f * (u*u + v*v + w*w);
     float p = (gamma - 1.0f) * (E - rho * kinetic);
     if (p <= 0.0f) return;
+
+    if (d_gradients) {
+        float dr = d_cx[idx] - d_cell_cx[left];
+        float ds = d_cy[idx] - d_cell_cy[left];
+        float dt = d_cz[idx] - d_cell_cz[left];
+        int g_base = left * 15;
+        p += d_gradients[g_base + 12] * dr;
+        p += d_gradients[g_base + 13] * ds;
+        p += d_gradients[g_base + 14] * dt;
+        if (p <= 0.0f) p = (gamma - 1.0f) * (E - rho * kinetic);
+    }
 
     float nx = d_nx[idx];
     float ny = d_ny[idx];
@@ -70,15 +84,19 @@ bool compute_wall_forces_gpu(DeviceMesh& mesh, float gamma, float* d_forces) {
     if (!cuda_check(cudaGetLastError(), "init_forces kernel launch")) return false;
 
     int block = 128;
-    int grid = (mesh.face_count() + block - 1) / block;
+    int nf = static_cast<int>(mesh.face_count());
+    int grid = (nf + block - 1) / block;
     DeviceFaceData fd = mesh.face_data();
+    DeviceCellData cd = mesh.cell_data();
 
     wall_force_kernel<<<grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, gamma,
         fd.nx, fd.ny, fd.nz, fd.area,
         fd.left_cell, fd.boundary,
         fd.cx, fd.cy, fd.cz,
-        mesh.face_count(), d_forces);
+        nf, d_forces,
+        mesh.gradients_device(),
+        cd.cx, cd.cy, cd.cz);
     if (!cuda_check(cudaGetLastError(), "wall_force kernel launch")) return false;
     return true;
 }

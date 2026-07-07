@@ -91,14 +91,14 @@ static int test_device_mesh_move() {
         DeviceMesh mesh1;
         std::string error;
         if (!mesh1.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
-        if (mesh1.cell_count() != 2 || mesh1.face_count() != 1) FAIL("counts cells=%d faces=%d", mesh1.cell_count(), mesh1.face_count());
+        if (mesh1.cell_count() != 2 || mesh1.face_count() != 1) FAIL("counts cells=%zu faces=%zu", mesh1.cell_count(), mesh1.face_count());
         if (mesh1.state_device() == nullptr || mesh1.residual_device() == nullptr) FAIL("missing device buffers");
         if (!mesh1.upload_state(q, &error)) FAIL("%s", error.c_str());
         if (!compute_euler_residual_gpu(mesh1, left, 1.4f, &error)) FAIL("%s", error.c_str());
 
         DeviceMesh moved = std::move(mesh1);
-        if (moved.cell_count() != 2) FAIL("moved cell_count=%d", moved.cell_count());
-        if (mesh1.cell_count() != 0) FAIL("source cell_count=%d after move", mesh1.cell_count());
+        if (moved.cell_count() != 2) FAIL("moved cell_count=%zu", moved.cell_count());
+        if (mesh1.cell_count() != 0) FAIL("source cell_count=%zu after move", mesh1.cell_count());
         if (mesh1.state_device() != nullptr) FAIL("source state not null after move");
 
         std::vector<EulerFlux> residual;

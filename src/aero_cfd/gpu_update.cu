@@ -1,6 +1,8 @@
 #include "aero_cfd/cuda_utils.hpp"
 #include "aero_cfd/device_mesh.hpp"
+#include "aero_cfd/gpu_solver_internal.hpp"
 
+#include <cmath>
 #include <cuda_runtime.h>
 
 namespace AeroSim {
@@ -40,7 +42,7 @@ __global__ void update_and_l2_kernel(
     float new_rhow = old_rhow + scale * d_residual[idx * nvar + 3];
     float new_rhoE = old_rhoE + scale * d_residual[idx * nvar + 4];
 
-    if (!isfinite(new_rho) || new_rho <= 0.0f) {
+    if (!__finitef(new_rho) || new_rho <= 0.0f) {
         atomicExch(d_failed, 1);
         return;
     }
@@ -50,16 +52,10 @@ __global__ void update_and_l2_kernel(
     float w = new_rhow * inv_rho;
     float kinetic = 0.5f * (u*u + v*v + w*w);
     float p = (gamma - 1.0f) * (new_rhoE - new_rho * kinetic);
-    if (!isfinite(p) || p <= 0.0f) {
+    if (!__finitef(p) || p <= 0.0f) {
         atomicExch(d_failed, 1);
         return;
     }
-
-    d_q[idx * nvar + 0] = new_rho;
-    d_q[idx * nvar + 1] = new_rhou;
-    d_q[idx * nvar + 2] = new_rhov;
-    d_q[idx * nvar + 3] = new_rhow;
-    d_q[idx * nvar + 4] = new_rhoE;
 
     float dr = new_rho - old_rho;
     float d1 = new_rhou - old_rhou;
@@ -68,6 +64,12 @@ __global__ void update_and_l2_kernel(
     float d4 = new_rhoE - old_rhoE;
     float cell_l2 = dr*dr + d1*d1 + d2*d2 + d3*d3 + d4*d4;
     atomicAdd(d_l2_sum, cell_l2);
+
+    d_q[idx * nvar + 0] = new_rho;
+    d_q[idx * nvar + 1] = new_rhou;
+    d_q[idx * nvar + 2] = new_rhov;
+    d_q[idx * nvar + 3] = new_rhow;
+    d_q[idx * nvar + 4] = new_rhoE;
 }
 
 } // namespace
@@ -80,12 +82,13 @@ bool compute_update_gpu(DeviceMesh& mesh, float min_dt, float gamma,
     if (!cuda_check(cudaGetLastError(), "init_failed kernel launch")) return false;
 
     int block = 128;
-    int grid = (mesh.cell_count() + block - 1) / block;
+    int nc = static_cast<int>(mesh.cell_count());
+    int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();
 
     update_and_l2_kernel<<<grid, block>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
-        mesh.cell_count(), DeviceMesh::NVAR, min_dt, gamma,
+        nc, DeviceMesh::NVAR, min_dt, gamma,
         d_l2_sum, d_failed);
     if (!cuda_check(cudaGetLastError(), "update kernel launch")) return false;
     return true;

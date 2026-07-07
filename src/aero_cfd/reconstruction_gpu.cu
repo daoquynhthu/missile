@@ -37,17 +37,18 @@ __global__ void apply_limiter_kernel(PrimitiveGradient* gradients, const Primiti
 } // namespace
 
 bool apply_limiter_gpu(DeviceMesh& mesh, std::string* error) {
-    if (mesh.cell_count() <= 0 || !mesh.gradients_device() || !mesh.limiters_device()) {
+    if (mesh.cell_count() == 0 || !mesh.gradients_device() || !mesh.limiters_device()) {
         if (error) *error = "GPU gradient/limiter buffers are not ready";
         return false;
     }
 
     int block = 128;
-    int grid = (mesh.cell_count() + block - 1) / block;
+    int nc = static_cast<int>(mesh.cell_count());
+    int grid = (nc + block - 1) / block;
     apply_limiter_kernel<<<grid, block>>>(
         reinterpret_cast<PrimitiveGradient*>(mesh.gradients_device()),
         reinterpret_cast<const PrimitiveLimiter*>(mesh.limiters_device()),
-        mesh.cell_count());
+        nc);
     if (!cuda_check(cudaGetLastError(), "apply_limiter_kernel launch", error)) return false;
     return cuda_check(cudaDeviceSynchronize(), "apply_limiter_kernel synchronize", error);
 }

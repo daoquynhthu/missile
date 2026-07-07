@@ -19,5 +19,15 @@ CfdSolveSummary solve_gpu(
     const CfdConfig& config,
     std::string* error = nullptr);
 
+CfdSolveSummary solve_gpu(
+    DeviceMesh& d_mesh,
+    const FreestreamCondition& condition,
+    const CfdConfig& config,
+    int* d_failed,
+    float* d_min_dt,
+    float* d_l2_sum,
+    float* d_forces,
+    std::string* error = nullptr);
+
 } // namespace Cfd
 } // namespace AeroSim

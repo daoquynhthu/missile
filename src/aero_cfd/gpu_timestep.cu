@@ -1,5 +1,6 @@
 #include "aero_cfd/cuda_utils.hpp"
 #include "aero_cfd/device_mesh.hpp"
+#include "aero_cfd/gpu_solver_internal.hpp"
 
 #include <cfloat>
 #include <cuda_runtime.h>
@@ -10,7 +11,7 @@ namespace Cfd {
 namespace {
 
 __global__ void init_float_max_kernel(float* ptr) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) *ptr = FLT_MAX;
+    *ptr = FLT_MAX;
 }
 
 __global__ void timestep_kernel(
@@ -33,11 +34,12 @@ __global__ void timestep_kernel(
 
     float vmag = sqrtf(u*u + v*v + w*w);
     float a = sqrtf(gamma * p / rho);
-    float dt = cfl * d_h_min[idx] / (vmag + a + 1e-30f);
-    unsigned int old = __float_as_int(d_min_dt[0]);
+    float denom = vmag + a;
+    float dt = cfl * d_h_min[idx] / (denom > 1e-30f ? denom : 1e-30f);
     unsigned int candidate = __float_as_int(dt);
     unsigned int* ptr = reinterpret_cast<unsigned int*>(d_min_dt);
-    while (candidate < old) {
+    unsigned int old = atomicCAS(ptr, __float_as_int(FLT_MAX), candidate);
+    while (old != __float_as_int(FLT_MAX) && candidate < old) {
         unsigned int prev = atomicCAS(ptr, old, candidate);
         if (prev == old) break;
         old = prev;
@@ -51,11 +53,12 @@ bool compute_timestep_gpu(DeviceMesh& mesh, float gamma, float cfl, float* d_min
     if (!cuda_check(cudaGetLastError(), "init_float_max kernel launch")) return false;
 
     int block = 128;
-    int grid = (mesh.cell_count() + block - 1) / block;
+    int nc = static_cast<int>(mesh.cell_count());
+    int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();
 
     timestep_kernel<<<grid, block>>>(
-        mesh.state_device(), mesh.cell_count(), DeviceMesh::NVAR, gamma, cfl,
+        mesh.state_device(), nc, DeviceMesh::NVAR, gamma, cfl,
         cd.volume, cd.h_min, d_min_dt);
     if (!cuda_check(cudaGetLastError(), "timestep kernel launch")) return false;
     return true;

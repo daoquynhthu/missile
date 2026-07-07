@@ -83,3 +83,29 @@
 - Added 3 new tests: CFD-GPU-6 (L2 match after 1 iter), CFD-GPU-7 (20-iter match), CFD-GPU-8 (flat plate convergence).
 - Known limitation: atomicAdd non-determinism causes GPU to plateau at ~3e-4 L2 vs CPU reaching 1e-8. Zero-cudaMemcpy deferred to Phase 3.
 - Verification: `cmake --build build --target TestCfdGpu --config Release` passed; `TestCfdGpu.exe` passed 8/8; all other CFD tests still pass.
+
+2026-07-07
+- Fixed PH2-A-1: `d_farfield_ghost_state` now returns full ghost primitive (rho/p/u/v/w); caller passes actual ghost primitive to `d_hllc_flux` instead of hardcoded 1.0/1/gamma.
+- Fixed PH2-B-1: `cudaEventDestroy(nullptr)` guarded with nullptr check on `fail` path.
+- Verified: `cmake --build build` succeeded (Debug); `TestCfdGpu.exe` (Release) 8/8 passed.
+
+2026-07-07 (cont.)
+- Fixed PH2-A-2: L2 computation moved before state write in `update_and_l2_kernel`.
+- Fixed PH2-E-1: Timestep denominator uses guard `(denom > 1e-30f ? denom : 1e-30f)` instead of inline epsilon.
+- Fixed PH2-E-3: Added `#include <cmath>` to `gpu_update.cu` for `isfinite`.
+- Fixed PH2-F-1: Created `include/aero_cfd/gpu_solver_internal.hpp` shared header for GPU kernel dispatchers; removed fragile forward declarations from `gpu_solver.cu`.
+- Fixed PH2-H-1: Defined `CUDA_KERNEL_CHECK(msg)` macro in `cuda_utils.hpp`.
+- Closed PH2-A-5, PH2-B-2, PH2-B-3 as NOT-A-BUG (d_failed checked before convergence; cudaFree syncs default stream).
+- PH2-H-2 and PH2-A-4 already resolved by PH2-A-1 changes.
+- Closed PH2-C-2 as NOT-A-BUG (no double-free possible).
+- Fixed PH2-F-2: Added caller-allocated `d_failed` overload for `compute_euler_residual_gpu`; self-allocating overload is now a thin wrapper, consistent ownership pattern.
+- Fixed PH2-F-4: Added `ConstDeviceFaceData`/`ConstDeviceCellData` with `const` overloads for `face_data()`/`cell_data()`.
+- Remaining open: PH2-E-2 (atomicAdd plateau, needs structural change for Phase 4), PH2-A-3 (benign CAS performance), PH2-F-3 (pre-alloc API), PH2-G-1 (deferred to Phase 3).
+- Verified: build + all 8 GPU tests pass.
+- Free audit (2026-07-07) found 11 new issues (3 HIGH, 5 MEDIUM, 3 LOW). Fixed all 10: PH2-RA-H1 (HLLC denom clamp), PH2-RA-H2 (HLLC sonic clamp sign-preserving), PH2-RA-H3 (Symmetry BC added to slip-wall), PH2-RA-M1 (cudaFree assert), PH2-RA-M2 (__finitef), PH2-RA-M3 (packed upload), PH2-RA-M4 (size_t), PH2-RA-L1 (redundant thread check), PH2-RA-L2 (start event after clear), PH2-RA-L3 (freestream rho/p pass-through).
+- Verified: build + all 8 GPU tests pass after re-audit fixes.
+- Fixed PH2-RA-M5: Wall force kernel now reconstructs face pressure from gradients (dp_dx/dy/dz . (face - cell)) when gradients are available, falls back to cell-averaged when null.
+- Fixed PH2-A-3: Replaced non-atomic initial read in timestep CAS with atomicCAS(ptr, FLT_MAX, candidate) to eliminate benign data race.
+- Fixed PH2-F-3: Added `solve_gpu` overload with caller-allocated device buffers (d_failed, d_min_dt, d_l2_sum, d_forces) for reuse across multiple calls.
+- Remaining open: PH2-E-2 (atomicAdd non-associativity plateau, deferred to Phase 4 colored partitioning), PH2-G-1 (cudaMemcpy in iteration loop, deferred to Phase 3).
+- Verified: build + all 8 GPU tests pass after 3 additional fixes.

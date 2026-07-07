@@ -7,6 +7,7 @@
 #include "aero_cfd/cuda_utils.hpp"
 #include "aero_cfd/device_mesh.hpp"
 #include "aero_cfd/gpu_solver.hpp"
+#include "aero_cfd/gpu_solver_internal.hpp"
 
 #include <cfloat>
 #include <cmath>
@@ -15,35 +16,23 @@
 namespace AeroSim {
 namespace Cfd {
 
-// Forward declarations for helper functions in sibling .cu files
-bool compute_timestep_gpu(DeviceMesh& mesh, float gamma, float cfl, float* d_min_dt);
-bool compute_update_gpu(DeviceMesh& mesh, float min_dt, float gamma,
-    float* d_l2_sum, int* d_failed);
-bool compute_wall_forces_gpu(DeviceMesh& mesh, float gamma, float* d_forces);
+static void solve_gpu_free(int* d_failed, float* d_min_dt, float* d_l2_sum, float* d_forces) {
+    cudaFree(d_failed); cudaFree(d_min_dt); cudaFree(d_l2_sum); cudaFree(d_forces);
+}
 
-CfdSolveSummary solve_gpu(
+static CfdSolveSummary solve_gpu_impl(
     DeviceMesh& d_mesh,
     const FreestreamCondition& condition,
     const CfdConfig& config,
+    int* d_failed,
+    float* d_min_dt,
+    float* d_l2_sum,
+    float* d_forces,
+    bool owned_buffers,
     std::string* error) {
     CfdSolveSummary summary;
-    if (d_mesh.cell_count() <= 0 || d_mesh.face_count() <= 0) {
-        if (error) *error = "DeviceMesh is empty";
-        summary.failed = true;
-        return summary;
-    }
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
-
-    int* d_failed = nullptr;
-    float* d_min_dt = nullptr;
-    float* d_l2_sum = nullptr;
-    float* d_forces = nullptr;
-
-    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) goto fail;
-    if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(float)), "cudaMalloc d_min_dt", error)) goto fail;
-    if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(float)), "cudaMalloc d_l2_sum", error)) goto fail;
-    if (!cuda_check(cudaMalloc(&d_forces, 6 * sizeof(float)), "cudaMalloc d_forces", error)) goto fail;
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
         if (!compute_timestep_gpu(d_mesh, config.gamma, config.cfl, d_min_dt)) {
@@ -51,7 +40,7 @@ CfdSolveSummary solve_gpu(
             goto fail;
         }
 
-        if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed, error)) {
+        if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed, nullptr, error)) {
             goto fail;
         }
 
@@ -136,11 +125,51 @@ fail:
     summary.failed = true;
 
 cleanup:
-    cudaFree(d_failed);
-    cudaFree(d_min_dt);
-    cudaFree(d_l2_sum);
-    cudaFree(d_forces);
+    if (owned_buffers) solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces);
     return summary;
+}
+
+CfdSolveSummary solve_gpu(
+    DeviceMesh& d_mesh,
+    const FreestreamCondition& condition,
+    const CfdConfig& config,
+    std::string* error) {
+    if (d_mesh.cell_count() == 0 || d_mesh.face_count() == 0) {
+        CfdSolveSummary s;
+        if (error) *error = "DeviceMesh is empty";
+        s.failed = true;
+        return s;
+    }
+
+    int* d_failed = nullptr;
+    float* d_min_dt = nullptr;
+    float* d_l2_sum = nullptr;
+    float* d_forces = nullptr;
+
+    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); return CfdSolveSummary{true}; }
+    if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(float)), "cudaMalloc d_min_dt", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); return CfdSolveSummary{true}; }
+    if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(float)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); return CfdSolveSummary{true}; }
+    if (!cuda_check(cudaMalloc(&d_forces, 6 * sizeof(float)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces); return CfdSolveSummary{true}; }
+
+    return solve_gpu_impl(d_mesh, condition, config, d_failed, d_min_dt, d_l2_sum, d_forces, true, error);
+}
+
+CfdSolveSummary solve_gpu(
+    DeviceMesh& d_mesh,
+    const FreestreamCondition& condition,
+    const CfdConfig& config,
+    int* d_failed,
+    float* d_min_dt,
+    float* d_l2_sum,
+    float* d_forces,
+    std::string* error) {
+    if (d_mesh.cell_count() == 0 || d_mesh.face_count() == 0) {
+        CfdSolveSummary s;
+        if (error) *error = "DeviceMesh is empty";
+        s.failed = true;
+        return s;
+    }
+    return solve_gpu_impl(d_mesh, condition, config, d_failed, d_min_dt, d_l2_sum, d_forces, false, error);
 }
 
 } // namespace Cfd

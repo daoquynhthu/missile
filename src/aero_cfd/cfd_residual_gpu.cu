@@ -10,14 +10,14 @@ namespace {
 
 __device__ bool d_conservative_to_primitive(const float* q, int cell, int nvar, float gamma, float& rho, float& u, float& v, float& w, float& p) {
     rho = q[cell * nvar + 0];
-    if (rho <= 0.0f || !isfinite(rho)) return false;
+    if (rho <= 0.0f || !__finitef(rho)) return false;
     float inv_rho = 1.0f / rho;
     u = q[cell * nvar + 1] * inv_rho;
     v = q[cell * nvar + 2] * inv_rho;
     w = q[cell * nvar + 3] * inv_rho;
     float kinetic = 0.5f * (u*u + v*v + w*w);
     p = (gamma - 1.0f) * (q[cell * nvar + 4] - rho * kinetic);
-    return isfinite(rho) && isfinite(u) && isfinite(v) && isfinite(w) && isfinite(p) && p > 0.0f;
+    return __finitef(rho) && __finitef(u) && __finitef(v) && __finitef(w) && __finitef(p) && p > 0.0f;
 }
 
 __device__ float d_speed_of_sound(float rho, float p, float gamma) {
@@ -45,19 +45,17 @@ __device__ void d_slip_wall_flux(float p, float nx, float ny, float nz,
     energy = 0.0f;
 }
 
-__device__ void d_farfield_ghost_state(float /*left_rho*/, float left_u, float left_v, float left_w, float /*left_p*/,
-    float /*left_a*/, float inf_u, float inf_v, float inf_w, float inf_a,
+__device__ void d_farfield_ghost_state(float left_rho, float left_u, float left_v, float left_w, float left_p,
+    float inf_rho, float inf_p, float inf_u, float inf_v, float inf_w, float inf_a,
     float nx, float ny, float nz,
-    float& ghost_u, float& ghost_v, float& ghost_w) {
+    float& ghost_rho, float& ghost_p, float& ghost_u, float& ghost_v, float& ghost_w) {
     float vn_inf = inf_u*nx + inf_v*ny + inf_w*nz;
     if (vn_inf >= inf_a) {
-        ghost_u = left_u;
-        ghost_v = left_v;
-        ghost_w = left_w;
+        ghost_rho = left_rho; ghost_p = left_p;
+        ghost_u = left_u; ghost_v = left_v; ghost_w = left_w;
     } else {
-        ghost_u = inf_u;
-        ghost_v = inf_v;
-        ghost_w = inf_w;
+        ghost_rho = inf_rho; ghost_p = inf_p;
+        ghost_u = inf_u; ghost_v = inf_v; ghost_w = inf_w;
     }
 }
 
@@ -82,13 +80,16 @@ __device__ void d_hllc_flux(
     if (s_r <= 0.0f) { mass = fR_mass; mom_x = fR_mx; mom_y = fR_my; mom_z = fR_mz; energy = fR_en; return; }
 
     float denom = rhoL * (s_l - vn_l) - rhoR * (s_r - vn_r);
+    if (fabsf(denom) < 1e-30f) denom = copysignf(1e-30f, denom);
     float s_m = (pR - pL + rhoL*vn_l*(s_l - vn_l) - rhoR*vn_r*(s_r - vn_r)) / denom;
 
     if (s_m >= 0.0f) {
         float rho_star = rhoL * (s_l - vn_l) / (s_l - s_m);
         float kineticL = 0.5f * (uL*uL + vL*vL + wL*wL);
         float e_l = pL / ((gamma - 1.0f) * rhoL) + kineticL;
-        float e_star = e_l + (s_m - vn_l) * (s_m + pL / (rhoL * (s_l - vn_l)));
+        float sld_l = s_l - vn_l;
+        if (fabsf(sld_l) < 1e-30f) sld_l = copysignf(1e-30f, sld_l);
+        float e_star = e_l + (s_m - vn_l) * (s_m + pL / (rhoL * sld_l));
         float qL_rho = rhoL;
         float qL_rhou = rhoL * uL;
         float qL_rhov = rhoL * vL;
@@ -110,7 +111,9 @@ __device__ void d_hllc_flux(
         float rho_star = rhoR * (s_r - vn_r) / (s_r - s_m);
         float kineticR = 0.5f * (uR*uR + vR*vR + wR*wR);
         float e_r = pR / ((gamma - 1.0f) * rhoR) + kineticR;
-        float e_star = e_r + (s_m - vn_r) * (s_m + pR / (rhoR * (s_r - vn_r)));
+        float sld_r = s_r - vn_r;
+        if (fabsf(sld_r) < 1e-30f) sld_r = copysignf(1e-30f, sld_r);
+        float e_star = e_r + (s_m - vn_r) * (s_m + pR / (rhoR * sld_r));
         float qR_rho = rhoR;
         float qR_rhou = rhoR * uR;
         float qR_rhov = rhoR * vR;
@@ -139,6 +142,7 @@ __global__ void euler_residual_kernel(
     const float* d_q,
     int face_count, int nvar,
     float gamma,
+    float inf_rho, float inf_p,
     float inf_u, float inf_v, float inf_w, float inf_a,
     float* d_residual,
     int* d_failed) {
@@ -169,13 +173,13 @@ __global__ void euler_residual_kernel(
         }
         d_hllc_flux(rhoL, uL, vL, wL, pL, rhoR, uR, vR, wR, pR, gamma, nx, ny, nz,
             mass, mom_x, mom_y, mom_z, energy);
-    } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall)) {
+    } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy);
     } else {
-        float aL = d_speed_of_sound(rhoL, pL, gamma);
-        float ghu, ghv, ghw;
-        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, aL, inf_u, inf_v, inf_w, inf_a, nx, ny, nz, ghu, ghv, ghw);
-        d_hllc_flux(rhoL, uL, vL, wL, pL, 1.0f, ghu, ghv, ghw, 1.0f / gamma, gamma, nx, ny, nz,
+        float ghrho, ghp, ghu, ghv, ghw;
+        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, inf_rho, inf_p, inf_u, inf_v, inf_w, inf_a,
+            nx, ny, nz, ghrho, ghp, ghu, ghv, ghw);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, ghrho, ghu, ghv, ghw, ghp, gamma, nx, ny, nz,
             mass, mom_x, mom_y, mom_z, energy);
     }
 
@@ -208,21 +212,25 @@ bool launch_euler_residual_kernel(
     const PrimitiveState& freestream,
     float gamma,
     int* d_failed,
+    cudaEvent_t start_event,
     std::string* error) {
     if (!mesh.clear_residual(error)) return false;
     if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) return false;
+    if (start_event && !cuda_check(cudaEventRecord(start_event), "cudaEventRecord start", error)) return false;
 
     DeviceFaceData fd = mesh.face_data();
     float a_inf = speed_of_sound(freestream, gamma);
 
     int block = 128;
-    int grid = (mesh.face_count() + block - 1) / block;
+    int nf = static_cast<int>(mesh.face_count());
+    int grid = (nf + block - 1) / block;
     euler_residual_kernel<<<grid, block>>>(
         fd.nx, fd.ny, fd.nz, fd.area,
         fd.left_cell, fd.right_cell, fd.boundary,
         mesh.state_device(),
-        mesh.face_count(), DeviceMesh::NVAR,
+        nf, DeviceMesh::NVAR,
         gamma,
+        freestream.rho, freestream.p,
         freestream.u, freestream.v, freestream.w, a_inf,
         mesh.residual_device(),
         d_failed);
@@ -248,28 +256,27 @@ bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
+    int* d_failed,
     std::string* error) {
-    if (mesh.cell_count() <= 0 || mesh.face_count() <= 0) {
+    if (mesh.cell_count() == 0 || mesh.face_count() == 0) {
         if (error) *error = "DeviceMesh is not ready";
         return false;
     }
+    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, nullptr, error)) return false;
+    if (!cuda_check(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) return false;
+    return read_kernel_failed_flag(d_failed, error);
+}
 
+bool compute_euler_residual_gpu(
+    DeviceMesh& mesh,
+    const PrimitiveState& freestream,
+    float gamma,
+    std::string* error) {
     int* d_failed = nullptr;
-    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) return false;
-    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, error)) {
-        cudaFree(d_failed);
-        return false;
-    }
-    if (!cuda_check(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) {
-        cudaFree(d_failed);
-        return false;
-    }
-    if (!read_kernel_failed_flag(d_failed, error)) {
-        cudaFree(d_failed);
-        return false;
-    }
+    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) return false;
+    bool ok = compute_euler_residual_gpu(mesh, freestream, gamma, d_failed, error);
     cudaFree(d_failed);
-    return true;
+    return ok;
 }
 
 bool compute_euler_residual_gpu_timed(
@@ -279,7 +286,7 @@ bool compute_euler_residual_gpu_timed(
     float* elapsed_ms,
     std::string* error) {
     if (elapsed_ms) *elapsed_ms = 0.0f;
-    if (mesh.cell_count() <= 0 || mesh.face_count() <= 0) {
+    if (mesh.cell_count() == 0 || mesh.face_count() == 0) {
         if (error) *error = "DeviceMesh is not ready";
         return false;
     }
@@ -290,8 +297,7 @@ bool compute_euler_residual_gpu_timed(
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
     if (!cuda_check(cudaEventCreate(&start), "cudaEventCreate start", error)) goto fail;
     if (!cuda_check(cudaEventCreate(&stop), "cudaEventCreate stop", error)) goto fail;
-    if (!cuda_check(cudaEventRecord(start), "cudaEventRecord start", error)) goto fail;
-    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, error)) goto fail;
+    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, start, error)) goto fail;
     if (!cuda_check(cudaEventRecord(stop), "cudaEventRecord stop", error)) goto fail;
     if (!cuda_check(cudaEventSynchronize(stop), "cudaEventSynchronize stop", error)) goto fail;
     if (elapsed_ms) {
@@ -304,8 +310,8 @@ bool compute_euler_residual_gpu_timed(
     return true;
 
 fail:
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    if (start) cudaEventDestroy(start);
+    if (stop) cudaEventDestroy(stop);
     cudaFree(d_failed);
     return false;
 }
