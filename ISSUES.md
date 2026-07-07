@@ -295,14 +295,14 @@ All 11 previous fixes verified PASS. New re-audit found 11 additional items (3 H
 | Severity | Count | Status |
 |----------|-------|--------|
 | CRITICAL | 0 | |
-| HIGH (open) | 1 | PH3-H-1 (CfdSolveSummary init, allocation failure) |
-| MEDIUM (open) | 6 | PH2-E-2 (atomicAdd, deferred to Phase 4), PH3-M-1..M-5 |
-| LOW (open) | 4 | PH2-G-1 (cudaMemcpy, deferred), PH3-L-1..L-3 |
-| INFO | 1 | PH3-I-1 (estimate undercount) |
-| FIXED (all sessions) | 25 | All previous |
+| HIGH (open) | 0 | |
+| MEDIUM (open) | 1 | PH2-E-2 (atomicAdd, deferred to Phase 4) |
+| LOW (open) | 1 | PH2-G-1 (cudaMemcpy, deferred to Phase 3) |
+| FIXED (all sessions) | 34 | All previous + PH3-H-1, PH3-M-1..M-5, PH3-L-1..L-3 |
 | NOT-A-BUG | 5 | Previous 4 + PH2-RA-H4 |
+| INFO | 1 | PH3-I-1 (estimate undercount, not actionable) |
 
-Total: 11 open + 25 fixed + 5 wont-fix = 41 tracked items
+Total: 2 open + 34 fixed + 5 wont-fix + 1 info = 42 tracked items
 
 ## Post-Commit Audit (2026-07-07)
 
@@ -386,9 +386,9 @@ Omits 3 int arrays (left_cell, right_cell, boundary) from face memory estimate. 
 
 | Severity | Count | IDs |
 |----------|-------|------|
-| HIGH     | 1 | PH3-H-1 (CfdSolveSummary init) |
-| MEDIUM   | 5 | PH3-M-1 (NaN in timestep), PH3-M-2 (NaN in wall gradient), PH3-M-3 (cell index bounds), PH3-M-4 (strict-aliasing), PH3-M-5 (magic 15) |
-| LOW      | 3 | PH3-L-1 (redundant __finitef), PH3-L-2 (include placement), PH3-L-3 (hardcoded pi) |
-| INFO     | 1 | PH3-I-1 (estimate undercount) |
+| HIGH     | 1 | PH3-H-1 (CfdSolveSummary init) — FIXED |
+| MEDIUM   | 5 | PH3-M-1 (NaN in timestep) — FIXED, PH3-M-2 (NaN in wall gradient) — FIXED, PH3-M-3 (cell index bounds) — FIXED, PH3-M-4 (strict-aliasing) — FIXED, PH3-M-5 (magic 15) — FIXED |
+| LOW      | 3 | PH3-L-1 (redundant __finitef) — FIXED, PH3-L-2 (include placement) — FIXED, PH3-L-3 (hardcoded pi) — FIXED |
+| INFO     | 1 | PH3-I-1 (estimate undercount) — not actionable |
 
-Total: 10 new findings.
+Total: 10 new findings. All 9 actionable items fixed. 1 INFO not actionable.

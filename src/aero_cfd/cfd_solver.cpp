@@ -180,7 +180,21 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
             s.failed = true;
             return s;
         }
-        return solve_gpu(d_mesh, condition, config);
+        CfdSolveSummary gpu_result = solve_gpu(d_mesh, condition, config);
+
+        if (config.cpu_oracle && !gpu_result.failed) {
+            CfdConfig cpu_cfg = config;
+            cpu_cfg.use_gpu = false;
+            CfdSolveSummary cpu_result = solve_from_state(condition, cpu_cfg, q);
+            std::string oracle_error;
+            if (!assert_oracle_equivalent(gpu_result, cpu_result, 1e-12f, 1e-10f, &oracle_error)) {
+                std::fprintf(stderr, "[CPU Oracle] FAIL: %s\n", oracle_error.c_str());
+                CfdSolveSummary s;
+                s.failed = true;
+                return s;
+            }
+        }
+        return gpu_result;
     }
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
@@ -289,6 +303,53 @@ CfdSolveSummary CfdSolver::solve_from_state(
     summary.forces.iterations = static_cast<int>(summary.residual_history.size());
     summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
     return summary;
+}
+
+bool assert_oracle_equivalent(
+    const CfdSolveSummary& gpu,
+    const CfdSolveSummary& cpu,
+    float tol_residual,
+    float tol_forces,
+    std::string* error) {
+    std::size_t n = std::min(gpu.residual_history.size(), cpu.residual_history.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        float diff = std::fabs(gpu.residual_history[i] - cpu.residual_history[i]);
+        float base = 1.0f + std::max(std::fabs(gpu.residual_history[i]), std::fabs(cpu.residual_history[i]));
+        if (diff > tol_residual * base) {
+            if (error) {
+                char buf[256];
+                std::snprintf(buf, sizeof(buf), "residual iter=%zu GPU=%g CPU=%g diff=%g", i,
+                    gpu.residual_history[i], cpu.residual_history[i], diff);
+                *error = buf;
+            }
+            return false;
+        }
+    }
+
+    struct ForcePair { const char* name; float g; float c; };
+    ForcePair pairs[] = {
+        {"CX", gpu.forces.CX, cpu.forces.CX},
+        {"CY", gpu.forces.CY, cpu.forces.CY},
+        {"CZ", gpu.forces.CZ, cpu.forces.CZ},
+        {"Cl", gpu.forces.Cl, cpu.forces.Cl},
+        {"Cm", gpu.forces.Cm, cpu.forces.Cm},
+        {"Cn", gpu.forces.Cn, cpu.forces.Cn},
+        {"CD", gpu.forces.CD, cpu.forces.CD},
+        {"CL", gpu.forces.CL, cpu.forces.CL},
+    };
+    for (const auto& p : pairs) {
+        float diff = std::fabs(p.g - p.c);
+        float base = 1.0f + std::max(std::fabs(p.g), std::fabs(p.c));
+        if (diff > tol_forces * base) {
+            if (error) {
+                char buf[256];
+                std::snprintf(buf, sizeof(buf), "force %s GPU=%g CPU=%g diff=%g", p.name, p.g, p.c, diff);
+                *error = buf;
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace Cfd

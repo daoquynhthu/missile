@@ -204,23 +204,23 @@ Gate:
 - [x] GPU-CPU L2 match within 1e-6 after 1 iteration on 13^3 cube mesh (CFD-GPU-6).
 - [x] GPU-CPU iteration-by-iteration L2 match within 1e-6 for first 20 iterations on cube (CFD-GPU-7).
 - [x] GPU and CPU converge to comparable residual level on flat plate mesh (CFD-GPU-8): ratio ≤ 1e3.
-- [ ] Zero `cudaMemcpy` calls during iteration loop (deferred to Phase 3 — current uses 2× 4-byte reads/iteration).
+- [ ] Zero `cudaMemcpy` calls during iteration loop (moved to Phase 3).
 
 ---
 
 ## Phase 3 — CPU Oracle & Regression Verification
 
-Goal: establish CPU as reference oracle for GPU validation. Every GPU operation has a CPU equivalent that can be compared in debug/CI mode.
+Goal: establish CPU as reference oracle for GPU validation. Every GPU operation has a CPU equivalent that can be compared in debug/CI mode. Also eliminate all `cudaMemcpy` calls from the iteration loop (PH2-G-1).
 
-Files:
+### Task 1: `cpu_oracle` configuration
 
-| File | Action | Content |
-|------|--------|---------|
-| `include/aero_cfd/cfd_config.hpp` | MODIFY | Add `bool cpu_oracle = false` |
-| `src/aero_cfd/cfd_solver.cpp` | MODIFY | Oracle mode: both solves, assert match |
-| `tests/cfd/test_cfd_gpu.cpp` | REWRITE | Real-mesh CPU/GPU equivalence tests |
+**`include/aero_cfd/cfd_config.hpp`**: add `bool cpu_oracle = false` to `CfdConfig`.
 
-Oracle mode (`cpu_oracle=true`):
+### Task 2: Oracle mode in solver
+
+**`include/aero_cfd/cfd_solver.hpp`**: add `assert_oracle_equivalent()` helper declaration.
+
+**`src/aero_cfd/cfd_solver.cpp`**: in `solve()`, after GPU path returns:
 
 ```
 solve():
@@ -228,25 +228,105 @@ solve():
   if config.cpu_oracle:
     cpu_config = config; cpu_config.use_gpu = false
     cpu_result = solve_cpu(cpu_config)
-    assert_equivalent(gpu_result, cpu_result, tolerance)
+    assert_oracle_equivalent(gpu_result, cpu_result)
   return gpu_result
 ```
 
-Tests:
+`assert_oracle_equivalent()` compares:
+- `residual_history` iter-by-iter (if one has more iters, only compare overlap)
+- `forces.CX/CY/CZ/Cl/Cm/Cn` normalized coefficients
+- Reports first mismatch with iteration index, GPU value, CPU value, diff
 
-- [ ] `CFD-ORACLE-EULER-1`: freestream preservation, CPU=GPU, tol=1e-12
-- [ ] `CFD-ORACLE-EULER-2`: symmetric cube forces, CPU=GPU, tol=1e-10
-- [ ] `CFD-ORACLE-EULER-3`: flat plate farfield-only, CPU=GPU, tol=1e-12
-- [ ] `CFD-ORACLE-EULER-4`: residual convergence history, iter-by-iter relative match ≤ 1e-12
-- [ ] `CFD-ORACLE-EULER-5`: wall force components, CPU=GPU, tol=1e-10 absolute
-- [ ] `CFD-ORACLE-MESH-1`: device mesh counts match host mesh
-- [ ] `CFD-ORACLE-BW-1`: GPU memory bandwidth ≥ 50% of theoretical (deviceQuery)
+All comparisons use relative tolerance: `fabs(a-b) <= tol * (1.0 + max(fabs(a), fabs(b)))`.
 
-Gate:
+### Task 3: Zero `cudaMemcpy` during iteration loop
 
-- All oracle tests pass at stated tolerances.
-- `cpu_oracle=true` in CI; `cpu_oracle=false` in production.
-- GPU path is `CfdSolver` default. CPU requires explicit `use_gpu=false`.
+**Problem**: current loop has 4 D2H reads per iteration:
+1. `cudaMemcpy(&residual_failed, d_failed, ...)` — failure check after residual
+2. `cudaMemcpy(&min_dt, d_min_dt, ...)` — read timestep
+3. `cudaMemcpy(&update_failed, d_failed, ...)` — failure check after update
+4. `cudaMemcpy(&l2, d_l2_sum, ...)` — read L2 norm
+
+**Solution**: all convergence/failure decisions happen on device. Host runs all `max_iter` iterations without intermediate reads.
+
+**New device buffers:**
+- `int* d_converged` — set to 1 by `check_status_kernel` when converged or failed
+- `float* d_residual_history` — `max_iter` slots, written by `check_status_kernel`
+
+**New kernel** (in `gpu_solver.cu` or new file):
+
+```
+__global__ void check_status_kernel(
+    const int* d_failed, const float* d_l2_sum,
+    int nvar_ncells, float convergence_tol,
+    int* d_converged, float* d_residual_history_slot)
+```
+
+Thread 0 block 0: if `*d_failed != 0`, set `*d_converged = 1` and write -1.0f to history slot.
+Otherwise compute `l2 = sqrtf(*d_l2_sum / nvar_ncells)`, write to history slot, and if `l2 < convergence_tol` set `*d_converged = 1`.
+
+**Changes to `compute_update_gpu`:**
+- `gpu_solver_internal.hpp` + `gpu_update.cu`: signature changes from `float min_dt` to `const float* d_min_dt`
+- `update_and_l2_kernel` reads `float min_dt = *d_min_dt` from device pointer
+
+**New iteration loop structure** (in `gpu_solver.cu`):
+
+```
+// Before loop: allocate d_converged, d_residual_history
+
+for (int iter = 0; iter < config.max_iter; ++iter) {
+    // All launches on default stream — implicit ordering
+    compute_timestep_gpu(d_mesh, gamma, cfl, d_min_dt);   // <- no host read needed
+    launch_euler_residual_kernel(...);
+    compute_update_gpu(d_mesh, d_min_dt, gamma, d_l2_sum, d_failed);
+    check_status_kernel<<<1,1>>>(d_failed, d_l2_sum, ..., d_converged, d_residual_history + iter);
+}
+
+// After loop: single sync + single batch of D2H reads
+cudaDeviceSynchronize();
+cudaMemcpy(&host_failed, d_failed, ...);
+cudaMemcpy(&host_converged, d_converged, ...);
+cudaMemcpy(host_residual_history, d_residual_history, max_iter * sizeof(float), D2H);
+cudaMemcpy(host_forces, d_forces, 6 * sizeof(float), D2H);
+// Build summary from host data
+```
+
+If solver converges early, subsequent iterations run wastefully but produce no effect (state has already converged). This is acceptable: the GPU time for extra iterations is negligible compared to D2H latency savings for typical `max_iter <= 5000`.
+
+### Task 4: Oracle tests
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-ORACLE-EULER-1` | freestream preservation: GPU & CPU both produce L2=0 on uniform flow | 1e-12 |
+| 2 | `CFD-ORACLE-EULER-2` | symmetric cube: CX/CY/CZ match between CPU and GPU | 1e-10 |
+| 3 | `CFD-ORACLE-EULER-3` | flat plate farfield-only: zero forces GPU=CPU | 1e-12 |
+| 4 | `CFD-ORACLE-EULER-4` | residual history iter-by-iter match | 1e-12 |
+| 5 | `CFD-ORACLE-EULER-5` | wall force components (CX/CY/CZ/Cl/Cm/Cn) | 1e-10 |
+| 6 | `CFD-ORACLE-MESH-1` | DeviceMesh cell_count/face_count == CfdMesh | exact |
+| 7 | `CFD-ORACLE-BW-1` | GPU memory bandwidth >= 50% theoretical peak | 50% |
+
+All tests added to `tests/cfd/test_cfd_gpu.cpp` (extend, not rewrite).
+
+### Files
+
+| File | Action | Detail |
+|------|--------|--------|
+| `include/aero_cfd/cfd_config.hpp` | MODIFY | +`bool cpu_oracle = false` |
+| `include/aero_cfd/cfd_solver.hpp` | MODIFY | +`assert_oracle_equivalent` declaration |
+| `include/aero_cfd/gpu_solver_internal.hpp` | MODIFY | `compute_update_gpu` signature: `float min_dt` → `const float* d_min_dt` |
+| `src/aero_cfd/cfd_solver.cpp` | MODIFY | +`assert_oracle_equivalent`, oracle dispatch in `solve()` |
+| `src/aero_cfd/gpu_solver.cu` | MODIFY | Zero-D2H loop, `check_status_kernel`, post-loop batch reads |
+| `src/aero_cfd/gpu_update.cu` | MODIFY | Accept `const float* d_min_dt`, kernel reads from device |
+| `tests/cfd/test_cfd_gpu.cpp` | MODIFY | +7 oracle tests |
+
+### Gate
+
+- [x] Existing 8 GPU tests (CFD-GPU-1..8) still pass unchanged.
+- [x] New 7 oracle tests pass at stated tolerances.
+- [x] `cpu_oracle=true` mode: every `solve()` with `use_gpu=true` also runs CPU and asserts match.
+- [x] Zero `cudaMemcpy` calls during iteration loop.
+- [x] `cpu_oracle=false` (default) has zero overhead — no CPU solve, no extra allocations.
+- [x] `assert_oracle_equivalent` reports first mismatch with iteration/component details.
 
 ---
 

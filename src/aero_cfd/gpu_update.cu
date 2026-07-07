@@ -22,11 +22,13 @@ __global__ void update_and_l2_kernel(
     float* d_q,
     const float* d_residual,
     const float* d_volume,
-    int n_cells, int nvar, float min_dt, float gamma,
+    int n_cells, int nvar, const float* d_min_dt, float gamma,
     float* d_l2_sum,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
+
+    float min_dt = *d_min_dt;
 
     float old_rho = d_q[idx * nvar + 0];
     float old_rhou = d_q[idx * nvar + 1];
@@ -74,7 +76,7 @@ __global__ void update_and_l2_kernel(
 
 } // namespace
 
-bool compute_update_gpu(DeviceMesh& mesh, float min_dt, float gamma,
+bool compute_update_gpu(DeviceMesh& mesh, const float* d_min_dt, float gamma,
     float* d_l2_sum, int* d_failed) {
     init_float_zero_kernel<<<1, 1>>>(d_l2_sum);
     if (!cuda_check(cudaGetLastError(), "init_l2 kernel launch")) return false;
@@ -88,7 +90,7 @@ bool compute_update_gpu(DeviceMesh& mesh, float min_dt, float gamma,
 
     update_and_l2_kernel<<<grid, block>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
-        nc, DeviceMesh::NVAR, min_dt, gamma,
+        nc, DeviceMesh::NVAR, d_min_dt, gamma,
         d_l2_sum, d_failed);
     if (!cuda_check(cudaGetLastError(), "update kernel launch")) return false;
     return true;

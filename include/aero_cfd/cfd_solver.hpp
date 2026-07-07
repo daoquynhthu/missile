@@ -5,6 +5,7 @@
 #include "aero_cfd/cfd_result.hpp"
 #include "aero_cfd/cfd_state.hpp"
 
+#include <string>
 #include <vector>
 
 namespace AeroSim {
@@ -34,6 +35,13 @@ public:
 private:
     CfdMesh mesh_;
 };
+
+bool assert_oracle_equivalent(
+    const CfdSolveSummary& gpu,
+    const CfdSolveSummary& cpu,
+    float tol_residual,
+    float tol_forces,
+    std::string* error);
 
 } // namespace Cfd
 } // namespace AeroSim

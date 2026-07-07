@@ -1,15 +1,20 @@
 #include "aero_cfd/cfd_config.hpp"
+#include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_residual.hpp"
 #include "aero_cfd/cfd_solver.hpp"
+#include "aero_cfd/cfd_state.hpp"
+#include "aero_cfd/cuda_utils.hpp"
 #include "aero_cfd/reconstruction.hpp"
 #include "aero_cfd/device_mesh.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
+#include <cuda_runtime.h>
 
 using namespace AeroSim::Cfd;
 
@@ -348,6 +353,241 @@ static int test_gpu_flat_plate_convergence() {
     return 0;
 }
 
+// ----- Oracle tests -----
+
+static int test_oracle_freestream_preservation() {
+    TEST("CFD-ORACLE-EULER-1 freestream preservation GPU=CPU");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.3f;
+        cfg.max_iter = 50;
+        cfg.convergence_tol = 1e-12f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary gpu_result = solver.solve(cond, cfg);
+        if (gpu_result.failed) FAIL("GPU solve failed");
+
+        CfdConfig cpu_cfg = cfg;
+        cpu_cfg.use_gpu = false;
+        CfdSolveSummary cpu_result = solver.solve(cond, cpu_cfg);
+        if (cpu_result.failed) FAIL("CPU solve failed");
+
+        std::string error;
+        if (!assert_oracle_equivalent(gpu_result, cpu_result, 1e-6f, 1e-6f, &error)) {
+            FAIL("%s", error.c_str());
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_oracle_symmetric_cube_forces() {
+    TEST("CFD-ORACLE-EULER-2 symmetric cube forces GPU=CPU");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 5.0f;
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.4f;
+        cfg.max_iter = 100;
+        cfg.convergence_tol = 1e-12f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        if (gpu.failed) FAIL("GPU solve failed");
+
+        CfdConfig cpu_cfg = cfg;
+        cpu_cfg.use_gpu = false;
+        CfdSolveSummary cpu = solver.solve(cond, cpu_cfg);
+        if (cpu.failed) FAIL("CPU solve failed");
+
+        std::string error;
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-6f, 1e-6f, &error)) {
+            FAIL("%s", error.c_str());
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_oracle_flat_plate_zero_forces() {
+    TEST("CFD-ORACLE-EULER-3 flat plate farfield-only forces GPU=CPU");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.max_iter = 50;
+        cfg.convergence_tol = 1e-12f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        if (gpu.failed) FAIL("GPU solve failed");
+
+        CfdConfig cpu_cfg = cfg;
+        cpu_cfg.use_gpu = false;
+        CfdSolveSummary cpu = solver.solve(cond, cpu_cfg);
+        if (cpu.failed) FAIL("CPU solve failed");
+
+        std::string error;
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-6f, 1e-6f, &error)) {
+            FAIL("%s", error.c_str());
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_oracle_convergence_history() {
+    TEST("CFD-ORACLE-EULER-4 residual convergence history GPU=CPU");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 3.0f;
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.4f;
+        cfg.max_iter = 100;
+        cfg.convergence_tol = 1e-12f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        if (gpu.failed) FAIL("GPU solve failed");
+
+        CfdConfig cpu_cfg = cfg;
+        cpu_cfg.use_gpu = false;
+        CfdSolveSummary cpu = solver.solve(cond, cpu_cfg);
+        if (cpu.failed) FAIL("CPU solve failed");
+
+        std::string error;
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-6f, 1e-6f, &error)) {
+            FAIL("%s", error.c_str());
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_oracle_wall_forces() {
+    TEST("CFD-ORACLE-EULER-5 wall force components GPU=CPU");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 5.0f;
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.4f;
+        cfg.max_iter = 100;
+        cfg.convergence_tol = 1e-12f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        if (gpu.failed) FAIL("GPU solve failed");
+
+        CfdConfig cpu_cfg = cfg;
+        cpu_cfg.use_gpu = false;
+        CfdSolveSummary cpu = solver.solve(cond, cpu_cfg);
+        if (cpu.failed) FAIL("CPU solve failed");
+
+        std::string error;
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-6f, 1e-6f, &error)) {
+            FAIL("%s", error.c_str());
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_oracle_mesh_counts() {
+    TEST("CFD-ORACLE-MESH-1 DeviceMesh counts match host");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+
+        if (d_mesh.cell_count() != mesh.cells.size()) FAIL("cell_count: device=%zu host=%zu", d_mesh.cell_count(), mesh.cells.size());
+        if (d_mesh.face_count() != mesh.faces.size()) FAIL("face_count: device=%zu host=%zu", d_mesh.face_count(), mesh.faces.size());
+        PASS;
+    }
+    return 0;
+}
+
+static int test_oracle_bandwidth() {
+    TEST("CFD-ORACLE-BW-1 GPU memory bandwidth >= 50% theoretical");
+    {
+        int mem_clock_khz = 0;
+        int bus_width_bits = 0;
+        if (!cuda_check(cudaDeviceGetAttribute(&mem_clock_khz, cudaDevAttrMemoryClockRate, 0), "cudaDevAttrMemoryClockRate")) {
+            FAIL("cudaDevAttrMemoryClockRate failed");
+        }
+        if (!cuda_check(cudaDeviceGetAttribute(&bus_width_bits, cudaDevAttrGlobalMemoryBusWidth, 0), "cudaDevAttrGlobalMemoryBusWidth")) {
+            FAIL("cudaDevAttrGlobalMemoryBusWidth failed");
+        }
+        float theoretical = 2.0e-6f * static_cast<float>(mem_clock_khz) *
+            static_cast<float>(bus_width_bits) / 8.0f;
+
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w;
+        w.rho = 1.0f; w.u = 2.0f; w.p = 1.0f / 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+
+        float elapsed_ms = -1.0f;
+        if (!compute_euler_residual_gpu_timed(d_mesh, w, 1.4f, &elapsed_ms, &error)) FAIL("%s", error.c_str());
+        if (elapsed_ms <= 0.0f) FAIL("elapsed_ms=%g", elapsed_ms);
+
+        std::size_t bytes = estimate_euler_residual_gpu_bytes(mesh);
+        float bandwidth = static_cast<float>(bytes) / (elapsed_ms * 1.0e6f);
+        float ratio = theoretical > 0.0f ? bandwidth / theoretical : 0.0f;
+
+        if (ratio < 0.5f) FAIL("bandwidth ratio=%g (BW=%g GB/s, theoretical=%g GB/s)", ratio, bandwidth, theoretical);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -358,6 +598,13 @@ int main() {
     result |= test_gpu_solver_equivalence_cube();
     result |= test_gpu_cpu_convergence_match();
     result |= test_gpu_flat_plate_convergence();
+    result |= test_oracle_freestream_preservation();
+    result |= test_oracle_symmetric_cube_forces();
+    result |= test_oracle_flat_plate_zero_forces();
+    result |= test_oracle_convergence_history();
+    result |= test_oracle_wall_forces();
+    result |= test_oracle_mesh_counts();
+    result |= test_oracle_bandwidth();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
