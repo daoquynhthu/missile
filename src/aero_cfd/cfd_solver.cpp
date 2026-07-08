@@ -187,7 +187,7 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
             cpu_cfg.use_gpu = false;
             CfdSolveSummary cpu_result = solve_from_state(condition, cpu_cfg, q);
             std::string oracle_error;
-            if (!assert_oracle_equivalent(gpu_result, cpu_result, 1e-12f, 1e-10f, &oracle_error)) {
+            if (!assert_oracle_equivalent(gpu_result, cpu_result, 1e-6f, 1e-6f, &oracle_error)) {
                 std::fprintf(stderr, "[CPU Oracle] FAIL: %s\n", oracle_error.c_str());
                 CfdSolveSummary s;
                 s.failed = true;

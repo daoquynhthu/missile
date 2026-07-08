@@ -13,6 +13,7 @@ struct CfdConfig {
     float ref_area = 1.0f;
     float ref_length = 1.0f;
     float ref_span = 1.0f;
+    int reconstruction_order = 1;
     bool use_gpu = false;
     bool cpu_oracle = false;
     DiagnosticLevel diagnostic_level = DiagnosticLevel::Off;

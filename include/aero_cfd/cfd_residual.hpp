@@ -25,27 +25,31 @@ bool launch_euler_residual_kernel(
     float gamma,
     int* d_failed,
     cudaEvent_t start_event = nullptr,
-    std::string* error = nullptr);
+    std::string* error = nullptr,
+    int reconstruction_order = 1);
 
 bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
     int* d_failed,
-    std::string* error = nullptr);
+    std::string* error = nullptr,
+    int reconstruction_order = 1);
 
 bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
-    std::string* error = nullptr);
+    std::string* error = nullptr,
+    int reconstruction_order = 1);
 
 bool compute_euler_residual_gpu_timed(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
     float* elapsed_ms,
-    std::string* error = nullptr);
+    std::string* error = nullptr,
+    int reconstruction_order = 1);
 
 std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh);
 

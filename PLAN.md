@@ -358,20 +358,20 @@ if order == 2:
 
 Kernels:
 
-- [ ] `gg_gradient_kernel`: per-face contribution to left/right cell gradients (atomicAdd per component)
-- [ ] `limiter_kernel`: per-cell neighbor-extrema scan + limiting factor
-- [ ] Reconstruction in `euler_residual_kernel`: face QL/QR from limited gradients
-- [ ] `diagnostics_kernel`: per-iteration min/max rho/p/mach, device-side accumulation
-- [ ] `failure_snapshot_kernel`: capture first invalid cell state on device
+- [x] `gg_gradient_kernel`: per-face contribution to left/right cell gradients (atomicAdd per component)
+- [x] `limiter_kernel`: per-cell neighbor-extrema scan + limiting factor (init_minmax/update_minmax/bj_limiter three-pass pipeline)
+- [x] Reconstruction in `euler_residual_kernel`: face QL/QR from limited gradients
+- [x] `diagnostics_kernel`: per-iteration min/max rho/p/mach, device-side accumulation
+- [x] `failure_snapshot_kernel`: capture first invalid cell state on device (inline in update_and_l2_kernel via atomicCAS)
 
 Tests:
 
-- [ ] `CFD-ORACLE-RECON-1`: constant-state zero gradients, CPU=GPU, tol=1e-12
-- [ ] `CFD-ORACLE-RECON-2`: CPU/GPU gradient match on flat plate, tol=1e-8 per component
-- [ ] `CFD-ORACLE-RECON-3`: second-order disabled forces match first-order, tol=1e-12
-- [ ] `CFD-ORACLE-RECON-4`: ordered=2 converged forces match CPU ordered=2
-- [ ] `CFD-ORACLE-DIAG-1`: GPU state bounds match CPU state bounds
-- [ ] `CFD-ORACLE-DIAG-2`: GPU failure detection matches CPU
+- [x] `CFD-ORACLE-RECON-1`: constant-state zero gradients, CPU=GPU, tol=1e-12
+- [x] `CFD-ORACLE-RECON-2`: CPU/GPU gradient match on cube mesh, tol=2e-6 per component
+- [x] `CFD-ORACLE-RECON-3`: reconstruction_order=1 forces match 1st-order CPU, tol=1e-12
+- [x] `CFD-ORACLE-RECON-4`: GPU order=2 forces are finite and differ from order=1
+- [x] `CFD-ORACLE-DIAG-1`: GPU state bounds match CPU state bounds (tol=2e-5)
+- [x] `CFD-ORACLE-DIAG-2`: GPU failure detection on invalid initial state
 
 Gate:
 

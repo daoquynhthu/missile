@@ -24,7 +24,8 @@ __global__ void update_and_l2_kernel(
     const float* d_volume,
     int n_cells, int nvar, const float* d_min_dt, float gamma,
     float* d_l2_sum,
-    int* d_failed) {
+    int* d_failed,
+    int* d_failure_cell, float* d_failure_state) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
 
@@ -45,7 +46,15 @@ __global__ void update_and_l2_kernel(
     float new_rhoE = old_rhoE + scale * d_residual[idx * nvar + 4];
 
     if (!__finitef(new_rho) || new_rho <= 0.0f) {
-        atomicExch(d_failed, 1);
+        int old = atomicCAS(d_failed, 0, 1);
+        if (old == 0 && d_failure_cell) {
+            *d_failure_cell = idx;
+            d_failure_state[0] = new_rho;
+            d_failure_state[1] = new_rhou;
+            d_failure_state[2] = new_rhov;
+            d_failure_state[3] = new_rhow;
+            d_failure_state[4] = new_rhoE;
+        }
         return;
     }
     float inv_rho = 1.0f / new_rho;
@@ -55,7 +64,15 @@ __global__ void update_and_l2_kernel(
     float kinetic = 0.5f * (u*u + v*v + w*w);
     float p = (gamma - 1.0f) * (new_rhoE - new_rho * kinetic);
     if (!__finitef(p) || p <= 0.0f) {
-        atomicExch(d_failed, 1);
+        int old = atomicCAS(d_failed, 0, 1);
+        if (old == 0 && d_failure_cell) {
+            *d_failure_cell = idx;
+            d_failure_state[0] = new_rho;
+            d_failure_state[1] = new_rhou;
+            d_failure_state[2] = new_rhov;
+            d_failure_state[3] = new_rhow;
+            d_failure_state[4] = new_rhoE;
+        }
         return;
     }
 
@@ -77,11 +94,15 @@ __global__ void update_and_l2_kernel(
 } // namespace
 
 bool compute_update_gpu(DeviceMesh& mesh, const float* d_min_dt, float gamma,
-    float* d_l2_sum, int* d_failed) {
+    float* d_l2_sum, int* d_failed,
+    int* d_failure_cell, float* d_failure_state) {
     init_float_zero_kernel<<<1, 1>>>(d_l2_sum);
     if (!cuda_check(cudaGetLastError(), "init_l2 kernel launch")) return false;
     init_int_zero_kernel<<<1, 1>>>(d_failed);
     if (!cuda_check(cudaGetLastError(), "init_failed kernel launch")) return false;
+    if (d_failure_cell) {
+        if (!cuda_check(cudaMemset(d_failure_cell, 0xFF, sizeof(int)), "init_failure_cell memset")) return false;
+    }
 
     int block = 128;
     int nc = static_cast<int>(mesh.cell_count());
@@ -91,7 +112,8 @@ bool compute_update_gpu(DeviceMesh& mesh, const float* d_min_dt, float gamma,
     update_and_l2_kernel<<<grid, block>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
         nc, DeviceMesh::NVAR, d_min_dt, gamma,
-        d_l2_sum, d_failed);
+        d_l2_sum, d_failed,
+        d_failure_cell, d_failure_state);
     if (!cuda_check(cudaGetLastError(), "update kernel launch")) return false;
     return true;
 }

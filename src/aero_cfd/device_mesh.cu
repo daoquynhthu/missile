@@ -188,6 +188,12 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error) {
 
     if (!alloc(d_q_, nc * NVAR * sizeof(float), "cudaMalloc state")) return false;
     if (!alloc(d_residual_, nc * NVAR * sizeof(float), "cudaMalloc residual")) return false;
+    if (!alloc(d_gradients_, nc * DeviceMesh::NGRAD * sizeof(float), "cudaMalloc gradients")) return false;
+    if (!alloc(d_limiters_, nc * sizeof(PrimitiveLimiter), "cudaMalloc limiters")) return false;
+    if (!cuda_check(cudaMemset(d_gradients_, 0, nc * DeviceMesh::NGRAD * sizeof(float)), "cudaMemset gradients", error)) {
+        release();
+        return false;
+    }
 
     std::vector<float> h_nx(nf), h_ny(nf), h_nz(nf), h_area(nf), h_face_cx(nf), h_face_cy(nf), h_face_cz(nf);
     std::vector<int> h_left_cell(nf), h_right_cell(nf);

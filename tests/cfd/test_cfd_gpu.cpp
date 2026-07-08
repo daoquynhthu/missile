@@ -4,8 +4,11 @@
 #include "aero_cfd/cfd_solver.hpp"
 #include "aero_cfd/cfd_state.hpp"
 #include "aero_cfd/cuda_utils.hpp"
+#include "aero_cfd/diagnostics.hpp"
 #include "aero_cfd/reconstruction.hpp"
 #include "aero_cfd/device_mesh.hpp"
+#include "aero_cfd/gpu_solver.hpp"
+#include "aero_cfd/gpu_solver_internal.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -531,6 +534,164 @@ static int test_oracle_wall_forces() {
     return 0;
 }
 
+static int test_oracle_dispatch() {
+    TEST("CFD-ORACLE-DISPATCH-1 cpu_oracle=true dispatch path GPU=CPU");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 3.0f;
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cpu_oracle = true;
+        cfg.cfl = 0.4f;
+        cfg.max_iter = 20;
+        cfg.convergence_tol = 1e-12f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary result = solver.solve(cond, cfg);
+        if (result.failed) FAIL("GPU+oracle solve failed");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_recon_constant_state_zero_gradients() {
+    TEST("CFD-ORACLE-RECON-1 constant-state zero gradients CPU=GPU");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w;
+        w.rho = 1.0f; w.u = 2.0f; w.v = -0.3f; w.w = 0.1f; w.p = 1.0f / 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        std::vector<PrimitiveGradient> cpu_grads = compute_green_gauss_gradients(mesh, q, 1.4f);
+        if (cpu_grads.empty()) FAIL("CPU gradients empty");
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (!compute_gradients_gpu(d_mesh, 1.4f, &error)) FAIL("%s", error.c_str());
+
+        std::vector<PrimitiveGradient> gpu_grads;
+        if (!d_mesh.download_gradients(gpu_grads, &error)) FAIL("%s", error.c_str());
+        if (gpu_grads.size() != cpu_grads.size()) FAIL("size mismatch: cpu=%zu gpu=%zu", cpu_grads.size(), gpu_grads.size());
+
+        float max_cpu = 0.0f, max_gpu = 0.0f;
+        for (std::size_t i = 0; i < cpu_grads.size(); ++i) {
+            auto& c = cpu_grads[i];
+            auto& g = gpu_grads[i];
+            max_cpu = std::max({max_cpu, std::fabs(c.drho_dx), std::fabs(c.du_dx), std::fabs(c.dv_dy), std::fabs(c.dw_dz), std::fabs(c.dp_dx)});
+            max_gpu = std::max({max_gpu, std::fabs(g.drho_dx), std::fabs(g.du_dx), std::fabs(g.dv_dy), std::fabs(g.dw_dz), std::fabs(g.dp_dx)});
+        }
+        if (max_cpu > 1e-12f) FAIL("CPU gradients not zero: max=%g", max_cpu);
+        if (max_gpu > 1e-6f) FAIL("GPU gradients not zero: max=%g", max_gpu);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_recon_gradient_match() {
+    TEST("CFD-ORACLE-RECON-2 CPU/GPU gradient match on cube mesh");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(2.0f, 11);
+        compute_mesh_metrics(mesh);
+
+        float gamma = 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size());
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            float x = mesh.cells[i].cx;
+            float y = mesh.cells[i].cy;
+            float rho = 1.0f + 0.1f * x;
+            float u = 2.0f + 0.05f * y;
+            float v = -0.1f * x;
+            float w = 0.0f;
+            float p = 1.0f / gamma + 0.05f * x - 0.02f * y;
+            float e = p / (gamma - 1.0f) + 0.5f * rho * (u*u + v*v + w*w);
+            q[i].rho = rho;
+            q[i].rho_u = rho * u;
+            q[i].rho_v = rho * v;
+            q[i].rho_w = rho * w;
+            q[i].rho_E = e;
+        }
+
+        std::vector<PrimitiveGradient> cpu_grads = compute_green_gauss_gradients(mesh, q, gamma);
+        if (cpu_grads.empty()) FAIL("CPU gradients empty");
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (!compute_gradients_gpu(d_mesh, gamma, &error)) FAIL("%s", error.c_str());
+
+        std::vector<PrimitiveGradient> gpu_grads;
+        if (!d_mesh.download_gradients(gpu_grads, &error)) FAIL("%s", error.c_str());
+        if (gpu_grads.size() != cpu_grads.size()) FAIL("size mismatch: cpu=%zu gpu=%zu", cpu_grads.size(), gpu_grads.size());
+
+        float tol = 2e-6f;
+        for (std::size_t i = 0; i < cpu_grads.size(); ++i) {
+            auto& c = cpu_grads[i];
+            auto& g = gpu_grads[i];
+            if (!near(g.drho_dx, c.drho_dx, tol)) FAIL("cell=%zu drho_dx cpu=%g gpu=%g", i, c.drho_dx, g.drho_dx);
+            if (!near(g.drho_dy, c.drho_dy, tol)) FAIL("cell=%zu drho_dy cpu=%g gpu=%g", i, c.drho_dy, g.drho_dy);
+            if (!near(g.drho_dz, c.drho_dz, tol)) FAIL("cell=%zu drho_dz cpu=%g gpu=%g", i, c.drho_dz, g.drho_dz);
+            if (!near(g.du_dx, c.du_dx, tol)) FAIL("cell=%zu du_dx cpu=%g gpu=%g", i, c.du_dx, g.du_dx);
+            if (!near(g.du_dy, c.du_dy, tol)) FAIL("cell=%zu du_dy cpu=%g gpu=%g", i, c.du_dy, g.du_dy);
+            if (!near(g.dv_dx, c.dv_dx, tol)) FAIL("cell=%zu dv_dx cpu=%g gpu=%g", i, c.dv_dx, g.dv_dx);
+            if (!near(g.dv_dy, c.dv_dy, tol)) FAIL("cell=%zu dv_dy cpu=%g gpu=%g", i, c.dv_dy, g.dv_dy);
+            if (!near(g.dp_dx, c.dp_dx, tol)) FAIL("cell=%zu dp_dx cpu=%g gpu=%g", i, c.dp_dx, g.dp_dx);
+            if (!near(g.dp_dy, c.dp_dy, tol)) FAIL("cell=%zu dp_dy cpu=%g gpu=%g", i, c.dp_dy, g.dp_dy);
+            if (!near(g.dp_dz, c.dp_dz, tol)) FAIL("cell=%zu dp_dz cpu=%g gpu=%g", i, c.dp_dz, g.dp_dz);
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_recon_first_order_regression() {
+    TEST("CFD-ORACLE-RECON-3 reconstruction_order=1 forces match 1st-order CPU");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w;
+        w.rho = 1.0f; w.u = 2.0f; w.p = 1.0f / 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        float gamma = 1.4f;
+
+        std::vector<EulerFlux> cpu_res(mesh.cells.size());
+        if (!compute_euler_residual_cpu(mesh, q, w, gamma, cpu_res)) FAIL("CPU residual failed");
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+
+        if (!compute_euler_residual_gpu(d_mesh, w, gamma, &error, 1)) FAIL("%s", error.c_str());
+
+        std::vector<EulerFlux> gpu_res;
+        if (!d_mesh.download_residual(gpu_res, &error)) FAIL("%s", error.c_str());
+
+        float tol = 1e-12f;
+        for (std::size_t i = 0; i < cpu_res.size(); ++i) {
+            if (!near(gpu_res[i].mass, cpu_res[i].mass, tol)) FAIL("cell=%zu mass cpu=%g gpu=%g", i, cpu_res[i].mass, gpu_res[i].mass);
+            if (!near(gpu_res[i].mom_x, cpu_res[i].mom_x, tol)) FAIL("cell=%zu mom_x cpu=%g gpu=%g", i, cpu_res[i].mom_x, gpu_res[i].mom_x);
+            if (!near(gpu_res[i].mom_y, cpu_res[i].mom_y, tol)) FAIL("cell=%zu mom_y cpu=%g gpu=%g", i, cpu_res[i].mom_y, gpu_res[i].mom_y);
+            if (!near(gpu_res[i].mom_z, cpu_res[i].mom_z, tol)) FAIL("cell=%zu mom_z cpu=%g gpu=%g", i, cpu_res[i].mom_z, gpu_res[i].mom_z);
+            if (!near(gpu_res[i].energy, cpu_res[i].energy, tol)) FAIL("cell=%zu energy cpu=%g gpu=%g", i, cpu_res[i].energy, gpu_res[i].energy);
+        }
+        PASS;
+    }
+    return 0;
+}
+
 static int test_oracle_mesh_counts() {
     TEST("CFD-ORACLE-MESH-1 DeviceMesh counts match host");
     {
@@ -588,6 +749,135 @@ static int test_oracle_bandwidth() {
     return 0;
 }
 
+static int test_diag_state_bounds_gpu_cpu_match() {
+    TEST("CFD-ORACLE-DIAG-1 GPU state bounds match CPU");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(2.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.cfl = 0.3f;
+        cfg.convergence_tol = 1e-12f;
+        cfg.diagnostic_level = DiagnosticLevel::Basic;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+        auto cpu_result = solver.solve({1.5f, 0.0f, 0.0f}, cfg);
+        if (cpu_result.failed) FAIL("CPU solver failed");
+
+        PrimitiveState w = make_freestream(1.5f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+
+        auto gpu_result = solve_gpu(d_mesh, {1.5f, 0.0f, 0.0f}, cfg, &error);
+        if (gpu_result.failed) FAIL("GPU solver failed: %s", error.c_str());
+        if (gpu_result.diagnostics.state_bounds_history.empty()) FAIL("GPU diagnostics empty");
+        if (cpu_result.diagnostics.state_bounds_history.empty()) FAIL("CPU diagnostics empty");
+
+        std::size_t n = gpu_result.diagnostics.state_bounds_history.size();
+        if (n == 0 || n > cfg.max_iter) FAIL("bounds count out of range: %zu", n);
+
+        float tol = 2e-5f;
+        for (std::size_t i = 0; i < n; ++i) {
+            auto& g = gpu_result.diagnostics.state_bounds_history[i];
+            auto& c = cpu_result.diagnostics.state_bounds_history[i + 1];
+            if (!near(g.min_rho, c.min_rho, tol)) FAIL("i=%zu min_rho gpu=%g cpu=%g", i, g.min_rho, c.min_rho);
+            if (!near(g.max_rho, c.max_rho, tol)) FAIL("i=%zu max_rho gpu=%g cpu=%g", i, g.max_rho, c.max_rho);
+            if (!near(g.min_p, c.min_p, tol)) FAIL("i=%zu min_p gpu=%g cpu=%g", i, g.min_p, c.min_p);
+            if (!near(g.max_p, c.max_p, tol)) FAIL("i=%zu max_p gpu=%g cpu=%g", i, g.max_p, c.max_p);
+            if (!near(g.min_mach, c.min_mach, tol)) FAIL("i=%zu min_mach gpu=%g cpu=%g", i, g.min_mach, c.min_mach);
+            if (!near(g.max_mach, c.max_mach, tol)) FAIL("i=%zu max_mach gpu=%g cpu=%g", i, g.max_mach, c.max_mach);
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_diag_failure_snapshot() {
+    TEST("CFD-ORACLE-DIAG-2 GPU failure detection on invalid state");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(2.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(5.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        int bad_cell = static_cast<int>(q.size()) / 2;
+        q[bad_cell].rho = -1.0f;
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.cfl = 0.5f;
+        cfg.convergence_tol = 1e-12f;
+        cfg.diagnostic_level = DiagnosticLevel::Basic;
+
+        auto gpu_result = solve_gpu(d_mesh, {5.0f, 0.0f, 0.0f}, cfg, &error);
+
+        if (!gpu_result.failed) FAIL("GPU solver did not fail with invalid initial state");
+        if (!gpu_result.diagnostics.failure.valid) FAIL("failure snapshot missing");
+
+        if (gpu_result.diagnostics.state_bounds_history.empty()) FAIL("state bounds history empty");
+        for (std::size_t i = 0; i < gpu_result.diagnostics.state_bounds_history.size(); ++i) {
+            auto& sb = gpu_result.diagnostics.state_bounds_history[i];
+            if (!sb.valid) FAIL("bounds invalid at i=%zu", i);
+        }
+
+        PASS;
+    }
+    return 0;
+}
+
+static int test_recon_order2_converged_forces() {
+    TEST("CFD-ORACLE-RECON-4 order=2 GPU forces plausible and differ from order=1");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(3.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(2.0f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        CfdConfig cfg1, cfg2;
+        cfg1.max_iter = 15; cfg2.max_iter = 15;
+        cfg1.cfl = 0.2f; cfg2.cfl = 0.2f;
+        cfg1.convergence_tol = 1e-10f; cfg2.convergence_tol = 1e-10f;
+        cfg1.reconstruction_order = 1; cfg2.reconstruction_order = 2;
+
+        DeviceMesh d_mesh1, d_mesh2;
+        std::string error;
+        if (!d_mesh1.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh2.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh1.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh2.upload_state(q, &error)) FAIL("%s", error.c_str());
+
+        auto r1 = solve_gpu(d_mesh1, {2.0f, 2.0f, 0.0f}, cfg1, &error);
+        auto r2 = solve_gpu(d_mesh2, {2.0f, 2.0f, 0.0f}, cfg2, &error);
+
+        if (r1.failed) FAIL("order=1 solver failed: %s", error.c_str());
+        if (r2.failed) FAIL("order=2 solver failed: %s", error.c_str());
+
+        if (!std::isfinite(r2.forces.CD)) FAIL("order=2 CD not finite");
+        if (!std::isfinite(r2.forces.CL)) FAIL("order=2 CL not finite");
+
+        if (r1.forces.CX != r2.forces.CX) {
+            float diff = std::fabs(r2.forces.CX - r1.forces.CX);
+            if (diff < 1e-12f) FAIL("order=2 forces identical to order=1 (reconstruction not running)");
+        }
+
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -603,8 +893,15 @@ int main() {
     result |= test_oracle_flat_plate_zero_forces();
     result |= test_oracle_convergence_history();
     result |= test_oracle_wall_forces();
+    result |= test_oracle_dispatch();
+    result |= test_recon_constant_state_zero_gradients();
+    result |= test_recon_gradient_match();
+    result |= test_recon_first_order_regression();
+    result |= test_recon_order2_converged_forces();
     result |= test_oracle_mesh_counts();
     result |= test_oracle_bandwidth();
+    result |= test_diag_state_bounds_gpu_cpu_match();
+    result |= test_diag_failure_snapshot();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

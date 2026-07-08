@@ -129,16 +129,13 @@ Fix applied (2026-07-07): Added `ConstDeviceFaceData`/`ConstDeviceCellData` stru
 
 ### Category G: Gate Compliance
 
-**PH2-G-1: Zero cudaMemcpy during iteration loop — NOT MET** [MEDIUM]
-`PLAN.md:207`, `src/aero_cfd/gpu_solver.cu:61,69,79,87`
-
-The Phase 2 gate requires "Zero `cudaMemcpy` calls during iteration loop." The current implementation uses **4** cudaMemcpy calls per iteration:
-1. Line 61: `cudaMemcpy(&residual_failed, d_failed, 4, D2H)` — read failure flag
-2. Line 69: `cudaMemcpy(&min_dt, d_min_dt, 4, D2H)` — read timestep
-3. Line 79: `cudaMemcpy(&update_failed, d_failed, 4, D2H)` — read update failure flag
-4. Line 87: `cudaMemcpy(&l2, d_l2_sum, 4, D2H)` — read L2 norm
-
-PLAN.md notes this is "deferred to Phase 3," but the gate is explicitly unchecked (not marked `[x]`). This is a documented deviation, not a bug.
+**PH2-G-1: Zero cudaMemcpy during iteration loop** [FIXED]
+The Phase 2 gate required "Zero `cudaMemcpy` calls during iteration loop." Original implementation used 4 D2H reads per iteration. Fixed in Phase 3 (2026-07-08):
+- Added `check_status_kernel` for device-side convergence/failure detection
+- Added `d_converged`, `d_residual_history` device buffers
+- Changed `compute_update_gpu` to read `d_min_dt` from device pointer
+- Iteration loop launches all `max_iter` iterations without host reads
+- Post-loop: single sync + batch D2H reads of all results
 
 **PH2-G-2: GPU-CPU L2 match after 1 iteration (CFD-GPU-6) — MET**
 **PH2-G-3: GPU-CPU L2 match for 20 iterations (CFD-GPU-7) — MET**
@@ -297,12 +294,14 @@ All 11 previous fixes verified PASS. New re-audit found 11 additional items (3 H
 | CRITICAL | 0 | |
 | HIGH (open) | 0 | |
 | MEDIUM (open) | 1 | PH2-E-2 (atomicAdd, deferred to Phase 4) |
-| LOW (open) | 1 | PH2-G-1 (cudaMemcpy, deferred to Phase 3) |
-| FIXED (all sessions) | 34 | All previous + PH3-H-1, PH3-M-1..M-5, PH3-L-1..L-3 |
-| NOT-A-BUG | 5 | Previous 4 + PH2-RA-H4 |
-| INFO | 1 | PH3-I-1 (estimate undercount, not actionable) |
+| LOW (open) | 0 | |
+| FIXED (all sessions) | 40 | All previous + PH3-RA-A1, PH3-RA-A2, PH3-RA-A3, PH3-RA-A4 |
+| NOT-A-BUG | 6 | Previous 5 + PH3-RA-A5 (no early break, by design) |
+| INFO | 2 | PH3-I-1 (estimate undercount), PH3-RA-A6 (d_converged on failure, moot) |
 
-Total: 2 open + 34 fixed + 5 wont-fix + 1 info = 42 tracked items
+Total: 1 open + 40 fixed + 6 wont-fix + 2 info = 49 tracked items
+
+
 
 ## Post-Commit Audit (2026-07-07)
 
@@ -392,3 +391,192 @@ Omits 3 int arrays (left_cell, right_cell, boundary) from face memory estimate. 
 | INFO     | 1 | PH3-I-1 (estimate undercount) — not actionable |
 
 Total: 10 new findings. All 9 actionable items fixed. 1 INFO not actionable.
+
+## Phase 3 Re-Audit (2026-07-08)
+
+### Verification Results
+
+All 25 previously-fixed issues from Post-Commit Audit verified as correctly applied: PH3-H-1, PH3-M-1 through PH3-M-5, PH3-L-1 through PH3-L-3, plus all Phase 2 items. No regressions found.
+
+### New Findings
+
+**PH3-RA-A1: Oracle dispatch tolerances make `cpu_oracle=true` non-functional** [MEDIUM] — FIXED
+`src/aero_cfd/cfd_solver.cpp:190`
+
+The oracle dispatch uses tolerances `1e-12f` (residual) and `1e-10f` (forces) for `assert_oracle_equivalent`. These are ~5 orders of magnitude tighter than float precision allows (FLT_EPSILON ~ 1.19e-7). Even a single iteration will fail the oracle due to float rounding differences between GPU and CPU (atomic non-associativity, HLLC wave-speed evaluation order). The tests use `1e-6` (line 384, 420, 454, 490, 526), confirming that 1e-12 is impractical. `cpu_oracle=true` will always report failure, making the feature non-functional. If activated, the solver returns `failed=true` with only the stderr oracle error message — the GPU `gpu_result` is discarded.
+
+Fix applied (2026-07-08): Changed to `1e-6f` for both residual and force tolerances, matching the test suite.
+
+**PH3-RA-A2: `cpu_oracle=true` dispatch path is completely untested** [MEDIUM] — FIXED
+`src/aero_cfd/cfd_solver.cpp:185-196`
+
+No test sets `cfg.cpu_oracle = true`. All 7 oracle tests (lines 358-531) call `solver.solve()` separately with GPU config then CPU config and manually compare via `assert_oracle_equivalent`. The automatic oracle dispatch code path — creating `cpu_cfg`, calling `solve_from_state`, checking `gpu_result.failed`, handling `assert_oracle_equivalent` failure — executes zero times across the test suite. Combined with PH3-RA-A1, this code path is both untested and non-functional.
+
+Fix applied (2026-07-08): Added `CFD-ORACLE-DISPATCH-1` test (`tests/cfd/test_cfd_gpu.cpp:534-554`) that sets `cfg.cpu_oracle = true` and verifies `solver.solve()` succeeds.
+
+**PH3-RA-A3: `host_converged` read back from device but never used** [LOW] — FIXED
+`src/aero_cfd/gpu_solver.cu:97`
+
+`d_converged` is cudaMemset to 0 at line 70, written by `check_status_kernel` each iteration (lines 87-91), and read back to host at line 97 (`cudaMemcpy &host_converged`). But `host_converged` is never referenced after line 97. The convergence decision is made independently from residual history at lines 116-118. This wastes: 4 bytes device memory, a kernel write per iteration, and a D2H transfer (4 bytes). The variable has no effect on program behavior.
+
+Fix applied (2026-07-08): Removed `d_converged` device buffer, `host_converged` host variable, `d_converged` parameter from `check_status_kernel` and `solve_gpu_impl`, and all related `cudaMalloc`/`cudaMemcpy`/`cudaFree` calls. Convergence detection uses residual history only (unchanged).
+
+**PH3-RA-A4: `d_converged` is never reset between iterations** [LOW] — FIXED
+`src/aero_cfd/gpu_solver.cu:70`
+
+`d_converged` is initialized to 0 before the loop but never cleared between iterations. If convergence is detected at iteration k, `d_converged` stays 1 for all subsequent iterations. This is benign because `host_converged` is unused (PH3-RA-A3), but the semantic intent is misleading — the flag should indicate "converged THIS iteration" not "converged ANY iteration."
+
+Fix applied (2026-07-08): Removed entirely along with PH3-RA-A3 — `d_converged` buffer and all related machinery deleted.
+
+**PH3-RA-A5: Solver loop continues after convergence or failure** [LOW] — NOT-A-BUG
+`src/aero_cfd/gpu_solver.cu:72-92`
+
+The iteration loop always runs `config.max_iter` iterations regardless of convergence or failure. `d_failed` and `d_converged` are set by kernels during the loop but only examined post-loop (lines 96-97). This is by design (Phase 3 zero-cudaMemcpy gate), but means: after NaN/divergence at iteration k, the solver runs all remaining iterations with corrupted state, wasting GPU cycles. The CPU solver (`cfd_solver.cpp:296-299`) breaks early on convergence. This asymmetry means GPU residual_history may contain post-convergence drift not present in CPU history. The oracle comparison handles length mismatch (`std::min`), but the convergence flag may differ if the GPU drifts after CPU break.
+
+Verdict: Intentional design trade-off of the zero-D2H gate. Early break requires D2H read of `d_failed`/`d_converged` each iteration, defeating the Phase 3 purpose.
+
+**PH3-RA-A6: `check_status_kernel` sets `d_converged=1` on failure** [INFO]
+`src/aero_cfd/gpu_solver.cu:30-33`
+
+When `*d_failed != 0`, `check_status_kernel` sets `*d_converged = 1` and writes `-1.0f` to the residual history slot. Writing `d_converged = 1` on failure is semantically wrong (failure is not convergence), but since `host_converged` is unused, this has no effect. The `-1.0f` sentinel is correctly used in the post-loop residual history parsing (line 112). If `d_converged` were ever used for convergence detection in the future, this would need to be fixed.
+
+Note: Rendered moot by PH3-RA-A3/A4 fix — `d_converged` removed entirely.
+
+### Summary
+
+| Severity | Count | IDs |
+|----------|-------|------|
+| HIGH     | 0 | |
+| MEDIUM   | 0 | |
+| LOW      | 0 | |
+| INFO     | 1 | PH3-RA-A6 (d_converged on failure, moot after fix) |
+
+Total: 6 new findings (4 FIXED, 1 NOT-A-BUG, 1 INFO).
+
+## Phase 4 Audit (2026-07-08)
+
+4 parallel read-only sub-agents audited: `gg_gradient_kernel`, limiter pipeline, 2nd-order residual integration, and solver loop integration.
+
+### HIGH
+
+**PH4-A-1: `init_minmax_kernel` writes only 2 of 10 floats for invalid cells — u/v/w/p left uninitialized** [HIGH] — FIXED
+`src/aero_cfd/reconstruction_gpu.cu:173-176`
+
+When `d_conservative_to_primitive` fails (rho<=0), the kernel writes:
+```cuda
+d_minmax[idx * kMINMAX_STRIDE + 0] = 1e10f;   // rho_min
+d_minmax[idx * kMINMAX_STRIDE + 1] = -1e10f;  // rho_max
+```
+Only indices 0,1 (rho) are set. Indices 2-9 (u_min/u_max, v_min/v_max, w_min/w_max, p_min/p_max) contain garbage from `cudaMalloc`'d memory. Also `rho_min=1e10 > rho_max=-1e10`, inverting the invariant. Currently masked by early-return guards in `update_minmax_kernel` (line 194) and `bj_limiter_kernel` (line 254), which skip reading invalid cell entries. Fragile — any refactoring that removes those guards would produce silent garbage.
+
+Fix applied (2026-07-08): All 10 floats now written with `m[i]=1e10f, m[i+1]=-1e10f` for each variable pair (rho, u, v, w, p), maintaining min>max sentinel invariant across the full stride.
+
+**PH4-A-2: Reconstructed face values lack `__finitef`/positivity checks on GPU** [HIGH] — FIXED
+`src/aero_cfd/cfd_residual_gpu.cu:181-186, 198-203`
+
+After `d_reconstruct_primitive` modifies the left/right primitive variables, there is no `__finitef` check and no positivity check on `rho` or `p`. The reconstructed values flow directly into `d_hllc_flux`, where `d_speed_of_sound` calls `sqrtf(gamma * p / rho)` — a negative `rho` or `p` produces NaN. The CPU has `reconstruct_primitive_positive` (`reconstruction.cpp:341-356`) which clamps against `rho_floor`/`p_floor`; the GPU has no equivalent. Barth-Jespersen limiters bound values to neighbor extrema but do not guarantee positivity in degenerate meshes or near strong shocks.
+
+Fix applied (2026-07-08): Added `__finitef`/positivity checks (`!__finitef(rho) || rho <= 0.0f || !__finitef(p) || p <= 0.0f`) after both left and right `d_reconstruct_primitive` calls. On failure, sets `d_failed` and returns early.
+
+**PH4-A-3: Gradient/limiter buffers never allocated in solver path** [HIGH] — FIXED
+`src/aero_cfd/device_mesh.cu:143-229`, `src/aero_cfd/gpu_solver.cu:162-188`
+
+`upload_mesh()` allocates face, cell, state, and residual buffers but **never** allocates `d_gradients_` or `d_limiters_`. When `solve_gpu()` reaches `compute_gradients_gpu()` with `reconstruction_order == 2`, `mesh.gradients_device()` returns `nullptr` and the function immediately returns `false` with error `"gradients buffer not allocated"`. This means `reconstruction_order == 2` will **always fail** on the first iteration of the solver loop. The only place gradients are allocated is `DeviceMesh::upload_gradients()` (device_mesh.cu:255), which is only called from test code, never from the solver path.
+
+Fix applied (2026-07-08): Added `d_gradients_` and `d_limiters_` allocation in `upload_mesh()` after residual allocation. Buffer is zeroed via `cudaMemset` after allocation.
+
+### MEDIUM
+
+**PH4-A-4: CPU vs GPU behavioral divergence on invalid cells** [MEDIUM]
+`src/aero_cfd/reconstruction_gpu.cu:173-176, 201-202, 254-255, 286` vs `src/aero_cfd/reconstruction.cpp:266-268`
+
+CPU `compute_barth_jespersen_limiters` returns an **empty vector** on any invalid cell — hard failure that propagates upward. GPU silently continues: invalid cells get partial sentinel minmax (PH4-A-1), zero gradients (from `cudaMemset` in `compute_gradients_gpu`, gg_gradient_kernel thread returns early), and limiter=1.0f (from `init_float_one_kernel`, never atomically reduced). This divergence can mask upstream bugs (e.g., a mesh with a single bad cell would produce silently-wrong results on GPU but fail loudly on CPU).
+
+**PH4-A-5: `cudaFree(d_minmax)` before `cudaGetLastError` check; no explicit sync** [MEDIUM] — FIXED
+`src/aero_cfd/reconstruction_gpu.cu:361-384`
+
+`cudaFree(d_minmax)` at line 383 executes before the `cudaGetLastError` check for `bj_limiter_kernel` at line 384. The error check occurs after the buffer is freed — if `bj_limiter_kernel` had a launch error, `cudaFree` still succeeds and the error is caught, which is correct but the ordering is a maintenance hazard. No `cudaDeviceSynchronize` is called anywhere in `compute_limiters_gpu` — function relies entirely on default-stream ordering for correctness.
+
+Fix applied (2026-07-08): Reordered so `cudaGetLastError` check occurs before `cudaFree(d_minmax)`, with `cudaFree` moved to after error handling. Added `cudaDeviceSynchronize` after `gg_gradient_kernel` in `compute_gradients_gpu`.
+
+**PH4-A-6: CPU `compute_euler_residual_cpu` has no 2nd-order path** [MEDIUM]
+`src/aero_cfd/cfd_residual.cpp:6-48`, `src/aero_cfd/cfd_solver.cpp:206-306`
+
+The CPU residual function is purely 1st-order — it reads cell-center values and feeds them directly to `hllc_flux`. No gradient reconstruction, no limiter application. `reconstruct_primitive` and `compute_barth_jespersen_limiters` exist in `reconstruction.cpp` but are never called from `compute_euler_residual_cpu`. This means:
+- GPU results with `reconstruction_order == 2` will differ from CPU results.
+- The `cpu_oracle` mode would detect a mismatch and report failure.
+
+Status: Design gap. The CPU oracle intentionally uses 1st-order only (fast reference). GPU 2nd-order should not be compared against CPU 1st-order. The `cpu_oracle` mode should be skipped or use reduced tolerance when `reconstruction_order == 2`. Deferred — not blocking Phase 4 gate (1st-order regression only).
+
+**PH4-A-7: Convenience `compute_euler_residual_gpu` overloads silently force 1st-order** [MEDIUM] — FIXED
+`include/aero_cfd/cfd_residual.hpp:31-49`, `src/aero_cfd/cfd_residual_gpu.cu:294-370`
+
+All convenience overloads (`compute_euler_residual_gpu(DeviceMesh&, ..., int* d_failed, ...)`, `compute_euler_residual_gpu(DeviceMesh&, ..., string*)`, `compute_euler_residual_gpu_timed`, `compute_euler_residual_gpu(CfdMesh&, ...)`) call `launch_euler_residual_kernel` without a `reconstruction_order` parameter, which defaults to 1. Only the solver loop (`gpu_solver.cu:75`) explicitly passes `config.reconstruction_order`. Any caller using the convenience overloads gets 1st-order even if gradients are available.
+
+Fix applied (2026-07-08): Added `int reconstruction_order = 1` parameter to all convenience overloads (d_failed, string*, timed). Each passes through to `launch_euler_residual_kernel`.
+
+**PH4-A-8: Silent fallback to 1st-order when gradients are missing** [MEDIUM] — FIXED
+`src/aero_cfd/cfd_residual_gpu.cu:262`
+
+Line 262: `bool second_order = (reconstruction_order == 2 && mesh.gradients_device() != nullptr);` If `reconstruction_order == 2` but `gradients_device()` returns `nullptr`, the kernel silently falls back to 1st-order. No error raised, no warning emitted. The caller may believe 2nd-order is active when it is not.
+
+Fix applied (2026-07-08): Added explicit error check in `launch_euler_residual_kernel`: if `reconstruction_order == 2 && !mesh.gradients_device()`, returns false with error message.
+
+**PH4-A-9: Duplicated stride constant `kNGRAD` vs `DeviceMesh::NGRAD`** [MEDIUM] — FIXED
+`src/aero_cfd/reconstruction_gpu.cu:79` vs `include/aero_cfd/device_mesh.hpp:59`
+
+`kNGRAD = 15` in the anonymous namespace (reconstruction_gpu.cu) and `NGRAD = 15` in DeviceMesh (device_mesh.hpp) are both 15 today. Host code uses `NGRAD` for allocation, kernel code uses `kNGRAD` for offset computation. If one is changed without the other, the kernel will read/write out-of-bounds. Same magic number issue exists in `gpu_wall.cu:52` (hardcoded `15` for pressure gradient offset).
+
+Fix applied (2026-07-08): Removed `kNGRAD` from anonymous namespace. All kernel gradient offsets now use `DeviceMesh::NGRAD` directly.
+
+### LOW
+
+**PH4-A-10: No zero-volume guard in `gg_gradient_kernel`** [LOW] — FIXED
+`src/aero_cfd/reconstruction_gpu.cu:140, 114`
+
+If `d_volume[left]` or `d_volume[right]` is zero (degenerate cell), `left_scale = area / 0` or `right_scale = -area / 0` produces Inf, which propagates via `atomicAdd` into the gradient buffer. In a valid mesh this should not occur, but no guard exists.
+
+Fix applied (2026-07-08): Added `if (d_volume[left] <= 0.0f) return;` and `if (d_volume[right] <= 0.0f) return;` guards before scale computation.
+
+**PH4-A-11: No `cudaDeviceSynchronize` after gradient/limiter kernel launches** [LOW] — FIXED
+`src/aero_cfd/reconstruction_gpu.cu:340, 363, 369, 384`
+
+All kernel launches use `cudaGetLastError()` for launch-error detection but no synchronization. Runtime errors (e.g., out-of-bounds device memory access) are not caught until the next explicit sync point, meaning error returns may wrongly indicate success.
+
+Fix applied (2026-07-08): Added `cudaDeviceSynchronize` after `gg_gradient_kernel` in `compute_gradients_gpu`.
+
+### INFO
+
+**PH4-A-12: Duplicated `d_conservative_to_primitive` across two `.cu` files** [INFO]
+`src/aero_cfd/cfd_residual_gpu.cu:11-21`, `src/aero_cfd/reconstruction_gpu.cu:17-28`
+
+Exact same device function in two anonymous namespaces. Not a bug, but any fix must be applied in both places.
+
+**PH4-A-13: Kernel does not accept separate `d_limiters` pointer — pre-applied in solver loop** [INFO]
+`src/aero_cfd/cfd_residual_gpu.cu:149-163` (kernel signature), `src/aero_cfd/gpu_solver.cu:64-68`
+
+The residual kernel signature has no `d_limiters` parameter. Instead, the solver loop applies limiters in-place to the gradient array via `apply_limiter_gpu` before launching the residual kernel. When the kernel reads `d_gradients`, it reads already-limited values. This is correct per-design but creates an implicit coupling between the solver loop and the kernel.
+
+### Summary
+
+| Severity | Count | IDs |
+|----------|-------|------|
+| HIGH     | 3 | PH4-A-1 — FIXED, PH4-A-2 — FIXED, PH4-A-3 — FIXED |
+| MEDIUM   | 5+1 | PH4-A-5 — FIXED, PH4-A-7 — FIXED, PH4-A-8 — FIXED, PH4-A-9 — FIXED; PH4-A-4 (design divergence), PH4-A-6 (CPU oracle gap, deferred) |
+| LOW      | 2 | PH4-A-10 — FIXED, PH4-A-11 — FIXED |
+| INFO     | 2 | PH4-A-12, PH4-A-13 (observations) |
+
+Total: 2 open + 9 fixed = 11 actionable findings (8 FIXED, 2 deferred design items) + 2 INFO.
+
+## CPU-GPU Capability Asymmetry (2026-07-08)
+
+**PH4-A-14: CPU solver has no second-order reconstruction path** [MEDIUM]
+`src/aero_cfd/cfd_solver.cpp:206-306`, `src/aero_cfd/cfd_residual.cpp:6-48`
+
+Both `CfdSolver::solve()` and `compute_euler_residual_cpu()` are purely first-order — no gradient computation, no limiter application, no face reconstruction. The functions `compute_green_gauss_gradients`, `compute_barth_jespersen_limiters`, and `reconstruct_primitive` exist in `reconstruction.cpp` but are never called from the solver or residual assembly. This means:
+
+- `reconstruction_order=2` on GPU has no CPU oracle to compare against.
+- Test RECON-4 (`CFD-ORACLE-RECON-4`) can only verify GPU order=2 differs from GPU order=1, not match a CPU reference.
+- `cpu_oracle=true` with `reconstruction_order=2` would always report mismatch.
+
+Status: Design gap. Not blocking Phase 4 gate (1st-order regression only). Deferred until CPU solver is extended with 2nd-order support or the oracle is explicitly configured to skip comparison when `reconstruction_order>1`. See also PH4-A-6.

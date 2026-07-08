@@ -134,6 +134,18 @@ __device__ void d_hllc_flux(
     }
 }
 
+__device__ void d_reconstruct_primitive(
+    const float* gradients, int cell,
+    float dx, float dy, float dz,
+    float& rho, float& u, float& v, float& w, float& p) {
+    const float* g = gradients + cell * 15;
+    rho = rho + g[0]*dx + g[1]*dy + g[2]*dz;
+    u = u + g[3]*dx + g[4]*dy + g[5]*dz;
+    v = v + g[6]*dx + g[7]*dy + g[8]*dz;
+    w = w + g[9]*dx + g[10]*dy + g[11]*dz;
+    p = p + g[12]*dx + g[13]*dy + g[14]*dz;
+}
+
 __global__ void euler_residual_kernel(
     const float* d_nx, const float* d_ny, const float* d_nz,
     const float* d_area,
@@ -145,7 +157,10 @@ __global__ void euler_residual_kernel(
     float inf_rho, float inf_p,
     float inf_u, float inf_v, float inf_w, float inf_a,
     float* d_residual,
-    int* d_failed) {
+    int* d_failed,
+    const float* d_gradients,
+    const float* d_face_cx, const float* d_face_cy, const float* d_face_cz,
+    const float* d_cx, const float* d_cy, const float* d_cz) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
 
@@ -163,6 +178,17 @@ __global__ void euler_residual_kernel(
         return;
     }
 
+    if (d_gradients != nullptr) {
+        float dx = d_face_cx[idx] - d_cx[left];
+        float dy = d_face_cy[idx] - d_cy[left];
+        float dz = d_face_cz[idx] - d_cz[left];
+        d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL);
+        if (!__finitef(rhoL) || rhoL <= 0.0f || !__finitef(pL) || pL <= 0.0f) {
+            atomicExch(d_failed, 1);
+            return;
+        }
+    }
+
     float mass, mom_x, mom_y, mom_z, energy;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
@@ -172,6 +198,16 @@ __global__ void euler_residual_kernel(
         if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
             atomicExch(d_failed, 1);
             return;
+        }
+        if (d_gradients != nullptr) {
+            float dx = d_face_cx[idx] - d_cx[right];
+            float dy = d_face_cy[idx] - d_cy[right];
+            float dz = d_face_cz[idx] - d_cz[right];
+            d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR);
+            if (!__finitef(rhoR) || rhoR <= 0.0f || !__finitef(pR) || pR <= 0.0f) {
+                atomicExch(d_failed, 1);
+                return;
+            }
         }
         d_hllc_flux(rhoL, uL, vL, wL, pL, rhoR, uR, vR, wR, pR, gamma, nx, ny, nz,
             mass, mom_x, mom_y, mom_z, energy);
@@ -217,18 +253,26 @@ bool launch_euler_residual_kernel(
     float gamma,
     int* d_failed,
     cudaEvent_t start_event,
-    std::string* error) {
+    std::string* error,
+    int reconstruction_order) {
     if (!mesh.clear_residual(error)) return false;
     if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) return false;
     if (start_event && !cuda_check(cudaEventRecord(start_event), "cudaEventRecord start", error)) return false;
 
+    if (reconstruction_order == 2 && !mesh.gradients_device()) {
+        if (error) *error = "reconstruction_order=2 but gradients not allocated";
+        return false;
+    }
+
     DeviceFaceData fd = mesh.face_data();
+    DeviceCellData cd = mesh.cell_data();
     float a_inf = speed_of_sound(freestream, gamma);
 
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
     int grid = (nf + block - 1) / block;
     int nc = static_cast<int>(mesh.cell_count());
+    bool second_order = (reconstruction_order == 2 && mesh.gradients_device() != nullptr);
     euler_residual_kernel<<<grid, block>>>(
         fd.nx, fd.ny, fd.nz, fd.area,
         fd.left_cell, fd.right_cell, fd.boundary,
@@ -238,7 +282,10 @@ bool launch_euler_residual_kernel(
         freestream.rho, freestream.p,
         freestream.u, freestream.v, freestream.w, a_inf,
         mesh.residual_device(),
-        d_failed);
+        d_failed,
+        second_order ? mesh.gradients_device() : nullptr,
+        fd.cx, fd.cy, fd.cz,
+        cd.cx, cd.cy, cd.cz);
     if (!cuda_check(cudaGetLastError(), "euler_residual_kernel launch", error)) return false;
     return true;
 }
@@ -262,12 +309,13 @@ bool compute_euler_residual_gpu(
     const PrimitiveState& freestream,
     float gamma,
     int* d_failed,
-    std::string* error) {
+    std::string* error,
+    int reconstruction_order) {
     if (mesh.cell_count() == 0 || mesh.face_count() == 0) {
         if (error) *error = "DeviceMesh is not ready";
         return false;
     }
-    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, nullptr, error)) return false;
+    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, nullptr, error, reconstruction_order)) return false;
     if (!cuda_check(cudaDeviceSynchronize(), "euler_residual_kernel synchronize", error)) return false;
     return read_kernel_failed_flag(d_failed, error);
 }
@@ -276,10 +324,11 @@ bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
     float gamma,
-    std::string* error) {
+    std::string* error,
+    int reconstruction_order) {
     int* d_failed = nullptr;
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) return false;
-    bool ok = compute_euler_residual_gpu(mesh, freestream, gamma, d_failed, error);
+    bool ok = compute_euler_residual_gpu(mesh, freestream, gamma, d_failed, error, reconstruction_order);
     cudaFree(d_failed);
     return ok;
 }
@@ -289,7 +338,8 @@ bool compute_euler_residual_gpu_timed(
     const PrimitiveState& freestream,
     float gamma,
     float* elapsed_ms,
-    std::string* error) {
+    std::string* error,
+    int reconstruction_order) {
     if (elapsed_ms) *elapsed_ms = 0.0f;
     if (mesh.cell_count() == 0 || mesh.face_count() == 0) {
         if (error) *error = "DeviceMesh is not ready";
@@ -302,7 +352,7 @@ bool compute_euler_residual_gpu_timed(
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
     if (!cuda_check(cudaEventCreate(&start), "cudaEventCreate start", error)) goto fail;
     if (!cuda_check(cudaEventCreate(&stop), "cudaEventCreate stop", error)) goto fail;
-    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, start, error)) goto fail;
+    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, start, error, reconstruction_order)) goto fail;
     if (!cuda_check(cudaEventRecord(stop), "cudaEventRecord stop", error)) goto fail;
     if (!cuda_check(cudaEventSynchronize(stop), "cudaEventSynchronize stop", error)) goto fail;
     if (elapsed_ms) {

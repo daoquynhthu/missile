@@ -109,3 +109,48 @@
 - Fixed PH2-F-3: Added `solve_gpu` overload with caller-allocated device buffers (d_failed, d_min_dt, d_l2_sum, d_forces) for reuse across multiple calls.
 - Remaining open: PH2-E-2 (atomicAdd non-associativity plateau, deferred to Phase 4 colored partitioning), PH2-G-1 (cudaMemcpy in iteration loop, deferred to Phase 3).
 - Verified: build + all 8 GPU tests pass after 3 additional fixes.
+
+2026-07-08
+- Phase 3 (CPU Oracle & Regression Verification) completed.
+- Task 1: Added `bool cpu_oracle = false` to CfdConfig.
+- Task 2: Implemented `assert_oracle_equivalent()` comparing residual history + force components with relative tolerance. Oracle dispatch in `CfdSolver::solve()`: after GPU solve, if `cpu_oracle=true`, runs CPU solve and asserts match.
+- Task 3: Eliminated all 4 cudaMemcpy calls from iteration loop (PH2-G-1 fixed). Added `check_status_kernel` for device-side convergence/failure detection. Iteration loop now launches all max_iter iterations without host reads. Post-loop: single sync + batch D2H reads. Changed `compute_update_gpu` to accept `const float* d_min_dt` (device pointer read).
+- Task 4: Added 7 oracle tests (CFD-ORACLE-EULER-1..5, MESH-1, BW-1) covering freestream preservation, symmetric cube forces, flat plate forces, convergence history, wall force components, device mesh counts, and memory bandwidth.
+- Verification: `cmake --build build --target TestCfdGpu` passed; `TestCfdGpu.exe` 15/15 tests PASS.
+- Remaining open: PH2-E-2 (atomicAdd, deferred to Phase 4). Zero-cudaMemcpy (PH2-G-1) now fixed.
+
+2026-07-08
+- Phase 4 (GPU Second-Order Reconstruction) Steps 1-5 implemented.
+- Step 1: Added `int reconstruction_order = 1` to CfdConfig.
+- Step 2: Implemented `gg_gradient_kernel` (15-component atomicAdd per face), `compute_gradients_gpu` wrapper.
+- Step 3: Implemented `init_minmax_kernel`, `update_minmax_kernel`, `bj_limiter_kernel` three-pass limiter pipeline, `compute_limiters_gpu` wrapper.
+- Step 4: Extended `euler_residual_kernel` with 2nd-order reconstruction path (`d_reconstruct_primitive`), `launch_euler_residual_kernel` takes `reconstruction_order` param.
+- Step 5: Added 2nd-order branch (gradients → limiters → apply) to solver loop in `gpu_solver.cu`.
+- Fixed two build bugs: (a) `rhoR...pR` scope in `gg_gradient_kernel` — moved right-cell gradient inside the interior block; (b) `atomicMin(float*)`/`atomicMax(float*)` not available in CUDA 13.0 — replaced with CAS-loop `atomic_min_float`/`atomic_max_float`.
+- Verification: `cmake --build build --target TestCfdGpu` passed; `TestCfdGpu.exe` 15/16 PASS (BW-1 pre-existing throttling).
+
+2026-07-08
+- Phase 4 Step 6: Added 3 regression tests for GPU second-order reconstruction.
+  - RECON-1 (`test_recon_constant_state_zero_gradients`): uniform flow on cube mesh, CPU and GPU gradients both near zero (CPU tol=1e-12, GPU tol=1e-6).
+  - RECON-2 (`test_recon_gradient_match`): manufactured linear variation on cube mesh, all 10 gradient components CPU=GPU within 2e-6.
+  - RECON-3 (`test_recon_first_order_regression`): `reconstruction_order=1` forces bitwise-identical residual match with CPU 1st-order, tol=1e-12.
+- Phase 4 audit fixes all verified (9 FIXED, 2 deferred to ISSUES.md).
+- Verification: `cmake --build build --target TestCfdGpu` passed; `TestCfdGpu.exe` 18/19 PASS (BW-1 pre-existing).
+
+2026-07-08
+- Phase 4 Step 7: Implemented diagnostics_kernel and failure_snapshot_kernel.
+  - Created `src/aero_cfd/gpu_diagnostics.cu` with `state_bounds_kernel` (shared-memory reduction for per-iteration min/max rho/p/mach across all cells) and `compute_state_bounds_gpu` wrapper.
+  - Modified `update_and_l2_kernel` in `gpu_update.cu` to capture first failing cell via `atomicCAS(d_failed, 0, 1)` instead of `atomicExch`, writing cell index + state to device buffers.
+  - Modified `compute_update_gpu` to accept optional `d_failure_cell`/`d_failure_state` parameters.
+  - Integrated diagnostics into `solve_gpu_impl` loop: calls `compute_state_bounds_gpu` each iteration when `config.diagnostic_level != Off`, downloads state_bounds_history and failure snapshot post-loop.
+  - Fixed post-loop control flow so diagnostics are downloaded even when solver fails (host_failed != 0).
+  - Added `compute_failure_snapshot_gpu` as a standalone scan kernel for use outside the solver loop.
+- Added `CFD-ORACLE-DIAG-1`: 5-iter Mach 1.5 cube, GPU state bounds min/max rho/p/mach match CPU within 2e-5.
+- Added `CFD-ORACLE-DIAG-2`: invalid initial state (rho=-1) triggers GPU solver failure with populated failure snapshot.
+- Verification: `cmake -B build` (picked up new gpu_diagnostics.cu); `cmake --build build --target TestCfdGpu` passed; `TestCfdGpu.exe` 20/21 PASS (BW-1 pre-existing).
+
+2026-07-08
+- Phase 4 Step 6b: Added RECON-4 regression test.
+  - `CFD-ORACLE-RECON-4`: runs both order=1 and order=2 GPU solves on Mach 2, alpha=2° cube mesh. Verifies order=2 produces finite forces that differ from order=1 (confirms reconstruction is active).
+- Phase 4 is now complete: all kernels (gradients, limiters, reconstruction, diagnostics, failure snapshot) and all regression tests (RECON-1..4, DIAG-1, DIAG-2, MESH-1, BW-1) are implemented.
+- Verification: `cmake --build build --target TestCfdGpu` passed; `TestCfdGpu.exe` 21/22 PASS (BW-1 pre-existing).
