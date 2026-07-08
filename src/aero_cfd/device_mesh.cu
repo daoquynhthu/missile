@@ -54,6 +54,14 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_face_cx_ = other.d_face_cy_ = other.d_face_cz_ = nullptr;
     other.d_gradients_ = nullptr;
     other.d_limiters_ = nullptr;
+    d_halo_indices_ = other.d_halo_indices_;
+    d_halo_send_buf_ = other.d_halo_send_buf_;
+    d_halo_recv_buf_ = other.d_halo_recv_buf_;
+    n_halo_cells_ = other.n_halo_cells_;
+    other.d_halo_indices_ = nullptr;
+    other.d_halo_send_buf_ = nullptr;
+    other.d_halo_recv_buf_ = nullptr;
+    other.n_halo_cells_ = 0;
     n_colors_ = other.n_colors_;
     d_color_offsets_ = other.d_color_offsets_;
     host_color_offsets_ = std::move(other.host_color_offsets_);
@@ -181,10 +189,14 @@ void DeviceMesh::release() {
     FREE_AND_ASSERT(d_gradients_);
     FREE_AND_ASSERT(d_limiters_);
     FREE_AND_ASSERT(d_color_offsets_);
+    FREE_AND_ASSERT(d_halo_indices_);
+    FREE_AND_ASSERT(d_halo_send_buf_);
+    FREE_AND_ASSERT(d_halo_recv_buf_);
 #undef FREE_AND_ASSERT
     cell_count_ = 0;
     face_count_ = 0;
     n_colors_ = 0;
+    n_halo_cells_ = 0;
     host_color_offsets_.clear();
 }
 
@@ -418,9 +430,28 @@ bool DeviceMesh::download_gradients(std::vector<PrimitiveGradient>& gradients, s
     return cuda_check(cudaMemcpy(gradients.data(), d_gradients_, nc * sizeof(PrimitiveGradient), cudaMemcpyDeviceToHost), "cudaMemcpy download_gradients", error);
 }
 
+bool DeviceMesh::allocate_halo(int n_halo_cells) {
+    if (n_halo_cells <= 0) {
+        n_halo_cells_ = 0;
+        return true;
+    }
+    release();
+    n_halo_cells_ = n_halo_cells;
+    if (!cuda_check(cudaMalloc(&d_halo_indices_, n_halo_cells_ * sizeof(int)), "cudaMalloc halo_indices", nullptr)) {
+        n_halo_cells_ = 0;
+        return false;
+    }
+    if (!cuda_check(cudaMalloc(&d_halo_send_buf_, n_halo_cells_ * NVAR * sizeof(Real)), "cudaMalloc halo_send_buf", nullptr)) {
+        release();
+        return false;
+    }
+    if (!cuda_check(cudaMalloc(&d_halo_recv_buf_, n_halo_cells_ * NVAR * sizeof(Real)), "cudaMalloc halo_recv_buf", nullptr)) {
+        release();
+        return false;
+    }
+    return true;
+}
+
 } // namespace Cfd
 } // namespace AeroSim
-
-
-
 

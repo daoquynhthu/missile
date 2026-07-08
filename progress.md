@@ -188,3 +188,13 @@
   - TestCfdDiagnostics: 4/4 PASS (VTK bug fixed)
   - TestCfdNs: ALL PASS
   - TestCfdGpu: 25/26 PASS (BW-1 pre-existing flaky)
+
+2026-07-08
+- Step 3 (MPI reserved interface) implemented:
+  - device_mesh.hpp: Added d_halo_indices_/d_halo_send_buf_/d_halo_recv_buf_ fields,
+    n_halo_cells_ count, has_halo()/allocate_halo() methods, and accessors.
+  - device_mesh.cu: allocate_halo() allocates device buffers; release() frees them;
+    move constructor/assignment transfers them.
+  - gpu_solver.cu: Added multi-stream structure under #ifdef MPI_ENABLED guard
+    (stream_comp/stream_comm, exchange_halo placeholder, stream_comm sync).
+- Verification: --clean-first build passes; all 6 test suites PASS (BW-1 pre-existing).

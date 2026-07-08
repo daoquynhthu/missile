@@ -98,6 +98,13 @@ public:
     Real* gradients_device() const { return d_gradients_; }
     Real* limiters_device() const { return d_limiters_; }
 
+    // MPI halo (reserved, no-op in single-GPU mode)
+    bool has_halo() const { return d_halo_indices_ != nullptr; }
+    bool allocate_halo(int n_halo_cells);
+    int* halo_indices_device() const { return d_halo_indices_; }
+    Real* halo_send_device() const { return d_halo_send_buf_; }
+    Real* halo_recv_device() const { return d_halo_recv_buf_; }
+
 private:
     std::size_t cell_count_ = 0;
     std::size_t face_count_ = 0;
@@ -129,6 +136,12 @@ private:
     int n_colors_ = 0;
     int* d_color_offsets_ = nullptr;
     std::vector<int> host_color_offsets_;
+
+    // MPI halo (reserved, nullptr = single-GPU mode)
+    int* d_halo_indices_ = nullptr;
+    Real* d_halo_send_buf_ = nullptr;
+    Real* d_halo_recv_buf_ = nullptr;
+    int n_halo_cells_ = 0;
 };
 
 } // namespace Cfd

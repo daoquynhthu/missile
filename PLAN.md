@@ -415,6 +415,33 @@ Gate:
 
 ---
 
+## Step 3 — MPI 预留接口
+
+Goal: 冻结 MPI halo 交换 + 多流接口契约，不实现 MPI。`has_halo()==false` 时单 GPU 性能零退化。
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero_cfd/device_mesh.hpp` | MODIFY | 新增 `d_halo_indices_`/`d_halo_send_buf_`/`d_halo_recv_buf_` 字段、`has_halo()`/`allocate_halo()` 方法 |
+| `src/aero_cfd/device_mesh.cu` | MODIFY | `allocate_halo()` 分配 device 缓冲、`release()` 释放、move 操作转移 |
+| `src/aero_cfd/gpu_solver.cu` | MODIFY | `#ifdef MPI_ENABLED` 保护下添加 `stream_comp`/`stream_comm`、`exchange_halo` 占位、`stream_comm` 同步 |
+
+Tasks:
+
+- [x] `device_mesh.hpp`: 新增 halo 字段和方法
+- [x] `device_mesh.cu`: `allocate_halo`/`release`/move 实现
+- [x] `gpu_solver.cu`: `MPI_ENABLED` guard 内多流占位结构
+- [x] 验证：单 GPU 零退化，全部测试 PASS（仅 BW-1 预存波动）
+
+Gate:
+
+- [x] 不新增 `#include <mpi.h>`，不链接 MPI 库。
+- [x] `has_halo() == false` 时，单 GPU 性能零退化。
+- [x] 多流版本在 `MPI_ENABLED` 宏保护下编译。
+
+---
+
 ## Phase 5 — GPU Viscous Navier-Stokes
 
 Goal: port laminar NS viscous flux, wall shear, and heat flux to GPU. Integrate into `solve_gpu()`.

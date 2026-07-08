@@ -65,7 +65,18 @@ static CfdSolveSummary solve_gpu_impl(
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     int nvar_ncells = DeviceMesh::NVAR * static_cast<int>(d_mesh.cell_count());
 
+#ifdef MPI_ENABLED
+    cudaStream_t stream_comp, stream_comm;
+    cudaStreamCreate(&stream_comp);
+    cudaStreamCreate(&stream_comm);
+#endif
+
     for (int iter = 0; iter < config.max_iter; ++iter) {
+#ifdef MPI_ENABLED
+        if (d_mesh.has_halo()) {
+            // exchange_halo_kernel<<<grid, 1, 0, stream_comm>>>(d_mesh.halo_send_device(), d_mesh.halo_recv_device());
+        }
+#endif
         if (config.reconstruction_order == 2) {
             if (!compute_gradients_gpu(d_mesh, config.gamma, error, d_failed)) goto fail;
             if (!compute_limiters_gpu(d_mesh, config.gamma, error, d_failed)) goto fail;
@@ -99,6 +110,12 @@ static CfdSolveSummary solve_gpu_impl(
             d_failed, d_l2_sum, nvar_ncells,
             config.convergence_tol, d_residual_history + iter);
         if (!cuda_check(cudaGetLastError(), "check_status kernel launch", error)) goto fail;
+
+#ifdef MPI_ENABLED
+        if (d_mesh.has_halo()) {
+            cudaStreamSynchronize(stream_comm);
+        }
+#endif
     }
 
     if (!cuda_check(cudaDeviceSynchronize(), "post-loop sync", error)) goto fail;
