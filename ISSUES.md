@@ -487,10 +487,12 @@ Fix applied (2026-07-08): Added `d_gradients_` and `d_limiters_` allocation in `
 
 ### MEDIUM
 
-**PH4-A-4: CPU vs GPU behavioral divergence on invalid cells** [MEDIUM]
+**PH4-A-4: CPU vs GPU behavioral divergence on invalid cells** [MEDIUM] — FIXED
 `src/aero_cfd/reconstruction_gpu.cu:173-176, 201-202, 254-255, 286` vs `src/aero_cfd/reconstruction.cpp:266-268`
 
 CPU `compute_barth_jespersen_limiters` returns an **empty vector** on any invalid cell — hard failure that propagates upward. GPU silently continues: invalid cells get partial sentinel minmax (PH4-A-1), zero gradients (from `cudaMemset` in `compute_gradients_gpu`, gg_gradient_kernel thread returns early), and limiter=1.0f (from `init_float_one_kernel`, never atomically reduced). This divergence can mask upstream bugs (e.g., a mesh with a single bad cell would produce silently-wrong results on GPU but fail loudly on CPU).
+
+Fix applied (2026-07-08): Added `int* d_failed` parameter to `gg_gradient_kernel`, `init_minmax_kernel`, `update_minmax_kernel`, `bj_limiter_kernel`, and the `compute_gradients_gpu`/`compute_limiters_gpu` wrapper functions. Each kernel sets `d_failed` via `atomicCAS(d_failed, 0, 1)` on any early-return path due to invalid cell state (rho<=0, p<=0, degenerate volume). Wrapper functions perform a D2H read of `d_failed` after kernel sync and return `false` with an error message if any cell failed. The solver loop (`gpu_solver.cu:70-73`) now passes the iteration's `d_failed` buffer through to both functions.
 
 **PH4-A-5: `cudaFree(d_minmax)` before `cudaGetLastError` check; no explicit sync** [MEDIUM] — FIXED
 `src/aero_cfd/reconstruction_gpu.cu:361-384`
@@ -562,11 +564,11 @@ The residual kernel signature has no `d_limiters` parameter. Instead, the solver
 | Severity | Count | IDs |
 |----------|-------|------|
 | HIGH     | 3 | PH4-A-1 — FIXED, PH4-A-2 — FIXED, PH4-A-3 — FIXED |
-| MEDIUM   | 5+1 | PH4-A-5 — FIXED, PH4-A-7 — FIXED, PH4-A-8 — FIXED, PH4-A-9 — FIXED; PH4-A-4 (design divergence), PH4-A-6 (CPU oracle gap, deferred) |
+| MEDIUM   | 5+1 | PH4-A-4 — FIXED, PH4-A-5 — FIXED, PH4-A-7 — FIXED, PH4-A-8 — FIXED, PH4-A-9 — FIXED; PH4-A-6 (CPU oracle gap, deferred) |
 | LOW      | 2 | PH4-A-10 — FIXED, PH4-A-11 — FIXED |
 | INFO     | 2 | PH4-A-12, PH4-A-13 (observations) |
 
-Total: 2 open + 9 fixed = 11 actionable findings (8 FIXED, 2 deferred design items) + 2 INFO.
+Total: 1 open + 10 fixed = 11 actionable findings (9 FIXED, 1 deferred design item) + 2 INFO.
 
 ## CPU-GPU Capability Asymmetry (2026-07-08)
 

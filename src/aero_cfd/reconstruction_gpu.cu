@@ -83,7 +83,8 @@ __global__ void gg_gradient_kernel(
     const float* d_nx, const float* d_ny, const float* d_nz, const float* d_area,
     const float* d_volume,
     float gamma,
-    float* d_gradients) {
+    float* d_gradients,
+    int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
 
@@ -92,7 +93,10 @@ __global__ void gg_gradient_kernel(
     int bnd = d_boundary[idx];
 
     float rhoL, uL, vL, wL, pL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) return;
+    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
+        return;
+    }
 
     float nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
     float area = d_area[idx];
@@ -102,14 +106,20 @@ __global__ void gg_gradient_kernel(
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
         float rhoR, uR, vR, wR, pR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) return;
+        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+            if (d_failed) atomicCAS(d_failed, 0, 1);
+            return;
+        }
         rhoF = 0.5f * (rhoL + rhoR);
         uF = 0.5f * (uL + uR);
         vF = 0.5f * (vL + vR);
         wF = 0.5f * (wL + wR);
         pF = 0.5f * (pL + pR);
 
-        if (d_volume[right] <= 0.0f) return;
+        if (d_volume[right] <= 0.0f) {
+            if (d_failed) atomicCAS(d_failed, 0, 1);
+            return;
+        }
         float right_scale = -area / d_volume[right];
         float* gR = d_gradients + right * DeviceMesh::NGRAD;
         float drho_r = rhoF - rhoR;
@@ -136,7 +146,10 @@ __global__ void gg_gradient_kernel(
         rhoF = rhoL; uF = uL; vF = vL; wF = wL; pF = pL;
     }
 
-    if (d_volume[left] <= 0.0f) return;
+    if (d_volume[left] <= 0.0f) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
+        return;
+    }
     float left_scale = area / d_volume[left];
     float drho = rhoF - rhoL;
     float du = uF - uL;
@@ -166,11 +179,13 @@ constexpr int kMINMAX_STRIDE = 10;
 
 __global__ void init_minmax_kernel(
     const float* d_q, int nvar, int n_cells, float gamma,
-    float* d_minmax) {
+    float* d_minmax,
+    int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
     float rho, u, v, w, p;
     if (!d_conservative_to_primitive(d_q, idx, nvar, gamma, rho, u, v, w, p)) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
         float* m = d_minmax + idx * kMINMAX_STRIDE;
         m[0] = 1e10f;  m[1] = -1e10f;
         m[2] = 1e10f;  m[3] = -1e10f;
@@ -191,7 +206,8 @@ __global__ void update_minmax_kernel(
     const float* d_q, int nvar, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     float gamma,
-    float* d_minmax) {
+    float* d_minmax,
+    int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
     int bnd = d_boundary[idx];
@@ -202,8 +218,14 @@ __global__ void update_minmax_kernel(
 
     float rhoL, uL, vL, wL, pL;
     float rhoR, uR, vR, wR, pR;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) return;
-    if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) return;
+    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
+        return;
+    }
+    if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
+        return;
+    }
 
     auto update = [](float* min_addr, float* max_addr, float val) {
         atomic_min_float(min_addr, val);
@@ -247,7 +269,8 @@ __global__ void bj_limiter_kernel(
     float gamma,
     const float* d_gradients,
     const float* d_minmax,
-    float* d_limiters) {
+    float* d_limiters,
+    int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
 
@@ -256,7 +279,10 @@ __global__ void bj_limiter_kernel(
     int bnd = d_boundary[idx];
 
     float rhoL, uL, vL, wL, pL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) return;
+    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
+        return;
+    }
 
     float dxL = d_face_cx[idx] - d_cx[left];
     float dyL = d_face_cy[idx] - d_cy[left];
@@ -287,7 +313,10 @@ __global__ void bj_limiter_kernel(
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
         float rhoR, uR, vR, wR, pR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) return;
+        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+            if (d_failed) atomicCAS(d_failed, 0, 1);
+            return;
+        }
 
         float dxR = d_face_cx[idx] - d_cx[right];
         float dyR = d_face_cy[idx] - d_cy[right];
@@ -318,7 +347,7 @@ __global__ void bj_limiter_kernel(
 
 } // namespace
 
-bool compute_gradients_gpu(DeviceMesh& mesh, float gamma, std::string* error) {
+bool compute_gradients_gpu(DeviceMesh& mesh, float gamma, std::string* error, int* d_failed) {
     if (mesh.cell_count() == 0 || mesh.face_count() == 0) return true;
     if (!mesh.gradients_device()) {
         if (error) *error = "gradients buffer not allocated";
@@ -340,12 +369,24 @@ bool compute_gradients_gpu(DeviceMesh& mesh, float gamma, std::string* error) {
         fd.left_cell, fd.right_cell, fd.boundary,
         fd.nx, fd.ny, fd.nz, fd.area,
         cd.volume, gamma,
-        mesh.gradients_device());
+        mesh.gradients_device(),
+        d_failed);
     if (!cuda_check(cudaGetLastError(), "gg_gradient_kernel", error)) return false;
-    return cuda_check(cudaDeviceSynchronize(), "gg_gradient_kernel synchronize", error);
+    if (!cuda_check(cudaDeviceSynchronize(), "gg_gradient_kernel synchronize", error)) return false;
+
+    if (d_failed) {
+        int host_failed = 0;
+        if (!cuda_check(cudaMemcpy(&host_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost),
+                "gg_gradient read d_failed", error)) return false;
+        if (host_failed) {
+            if (error) *error = "invalid cell state detected in gradient computation";
+            return false;
+        }
+    }
+    return true;
 }
 
-bool compute_limiters_gpu(DeviceMesh& mesh, float gamma, std::string* error) {
+bool compute_limiters_gpu(DeviceMesh& mesh, float gamma, std::string* error, int* d_failed) {
     if (mesh.cell_count() == 0 || mesh.face_count() == 0) return true;
     if (!mesh.gradients_device() || !mesh.limiters_device()) {
         if (error) *error = "gradient/limiter buffers not allocated";
@@ -364,13 +405,13 @@ bool compute_limiters_gpu(DeviceMesh& mesh, float gamma, std::string* error) {
     int face_grid = (nf + block - 1) / block;
 
     init_minmax_kernel<<<cell_grid, block>>>(
-        mesh.state_device(), DeviceMesh::NVAR, nc, gamma, d_minmax);
+        mesh.state_device(), DeviceMesh::NVAR, nc, gamma, d_minmax, d_failed);
     if (!cuda_check(cudaGetLastError(), "init_minmax_kernel", error)) { cudaFree(d_minmax); return false; }
 
     update_minmax_kernel<<<face_grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, nc, nf,
         mesh.face_data().left_cell, mesh.face_data().right_cell, mesh.face_data().boundary,
-        gamma, d_minmax);
+        gamma, d_minmax, d_failed);
     if (!cuda_check(cudaGetLastError(), "update_minmax_kernel", error)) { cudaFree(d_minmax); return false; }
 
     int limiter_grid = (nc * 5 + block - 1) / block;
@@ -384,9 +425,19 @@ bool compute_limiters_gpu(DeviceMesh& mesh, float gamma, std::string* error) {
         mesh.cell_data().cx, mesh.cell_data().cy, mesh.cell_data().cz,
         gamma,
         mesh.gradients_device(), d_minmax,
-        mesh.limiters_device());
+        mesh.limiters_device(), d_failed);
     if (!cuda_check(cudaGetLastError(), "bj_limiter_kernel", error)) { cudaFree(d_minmax); return false; }
     cudaFree(d_minmax);
+
+    if (d_failed) {
+        int host_failed = 0;
+        if (!cuda_check(cudaMemcpy(&host_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost),
+                "limiter read d_failed", error)) return false;
+        if (host_failed) {
+            if (error) *error = "invalid cell state detected in limiter computation";
+            return false;
+        }
+    }
     return true;
 }
 

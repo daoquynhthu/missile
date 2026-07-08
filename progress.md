@@ -154,3 +154,12 @@
   - `CFD-ORACLE-RECON-4`: runs both order=1 and order=2 GPU solves on Mach 2, alpha=2° cube mesh. Verifies order=2 produces finite forces that differ from order=1 (confirms reconstruction is active).
 - Phase 4 is now complete: all kernels (gradients, limiters, reconstruction, diagnostics, failure snapshot) and all regression tests (RECON-1..4, DIAG-1, DIAG-2, MESH-1, BW-1) are implemented.
 - Verification: `cmake --build build --target TestCfdGpu` passed; `TestCfdGpu.exe` 21/22 PASS (BW-1 pre-existing).
+
+2026-07-08
+- Fixed PH4-A-4: GPU gradient/limiter pipeline now signals failure on invalid cells, matching CPU behavior.
+  - Added `int* d_failed` parameter to `gg_gradient_kernel`, `init_minmax_kernel`, `update_minmax_kernel`, `bj_limiter_kernel`.
+  - Kernels use `atomicCAS(d_failed, 0, 1)` on invalid-cell early-return paths.
+  - `compute_gradients_gpu` and `compute_limiters_gpu` check `d_failed` post-sync and return `false` on failure.
+  - Solver loop passes `d_failed` to both functions.
+- BW-1 bandwidth test now also passes (likely throttling resolved).
+- Verification: `cmake --build build --target TestCfdGpu --config Release` passed; `TestCfdGpu.exe` 22/22 PASS.

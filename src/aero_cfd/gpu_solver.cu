@@ -68,8 +68,8 @@ static CfdSolveSummary solve_gpu_impl(
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
         if (config.reconstruction_order == 2) {
-            if (!compute_gradients_gpu(d_mesh, config.gamma, error)) goto fail;
-            if (!compute_limiters_gpu(d_mesh, config.gamma, error)) goto fail;
+            if (!compute_gradients_gpu(d_mesh, config.gamma, error, d_failed)) goto fail;
+            if (!compute_limiters_gpu(d_mesh, config.gamma, error, d_failed)) goto fail;
             if (!apply_limiter_gpu(d_mesh, false, error)) goto fail;
         }
 

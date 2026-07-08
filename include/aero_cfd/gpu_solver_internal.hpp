@@ -7,9 +7,11 @@ namespace Cfd {
 
 bool compute_timestep_gpu(DeviceMesh& mesh, float gamma, float cfl, float* d_min_dt);
 
-bool compute_gradients_gpu(DeviceMesh& mesh, float gamma, std::string* error = nullptr);
+bool compute_gradients_gpu(DeviceMesh& mesh, float gamma, std::string* error = nullptr,
+    int* d_failed = nullptr);
 
-bool compute_limiters_gpu(DeviceMesh& mesh, float gamma, std::string* error = nullptr);
+bool compute_limiters_gpu(DeviceMesh& mesh, float gamma, std::string* error = nullptr,
+    int* d_failed = nullptr);
 
 bool compute_update_gpu(DeviceMesh& mesh, const float* d_min_dt, float gamma,
     float* d_l2_sum, int* d_failed,
