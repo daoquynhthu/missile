@@ -1,41 +1,40 @@
 #include "aero_cfd/cuda_utils.hpp"
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/device_mesh.hpp"
 #include "aero_cfd/gpu_solver_internal.hpp"
-
 #include <cfloat>
 #include <cuda_runtime.h>
-
 namespace AeroSim {
 namespace Cfd {
 
 namespace {
 
-__global__ void init_float_max_kernel(float* ptr) {
+__global__ void init_float_max_kernel(Real* ptr) {
     *ptr = FLT_MAX;
 }
 
 __global__ void timestep_kernel(
-    const float* d_q, int n_cells, int nvar, float gamma, float cfl,
-    const float* d_volume, const float* d_h_min,
-    float* d_min_dt) {
+    const Real* d_q, int n_cells, int nvar, Real gamma, Real cfl,
+    const Real* d_volume, const Real* d_h_min,
+    Real* d_min_dt) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
 
-    float rho = d_q[idx * nvar + 0];
-    if (!__finitef(rho) || rho <= 0.0f) return;
-    float inv_rho = 1.0f / rho;
-    float u = d_q[idx * nvar + 1] * inv_rho;
-    float v = d_q[idx * nvar + 2] * inv_rho;
-    float w = d_q[idx * nvar + 3] * inv_rho;
-    float E = d_q[idx * nvar + 4];
-    float kinetic = 0.5f * (u*u + v*v + w*w);
-    float p = (gamma - 1.0f) * (E - rho * kinetic);
-    if (!__finitef(p) || p <= 0.0f) return;
+    Real rho = d_q[idx * nvar + 0];
+    if (!real_isfinite(rho) || rho <= 0.0f) return;
+    Real inv_rho = 1.0f / rho;
+    Real u = d_q[idx * nvar + 1] * inv_rho;
+    Real v = d_q[idx * nvar + 2] * inv_rho;
+    Real w = d_q[idx * nvar + 3] * inv_rho;
+    Real E = d_q[idx * nvar + 4];
+    Real kinetic = 0.5f * (u*u + v*v + w*w);
+    Real p = (gamma - 1.0f) * (E - rho * kinetic);
+    if (!real_isfinite(p) || p <= 0.0f) return;
 
-    float vmag = sqrtf(u*u + v*v + w*w);
-    float a = sqrtf(gamma * p / rho);
-    float denom = vmag + a;
-    float dt = cfl * d_h_min[idx] / (denom > 1e-30f ? denom : 1e-30f);
+    Real vmag = real_sqrt(u*u + v*v + w*w);
+    Real a = real_sqrt(gamma * p / rho);
+    Real denom = vmag + a;
+    Real dt = cfl * d_h_min[idx] / (denom > 1e-30f ? denom : 1e-30f);
     unsigned int candidate = __float_as_int(dt);
     unsigned int* ptr = reinterpret_cast<unsigned int*>(d_min_dt);
     unsigned int old = atomicCAS(ptr, __float_as_int(FLT_MAX), candidate);
@@ -48,7 +47,7 @@ __global__ void timestep_kernel(
 
 } // namespace
 
-bool compute_timestep_gpu(DeviceMesh& mesh, float gamma, float cfl, float* d_min_dt) {
+bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt) {
     init_float_max_kernel<<<1, 1>>>(d_min_dt);
     if (!cuda_check(cudaGetLastError(), "init_float_max kernel launch")) return false;
 
@@ -66,3 +65,7 @@ bool compute_timestep_gpu(DeviceMesh& mesh, float gamma, float cfl, float* d_min
 
 } // namespace Cfd
 } // namespace AeroSim
+
+
+
+

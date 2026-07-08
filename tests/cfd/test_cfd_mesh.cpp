@@ -1,8 +1,10 @@
 #include "aero_cfd/cfd_mesh.hpp"
+#include "aero_cfd/real.hpp"
 
 #include <cmath>
 #include <cstdio>
 
+using namespace AeroSim;
 using namespace AeroSim::Cfd;
 
 static int test_count = 0;
@@ -41,9 +43,9 @@ static int test_cube_mesh() {
     TEST("CFD-MESH-3 cube wall normal area is closed");
     {
         auto mesh = generate_structured_cube_mesh(5.0f, 13);
-        float sx = 0.0f;
-        float sy = 0.0f;
-        float sz = 0.0f;
+        Real sx = 0.0f;
+        Real sy = 0.0f;
+        Real sz = 0.0f;
         for (const auto& face : mesh.faces) {
             if (face.boundary != BoundaryKind::SlipWall) continue;
             sx += face.nx * face.area;
@@ -62,15 +64,15 @@ static int test_cube_mesh() {
 static int test_flat_plate_mesh() {
     TEST("CFD-MESH-4 flat plate wall area matches geometry");
     {
-        float length = 0.5f;
-        float width = 0.05f;
+        Real length = 0.5f;
+        Real width = 0.05f;
         auto mesh = generate_flat_plate_mesh(length, width, 0.1f, 1e-5f, 1.12f, 30, 3, 50);
         auto report = compute_mesh_metrics(mesh);
         if (!report.valid) FAIL("%s", report.message.c_str());
         if (report.no_slip_wall_faces <= 0) FAIL("wall faces=%d", report.no_slip_wall_faces);
-        float area = boundary_area(mesh, BoundaryKind::NoSlipWall);
-        float expected = length * width;
-        float rel = std::fabs(area - expected) / expected;
+        Real area = boundary_area(mesh, BoundaryKind::NoSlipWall);
+        Real expected = length * width;
+        Real rel = std::fabs(area - expected) / expected;
         if (rel > 1e-5f) FAIL("wall area=%g expected=%g rel=%g", area, expected, rel);
         if (report.min_wall_distance <= 0.0f) FAIL("min wall distance=%g", report.min_wall_distance);
         if (std::fabs(report.min_wall_distance - 2.5e-6f) > 5e-7f) {
@@ -101,3 +103,5 @@ int main() {
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
+
+

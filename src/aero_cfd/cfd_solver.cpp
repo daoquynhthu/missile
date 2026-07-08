@@ -11,7 +11,7 @@ namespace Cfd {
 
 namespace {
 
-ConservativeState add_scaled(ConservativeState q, EulerFlux f, float scale) {
+ConservativeState add_scaled(ConservativeState q, EulerFlux f, Real scale) {
     q.rho += scale * f.mass;
     q.rho_u += scale * f.mom_x;
     q.rho_v += scale * f.mom_y;
@@ -20,32 +20,32 @@ ConservativeState add_scaled(ConservativeState q, EulerFlux f, float scale) {
     return q;
 }
 
-float state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
-    float d0 = a.rho - b.rho;
-    float d1 = a.rho_u - b.rho_u;
-    float d2 = a.rho_v - b.rho_v;
-    float d3 = a.rho_w - b.rho_w;
-    float d4 = a.rho_E - b.rho_E;
+Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
+    Real d0 = a.rho - b.rho;
+    Real d1 = a.rho_u - b.rho_u;
+    Real d2 = a.rho_v - b.rho_v;
+    Real d3 = a.rho_w - b.rho_w;
+    Real d4 = a.rho_E - b.rho_E;
     return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4;
 }
 
 void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
     const CfdConfig& config, CfdForceResult& result) {
-    float fx = 0.0f;
-    float fy = 0.0f;
-    float fz = 0.0f;
-    float mx = 0.0f;
-    float my = 0.0f;
-    float mz = 0.0f;
+    Real fx = 0.0f;
+    Real fy = 0.0f;
+    Real fz = 0.0f;
+    Real mx = 0.0f;
+    Real my = 0.0f;
+    Real mz = 0.0f;
 
     for (const auto& face : mesh.faces) {
         if (face.boundary != BoundaryKind::SlipWall && face.boundary != BoundaryKind::NoSlipWall) continue;
         PrimitiveState w;
         if (!conservative_to_primitive(q[face.left_cell], config.gamma, w)) continue;
 
-        float px = -w.p * face.nx * face.area;
-        float py = -w.p * face.ny * face.area;
-        float pz = -w.p * face.nz * face.area;
+        Real px = -w.p * face.nx * face.area;
+        Real py = -w.p * face.ny * face.area;
+        Real pz = -w.p * face.nz * face.area;
         fx += px;
         fy += py;
         fz += pz;
@@ -54,8 +54,8 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeSt
         mz += face.cx * py - face.cy * px;
     }
 
-    float q_inf = 0.5f * condition.mach * condition.mach;
-    float inv_force_ref = 1.0f / std::max(q_inf * config.ref_area, 1e-30f);
+    Real q_inf = 0.5f * condition.mach * condition.mach;
+    Real inv_force_ref = 1.0f / std::max(q_inf * config.ref_area, 1e-30f);
     result.CX = fx * inv_force_ref;
     result.CY = fy * inv_force_ref;
     result.CZ = fz * inv_force_ref;
@@ -63,23 +63,23 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeSt
     result.Cm = my / std::max(q_inf * config.ref_area * config.ref_length, 1e-30f);
     result.Cn = mz / std::max(q_inf * config.ref_area * config.ref_span, 1e-30f);
 
-    float alpha = condition.alpha_deg * 3.14159265358979323846f / 180.0f;
-    float beta = condition.beta_deg * 3.14159265358979323846f / 180.0f;
-    float ca = std::cos(alpha);
-    float sa = std::sin(alpha);
-    float cb = std::cos(beta);
-    float sb = std::sin(beta);
-    float fsx = result.CX * ca * cb + result.CY * sb + result.CZ * sa * cb;
-    float fsz = -result.CX * sa + result.CZ * ca;
+    Real alpha = condition.alpha_deg * 3.14159265358979323846f / 180.0f;
+    Real beta = condition.beta_deg * 3.14159265358979323846f / 180.0f;
+    Real ca = std::cos(alpha);
+    Real sa = std::sin(alpha);
+    Real cb = std::cos(beta);
+    Real sb = std::sin(beta);
+    Real fsx = result.CX * ca * cb + result.CY * sb + result.CZ * sa * cb;
+    Real fsz = -result.CX * sa + result.CZ * ca;
     result.CD = -fsx;
     result.CL = -fsz;
 }
 
 } // namespace
 
-PrimitiveState make_freestream(float mach, float alpha_deg, float beta_deg, float gamma) {
-    float alpha = alpha_deg * 3.14159265358979323846f / 180.0f;
-    float beta = beta_deg * 3.14159265358979323846f / 180.0f;
+PrimitiveState make_freestream(Real mach, Real alpha_deg, Real beta_deg, Real gamma) {
+    Real alpha = alpha_deg * 3.14159265358979323846f / 180.0f;
+    Real beta = beta_deg * 3.14159265358979323846f / 180.0f;
 
     PrimitiveState w;
     w.rho = 1.0f;
@@ -90,21 +90,21 @@ PrimitiveState make_freestream(float mach, float alpha_deg, float beta_deg, floa
     return w;
 }
 
-PrimitiveState farfield_ghost_state(const PrimitiveState& left, const PrimitiveState& freestream, float gamma,
-    float nx, float ny, float nz) {
-    float vn_inf = freestream.u*nx + freestream.v*ny + freestream.w*nz;
-    float a_inf = speed_of_sound(freestream, gamma);
+PrimitiveState farfield_ghost_state(const PrimitiveState& left, const PrimitiveState& freestream, Real gamma,
+    Real nx, Real ny, Real nz) {
+    Real vn_inf = freestream.u*nx + freestream.v*ny + freestream.w*nz;
+    Real a_inf = speed_of_sound(freestream, gamma);
     if (vn_inf >= a_inf) return left;
     return freestream;
 }
 
-EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, float gamma, float nx, float ny, float nz) {
-    float vn_l = left.u*nx + left.v*ny + left.w*nz;
-    float vn_r = right.u*nx + right.v*ny + right.w*nz;
-    float a_l = speed_of_sound(left, gamma);
-    float a_r = speed_of_sound(right, gamma);
-    float s_l = std::min(vn_l - a_l, vn_r - a_r);
-    float s_r = std::max(vn_l + a_l, vn_r + a_r);
+EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Real gamma, Real nx, Real ny, Real nz) {
+    Real vn_l = left.u*nx + left.v*ny + left.w*nz;
+    Real vn_r = right.u*nx + right.v*ny + right.w*nz;
+    Real a_l = speed_of_sound(left, gamma);
+    Real a_r = speed_of_sound(right, gamma);
+    Real s_l = std::min(vn_l - a_l, vn_r - a_r);
+    Real s_r = std::max(vn_l + a_l, vn_r + a_r);
 
     EulerFlux f_l = physical_flux(left, gamma, nx, ny, nz);
     EulerFlux f_r = physical_flux(right, gamma, nx, ny, nz);
@@ -114,14 +114,14 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, flo
     if (s_l >= 0.0f) return f_l;
     if (s_r <= 0.0f) return f_r;
 
-    float denom = left.rho * (s_l - vn_l) - right.rho * (s_r - vn_r);
-    float s_m = (right.p - left.p + left.rho*vn_l*(s_l - vn_l) - right.rho*vn_r*(s_r - vn_r)) / denom;
+    Real denom = left.rho * (s_l - vn_l) - right.rho * (s_r - vn_r);
+    Real s_m = (right.p - left.p + left.rho*vn_l*(s_l - vn_l) - right.rho*vn_r*(s_r - vn_r)) / denom;
 
     if (s_m >= 0.0f) {
-        float rho_star = left.rho * (s_l - vn_l) / (s_l - s_m);
-        float e_l = q_l.rho_E / left.rho;
-        float p_star = left.p + left.rho * (s_l - vn_l) * (s_m - vn_l);
-        float e_star = e_l + (s_m - vn_l) * (s_m + left.p / (left.rho * (s_l - vn_l)));
+        Real rho_star = left.rho * (s_l - vn_l) / (s_l - s_m);
+        Real e_l = q_l.rho_E / left.rho;
+        Real p_star = left.p + left.rho * (s_l - vn_l) * (s_m - vn_l);
+        Real e_star = e_l + (s_m - vn_l) * (s_m + left.p / (left.rho * (s_l - vn_l)));
         ConservativeState q_star;
         q_star.rho = rho_star;
         q_star.rho_u = rho_star * (left.u + (s_m - vn_l) * nx);
@@ -139,9 +139,9 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, flo
         return f;
     }
 
-    float rho_star = right.rho * (s_r - vn_r) / (s_r - s_m);
-    float e_r = q_r.rho_E / right.rho;
-    float e_star = e_r + (s_m - vn_r) * (s_m + right.p / (right.rho * (s_r - vn_r)));
+    Real rho_star = right.rho * (s_r - vn_r) / (s_r - s_m);
+    Real e_r = q_r.rho_E / right.rho;
+    Real e_star = e_r + (s_m - vn_r) * (s_m + right.p / (right.rho * (s_r - vn_r)));
     ConservativeState q_star;
     q_star.rho = rho_star;
     q_star.rho_u = rho_star * (right.u + (s_m - vn_r) * nx);
@@ -234,7 +234,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
     }
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
-        float min_dt = std::numeric_limits<float>::max();
+        Real min_dt = std::numeric_limits<Real>::max();
         DtLimiterSnapshot dt_limiter;
         dt_limiter.iteration = iter;
         for (std::size_t i = 0; i < q.size(); ++i) {
@@ -246,9 +246,9 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 }
                 return summary;
             }
-            float vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
-            float signal_speed = vmag + speed_of_sound(w, config.gamma);
-            float dt = config.cfl * mesh_.cells[i].h_min / signal_speed;
+            Real vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
+            Real signal_speed = vmag + speed_of_sound(w, config.gamma);
+            Real dt = config.cfl * mesh_.cells[i].h_min / signal_speed;
             if (dt < min_dt) {
                 min_dt = dt;
                 dt_limiter.cell = static_cast<int>(i);
@@ -272,13 +272,13 @@ CfdSolveSummary CfdSolver::solve_from_state(
             return summary;
         }
 
-        float l2 = 0.0f;
+        Real l2 = 0.0f;
         for (std::size_t i = 0; i < q.size(); ++i) {
-            float scale = min_dt / mesh_.cells[i].volume;
+            Real scale = min_dt / mesh_.cells[i].volume;
             q_next[i] = add_scaled(q[i], residual[i], scale);
             l2 += state_delta_l2(q_next[i], q[i]);
         }
-        float residual_l2 = std::sqrt(l2 / (5.0f * static_cast<float>(q.size())));
+        Real residual_l2 = std::sqrt(l2 / (5.0f * static_cast<Real>(q.size())));
         summary.residual_history.push_back(residual_l2);
         q.swap(q_next);
 
@@ -308,13 +308,13 @@ CfdSolveSummary CfdSolver::solve_from_state(
 bool assert_oracle_equivalent(
     const CfdSolveSummary& gpu,
     const CfdSolveSummary& cpu,
-    float tol_residual,
-    float tol_forces,
+    Real tol_residual,
+    Real tol_forces,
     std::string* error) {
     std::size_t n = std::min(gpu.residual_history.size(), cpu.residual_history.size());
     for (std::size_t i = 0; i < n; ++i) {
-        float diff = std::fabs(gpu.residual_history[i] - cpu.residual_history[i]);
-        float base = 1.0f + std::max(std::fabs(gpu.residual_history[i]), std::fabs(cpu.residual_history[i]));
+        Real diff = std::fabs(gpu.residual_history[i] - cpu.residual_history[i]);
+        Real base = 1.0f + std::max(std::fabs(gpu.residual_history[i]), std::fabs(cpu.residual_history[i]));
         if (diff > tol_residual * base) {
             if (error) {
                 char buf[256];
@@ -326,7 +326,7 @@ bool assert_oracle_equivalent(
         }
     }
 
-    struct ForcePair { const char* name; float g; float c; };
+    struct ForcePair { const char* name; Real g; Real c; };
     ForcePair pairs[] = {
         {"CX", gpu.forces.CX, cpu.forces.CX},
         {"CY", gpu.forces.CY, cpu.forces.CY},
@@ -338,8 +338,8 @@ bool assert_oracle_equivalent(
         {"CL", gpu.forces.CL, cpu.forces.CL},
     };
     for (const auto& p : pairs) {
-        float diff = std::fabs(p.g - p.c);
-        float base = 1.0f + std::max(std::fabs(p.g), std::fabs(p.c));
+        Real diff = std::fabs(p.g - p.c);
+        Real base = 1.0f + std::max(std::fabs(p.g), std::fabs(p.c));
         if (diff > tol_forces * base) {
             if (error) {
                 char buf[256];
@@ -354,3 +354,4 @@ bool assert_oracle_equivalent(
 
 } // namespace Cfd
 } // namespace AeroSim
+

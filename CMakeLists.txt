@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
+# Real type precision: OFF=float (default), ON=double
+option(AEROSIM_REAL_DOUBLE "Use double precision for Real type" OFF)
+if(AEROSIM_REAL_DOUBLE)
+    add_compile_definitions(AEROSIM_REAL_DOUBLE)
+endif()
+
 # Enable Relocatable Device Code (RDC) for cross-file __device__ calls
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 
@@ -305,42 +311,57 @@ set_target_properties(TestIntegrator PROPERTIES
 
 # 9. CFD Mesh Foundation Test
 add_executable(TestCfdMesh tests/cfd/test_cfd_mesh.cpp)
+set_source_files_properties(tests/cfd/test_cfd_mesh.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdMesh PRIVATE missile_lib)
 add_test(NAME CfdMeshTest COMMAND TestCfdMesh)
 set_target_properties(TestCfdMesh PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
 # 10. CFD Euler Foundation Test
 add_executable(TestCfdEuler tests/cfd/test_cfd_euler.cpp)
+set_source_files_properties(tests/cfd/test_cfd_euler.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdEuler PRIVATE missile_lib)
 add_test(NAME CfdEulerTest COMMAND TestCfdEuler)
 set_target_properties(TestCfdEuler PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
 # 11. CFD Diagnostics Test
 add_executable(TestCfdDiagnostics tests/cfd/test_cfd_diagnostics.cpp)
+set_source_files_properties(tests/cfd/test_cfd_diagnostics.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdDiagnostics PRIVATE missile_lib)
 add_test(NAME CfdDiagnosticsTest COMMAND TestCfdDiagnostics)
 set_target_properties(TestCfdDiagnostics PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
 # 12. CFD Reconstruction Test
 add_executable(TestCfdReconstruction tests/cfd/test_cfd_reconstruction.cpp)
+set_source_files_properties(tests/cfd/test_cfd_reconstruction.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdReconstruction PRIVATE missile_lib)
 add_test(NAME CfdReconstructionTest COMMAND TestCfdReconstruction)
 set_target_properties(TestCfdReconstruction PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
 # 13. CFD Viscous Foundation Test
 add_executable(TestCfdViscous tests/cfd/test_cfd_viscous.cpp)
+set_source_files_properties(tests/cfd/test_cfd_viscous.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(TestCfdViscous PRIVATE missile_lib)
 add_test(NAME CfdViscousTest COMMAND TestCfdViscous)
 set_target_properties(TestCfdViscous PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
 # 14. CFD GPU Production Path Test

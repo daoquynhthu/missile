@@ -8,16 +8,16 @@
 namespace AeroSim {
 namespace Cfd {
 
-StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, float gamma) {
+StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, Real gamma) {
     StateBounds bounds;
     if (q.empty()) return bounds;
 
-    bounds.min_rho = std::numeric_limits<float>::max();
-    bounds.min_p = std::numeric_limits<float>::max();
-    bounds.min_mach = std::numeric_limits<float>::max();
-    bounds.max_rho = -std::numeric_limits<float>::max();
-    bounds.max_p = -std::numeric_limits<float>::max();
-    bounds.max_mach = -std::numeric_limits<float>::max();
+    bounds.min_rho = std::numeric_limits<Real>::max();
+    bounds.min_p = std::numeric_limits<Real>::max();
+    bounds.min_mach = std::numeric_limits<Real>::max();
+    bounds.max_rho = -std::numeric_limits<Real>::max();
+    bounds.max_p = -std::numeric_limits<Real>::max();
+    bounds.max_mach = -std::numeric_limits<Real>::max();
     bounds.valid = true;
 
     for (int i = 0; i < static_cast<int>(q.size()); ++i) {
@@ -28,9 +28,9 @@ StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, float 
             return bounds;
         }
 
-        float a = speed_of_sound(w, gamma);
-        float vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
-        float mach = vmag / std::max(a, 1e-30f);
+        Real a = speed_of_sound(w, gamma);
+        Real vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
+        Real mach = vmag / std::max(a, 1e-30f);
         bounds.min_rho = std::min(bounds.min_rho, w.rho);
         bounds.max_rho = std::max(bounds.max_rho, w.rho);
         bounds.min_p = std::min(bounds.min_p, w.p);
@@ -47,7 +47,7 @@ FailureSnapshot make_failure_snapshot(
     int cell,
     const char* reason,
     const ConservativeState& q,
-    float gamma) {
+    Real gamma) {
     FailureSnapshot snapshot;
     snapshot.valid = true;
     snapshot.iteration = iteration;
@@ -62,7 +62,7 @@ bool write_vtk_cells(
     const char* path,
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    float gamma,
+    Real gamma,
     std::string* error) {
     if (!path || !path[0]) {
         if (error) *error = "empty path";
@@ -74,14 +74,14 @@ bool write_vtk_cells(
     }
 
     std::vector<PrimitiveState> primitive(q.size());
-    std::vector<float> mach(q.size(), 0.0f);
+    std::vector<Real> mach(q.size(), 0.0f);
     for (std::size_t i = 0; i < q.size(); ++i) {
         if (!conservative_to_primitive(q[i], gamma, primitive[i])) {
             if (error) *error = "invalid state";
             return false;
         }
-        float a = speed_of_sound(primitive[i], gamma);
-        float vmag = std::sqrt(
+        Real a = speed_of_sound(primitive[i], gamma);
+        Real vmag = std::sqrt(
             primitive[i].u*primitive[i].u +
             primitive[i].v*primitive[i].v +
             primitive[i].w*primitive[i].w);
@@ -122,7 +122,7 @@ bool write_vtk_cells(
     for (const auto& w : primitive) out << w.p << "\n";
     out << "SCALARS mach float 1\n";
     out << "LOOKUP_TABLE default\n";
-    for (float value : mach) out << value << "\n";
+    for (Real value : mach) out << value << "\n";
 
     if (!out) {
         if (error) *error = "failed while writing";
@@ -133,3 +133,4 @@ bool write_vtk_cells(
 
 } // namespace Cfd
 } // namespace AeroSim
+

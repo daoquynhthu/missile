@@ -19,10 +19,10 @@ PrimitiveState average_state(const PrimitiveState& a, const PrimitiveState& b) {
 }
 
 void add_face_contribution(PrimitiveGradient& g, const PrimitiveState& w, const PrimitiveState& center,
-    float nx, float ny, float nz, float scale) {
-    float sx = nx * scale;
-    float sy = ny * scale;
-    float sz = nz * scale;
+    Real nx, Real ny, Real nz, Real scale) {
+    Real sx = nx * scale;
+    Real sy = ny * scale;
+    Real sz = nz * scale;
     g.drho_dx += (w.rho - center.rho) * sx;
     g.drho_dy += (w.rho - center.rho) * sy;
     g.drho_dz += (w.rho - center.rho) * sz;
@@ -40,15 +40,15 @@ void add_face_contribution(PrimitiveGradient& g, const PrimitiveState& w, const 
     g.dp_dz += (w.p - center.p) * sz;
 }
 
-float positive_theta(float center, float reconstructed, float floor_value) {
+Real positive_theta(Real center, Real reconstructed, Real floor_value) {
     if (reconstructed >= floor_value) return 1.0f;
     if (center <= floor_value) return 0.0f;
-    float denom = center - reconstructed;
+    Real denom = center - reconstructed;
     if (denom <= 0.0f || !std::isfinite(denom)) return 0.0f;
     return std::max(0.0f, std::min(1.0f, (center - floor_value) / denom));
 }
 
-PrimitiveGradient scale_gradient(const PrimitiveGradient& g, float theta) {
+PrimitiveGradient scale_gradient(const PrimitiveGradient& g, Real theta) {
     PrimitiveGradient out = g;
     out.drho_dx *= theta;
     out.drho_dy *= theta;
@@ -68,8 +68,8 @@ PrimitiveGradient scale_gradient(const PrimitiveGradient& g, float theta) {
     return out;
 }
 
-bool solve_3x3(float a[3][3], float b[3], float x[3]) {
-    float m[3][4] = {
+bool solve_3x3(Real a[3][3], Real b[3], Real x[3]) {
+    Real m[3][4] = {
         {a[0][0], a[0][1], a[0][2], b[0]},
         {a[1][0], a[1][1], a[1][2], b[1]},
         {a[2][0], a[2][1], a[2][2], b[2]}
@@ -84,11 +84,11 @@ bool solve_3x3(float a[3][3], float b[3], float x[3]) {
         if (pivot != col) {
             for (int j = col; j < 4; ++j) std::swap(m[col][j], m[pivot][j]);
         }
-        float inv = 1.0f / m[col][col];
+        Real inv = 1.0f / m[col][col];
         for (int j = col; j < 4; ++j) m[col][j] *= inv;
         for (int row = 0; row < 3; ++row) {
             if (row == col) continue;
-            float factor = m[row][col];
+            Real factor = m[row][col];
             for (int j = col; j < 4; ++j) m[row][j] -= factor * m[col][j];
         }
     }
@@ -99,8 +99,8 @@ bool solve_3x3(float a[3][3], float b[3], float x[3]) {
     return std::isfinite(x[0]) && std::isfinite(x[1]) && std::isfinite(x[2]);
 }
 
-void accumulate_least_squares_matrix(float a[3][3], float dx, float dy, float dz) {
-    float d[3] = {dx, dy, dz};
+void accumulate_least_squares_matrix(Real a[3][3], Real dx, Real dy, Real dz) {
+    Real d[3] = {dx, dy, dz};
     for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c) {
             a[r][c] += d[r] * d[c];
@@ -108,13 +108,13 @@ void accumulate_least_squares_matrix(float a[3][3], float dx, float dy, float dz
     }
 }
 
-void accumulate_least_squares_rhs(float b[3], float dx, float dy, float dz, float dphi) {
+void accumulate_least_squares_rhs(Real b[3], Real dx, Real dy, Real dz, Real dphi) {
     b[0] += dx * dphi;
     b[1] += dy * dphi;
     b[2] += dz * dphi;
 }
 
-void assign_gradient_component(PrimitiveGradient& g, int component, const float x[3]) {
+void assign_gradient_component(PrimitiveGradient& g, int component, const Real x[3]) {
     switch (component) {
         case 0: g.drho_dx = x[0]; g.drho_dy = x[1]; g.drho_dz = x[2]; break;
         case 1: g.du_dx = x[0]; g.du_dy = x[1]; g.du_dz = x[2]; break;
@@ -124,7 +124,7 @@ void assign_gradient_component(PrimitiveGradient& g, int component, const float 
     }
 }
 
-float primitive_component(const PrimitiveState& w, int component) {
+Real primitive_component(const PrimitiveState& w, int component) {
     switch (component) {
         case 0: return w.rho;
         case 1: return w.u;
@@ -134,14 +134,14 @@ float primitive_component(const PrimitiveState& w, int component) {
     }
 }
 
-float limiter_theta(float center, float reconstructed, float min_value, float max_value) {
+Real limiter_theta(Real center, Real reconstructed, Real min_value, Real max_value) {
     if (reconstructed > max_value) {
-        float denom = reconstructed - center;
+        Real denom = reconstructed - center;
         if (denom <= 0.0f) return 0.0f;
         return std::max(0.0f, std::min(1.0f, (max_value - center) / denom));
     }
     if (reconstructed < min_value) {
-        float denom = reconstructed - center;
+        Real denom = reconstructed - center;
         if (denom >= 0.0f) return 0.0f;
         return std::max(0.0f, std::min(1.0f, (min_value - center) / denom));
     }
@@ -175,7 +175,7 @@ void update_limiter(PrimitiveLimiter& limiter, const PrimitiveState& center, con
 std::vector<PrimitiveGradient> compute_green_gauss_gradients(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    float gamma) {
+    Real gamma) {
     if (q.size() != mesh.cells.size()) return {};
 
     std::vector<PrimitiveState> primitive(q.size());
@@ -191,12 +191,12 @@ std::vector<PrimitiveGradient> compute_green_gauss_gradients(
             wf = average_state(wl, primitive[face.right_cell]);
         }
 
-        float left_scale = face.area / mesh.cells[face.left_cell].volume;
+        Real left_scale = face.area / mesh.cells[face.left_cell].volume;
         add_face_contribution(gradients[face.left_cell], wf, wl, face.nx, face.ny, face.nz, left_scale);
 
         if (face.boundary == BoundaryKind::Interior) {
             const PrimitiveState& wr = primitive[face.right_cell];
-            float right_scale = -face.area / mesh.cells[face.right_cell].volume;
+            Real right_scale = -face.area / mesh.cells[face.right_cell].volume;
             add_face_contribution(gradients[face.right_cell], wf, wr, face.nx, face.ny, face.nz, right_scale);
         }
     }
@@ -207,7 +207,7 @@ std::vector<PrimitiveGradient> compute_green_gauss_gradients(
 std::vector<PrimitiveGradient> compute_least_squares_gradients(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    float gamma) {
+    Real gamma) {
     if (q.size() != mesh.cells.size()) return {};
 
     std::vector<PrimitiveState> primitive(q.size());
@@ -216,8 +216,8 @@ std::vector<PrimitiveGradient> compute_least_squares_gradients(
     }
 
     struct CellSystem {
-        float a[3][3] = {};
-        float b[5][3] = {};
+        Real a[3][3] = {};
+        Real b[5][3] = {};
     };
 
     std::vector<CellSystem> systems(q.size());
@@ -225,13 +225,13 @@ std::vector<PrimitiveGradient> compute_least_squares_gradients(
         if (face.boundary != BoundaryKind::Interior) continue;
         int left = face.left_cell;
         int right = face.right_cell;
-        float dx = mesh.cells[right].cx - mesh.cells[left].cx;
-        float dy = mesh.cells[right].cy - mesh.cells[left].cy;
-        float dz = mesh.cells[right].cz - mesh.cells[left].cz;
+        Real dx = mesh.cells[right].cx - mesh.cells[left].cx;
+        Real dy = mesh.cells[right].cy - mesh.cells[left].cy;
+        Real dz = mesh.cells[right].cz - mesh.cells[left].cz;
         accumulate_least_squares_matrix(systems[left].a, dx, dy, dz);
         accumulate_least_squares_matrix(systems[right].a, -dx, -dy, -dz);
         for (int component = 0; component < 5; ++component) {
-            float dphi = primitive_component(primitive[right], component) - primitive_component(primitive[left], component);
+            Real dphi = primitive_component(primitive[right], component) - primitive_component(primitive[left], component);
             accumulate_least_squares_rhs(systems[left].b[component], dx, dy, dz, dphi);
             accumulate_least_squares_rhs(systems[right].b[component], -dx, -dy, -dz, -dphi);
         }
@@ -240,12 +240,12 @@ std::vector<PrimitiveGradient> compute_least_squares_gradients(
     std::vector<PrimitiveGradient> gradients(q.size());
     for (std::size_t i = 0; i < q.size(); ++i) {
         for (int component = 0; component < 5; ++component) {
-            float a[3][3] = {
+            Real a[3][3] = {
                 {systems[i].a[0][0], systems[i].a[0][1], systems[i].a[0][2]},
                 {systems[i].a[1][0], systems[i].a[1][1], systems[i].a[1][2]},
                 {systems[i].a[2][0], systems[i].a[2][1], systems[i].a[2][2]}
             };
-            float x[3] = {};
+            Real x[3] = {};
             if (solve_3x3(a, systems[i].b[component], x)) {
                 assign_gradient_component(gradients[i], component, x);
             }
@@ -259,7 +259,7 @@ std::vector<PrimitiveLimiter> compute_barth_jespersen_limiters(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const std::vector<PrimitiveGradient>& gradients,
-    float gamma) {
+    Real gamma) {
     if (q.size() != mesh.cells.size() || gradients.size() != mesh.cells.size()) return {};
 
     std::vector<PrimitiveState> primitive(q.size());
@@ -326,9 +326,9 @@ PrimitiveGradient apply_limiter(const PrimitiveGradient& gradient, const Primiti
 PrimitiveState reconstruct_primitive(
     const PrimitiveState& center,
     const PrimitiveGradient& gradient,
-    float dx,
-    float dy,
-    float dz) {
+    Real dx,
+    Real dy,
+    Real dz) {
     PrimitiveState out;
     out.rho = center.rho + gradient.drho_dx*dx + gradient.drho_dy*dy + gradient.drho_dz*dz;
     out.u = center.u + gradient.du_dx*dx + gradient.du_dy*dy + gradient.du_dz*dz;
@@ -341,14 +341,14 @@ PrimitiveState reconstruct_primitive(
 PrimitiveState reconstruct_primitive_positive(
     const PrimitiveState& center,
     const PrimitiveGradient& gradient,
-    float dx,
-    float dy,
-    float dz,
-    float rho_floor,
-    float p_floor,
-    float* theta) {
+    Real dx,
+    Real dy,
+    Real dz,
+    Real rho_floor,
+    Real p_floor,
+    Real* theta) {
     PrimitiveState raw = reconstruct_primitive(center, gradient, dx, dy, dz);
-    float t = std::min(
+    Real t = std::min(
         positive_theta(center.rho, raw.rho, rho_floor),
         positive_theta(center.p, raw.p, p_floor));
     if (theta) *theta = t;
@@ -357,3 +357,4 @@ PrimitiveState reconstruct_primitive_positive(
 
 } // namespace Cfd
 } // namespace AeroSim
+

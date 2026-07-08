@@ -1,3 +1,4 @@
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/cfd_solver.hpp"
 
 #include <cmath>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 
+using namespace AeroSim;
 using namespace AeroSim::Cfd;
 
 static int test_count = 0;
@@ -143,3 +145,4 @@ int main() {
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
+

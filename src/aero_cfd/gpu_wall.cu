@@ -1,31 +1,30 @@
 #include "aero_cfd/cuda_utils.hpp"
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/device_mesh.hpp"
 #include "aero_cfd/gpu_solver_internal.hpp"
-
 #include <cuda_runtime.h>
-
 namespace AeroSim {
 namespace Cfd {
 
 namespace {
 
-__global__ void init_float6_zero_kernel(float* ptr) {
+__global__ void init_float6_zero_kernel(Real* ptr) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         for (int i = 0; i < 6; ++i) ptr[i] = 0.0f;
     }
 }
 
 __global__ void wall_force_kernel(
-    const float* d_q, int nvar, float gamma,
-    const float* d_nx, const float* d_ny, const float* d_nz,
-    const float* d_area,
+    const Real* d_q, int nvar, Real gamma,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz,
+    const Real* d_area,
     const int* d_left_cell,
     const int* d_boundary,
-    const float* d_cx, const float* d_cy, const float* d_cz,
+    const Real* d_cx, const Real* d_cy, const Real* d_cz,
     int face_count, int n_cells,
-    float* d_forces,
-    const float* d_gradients,
-    const float* d_cell_cx, const float* d_cell_cy, const float* d_cell_cz) {
+    Real* d_forces,
+    const Real* d_gradients,
+    const Real* d_cell_cx, const Real* d_cell_cy, const Real* d_cell_cz) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
 
@@ -35,52 +34,52 @@ __global__ void wall_force_kernel(
 
     int left = d_left_cell[idx];
     if (left < 0 || left >= n_cells) return;
-    float rho = d_q[left * nvar + 0];
-    if (!__finitef(rho) || rho <= 0.0f) return;
-    float inv_rho = 1.0f / rho;
-    float u = d_q[left * nvar + 1] * inv_rho;
-    float v = d_q[left * nvar + 2] * inv_rho;
-    float w = d_q[left * nvar + 3] * inv_rho;
-    float E = d_q[left * nvar + 4];
-    float kinetic = 0.5f * (u*u + v*v + w*w);
-    float p = (gamma - 1.0f) * (E - rho * kinetic);
-    if (!__finitef(p) || p <= 0.0f) return;
+    Real rho = d_q[left * nvar + 0];
+    if (!real_isfinite(rho) || rho <= 0.0f) return;
+    Real inv_rho = 1.0f / rho;
+    Real u = d_q[left * nvar + 1] * inv_rho;
+    Real v = d_q[left * nvar + 2] * inv_rho;
+    Real w = d_q[left * nvar + 3] * inv_rho;
+    Real E = d_q[left * nvar + 4];
+    Real kinetic = 0.5f * (u*u + v*v + w*w);
+    Real p = (gamma - 1.0f) * (E - rho * kinetic);
+    if (!real_isfinite(p) || p <= 0.0f) return;
 
     if (d_gradients) {
-        float dr = d_cx[idx] - d_cell_cx[left];
-        float ds = d_cy[idx] - d_cell_cy[left];
-        float dt = d_cz[idx] - d_cell_cz[left];
+        Real dr = d_cx[idx] - d_cell_cx[left];
+        Real ds = d_cy[idx] - d_cell_cy[left];
+        Real dt = d_cz[idx] - d_cell_cz[left];
         int g_base = left * DeviceMesh::NGRAD;
         p += d_gradients[g_base + 12] * dr;
         p += d_gradients[g_base + 13] * ds;
         p += d_gradients[g_base + 14] * dt;
-        if (!__finitef(p) || p <= 0.0f) p = (gamma - 1.0f) * (E - rho * kinetic);
+        if (!real_isfinite(p) || p <= 0.0f) p = (gamma - 1.0f) * (E - rho * kinetic);
     }
 
-    float nx = d_nx[idx];
-    float ny = d_ny[idx];
-    float nz = d_nz[idx];
-    float area = d_area[idx];
+    Real nx = d_nx[idx];
+    Real ny = d_ny[idx];
+    Real nz = d_nz[idx];
+    Real area = d_area[idx];
 
-    float px = -p * nx * area;
-    float py = -p * ny * area;
-    float pz = -p * nz * area;
+    Real px = -p * nx * area;
+    Real py = -p * ny * area;
+    Real pz = -p * nz * area;
 
-    float fcx = d_cx[idx];
-    float fcy = d_cy[idx];
-    float fcz = d_cz[idx];
+    Real fcx = d_cx[idx];
+    Real fcy = d_cy[idx];
+    Real fcz = d_cz[idx];
 
-    atomicAdd(&d_forces[0], px);
-    atomicAdd(&d_forces[1], py);
-    atomicAdd(&d_forces[2], pz);
-    atomicAdd(&d_forces[3], fcy * pz - fcz * py);
-    atomicAdd(&d_forces[4], fcz * px - fcx * pz);
-    atomicAdd(&d_forces[5], fcx * py - fcy * px);
+    real_atomic_add(&d_forces[0], px);
+    real_atomic_add(&d_forces[1], py);
+    real_atomic_add(&d_forces[2], pz);
+    real_atomic_add(&d_forces[3], fcy * pz - fcz * py);
+    real_atomic_add(&d_forces[4], fcz * px - fcx * pz);
+    real_atomic_add(&d_forces[5], fcx * py - fcy * px);
 }
 
 } // namespace
 
-bool compute_wall_forces_gpu(DeviceMesh& mesh, float gamma, float* d_forces) {
+bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces) {
     init_float6_zero_kernel<<<1, 1>>>(d_forces);
     if (!cuda_check(cudaGetLastError(), "init_forces kernel launch")) return false;
 
@@ -105,3 +104,7 @@ bool compute_wall_forces_gpu(DeviceMesh& mesh, float gamma, float* d_forces) {
 
 } // namespace Cfd
 } // namespace AeroSim
+
+
+
+

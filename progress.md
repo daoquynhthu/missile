@@ -172,3 +172,19 @@
   - Tests: CFD-COLOR-1 (color_count valid), CFD-COLOR-2 (colored residual ≈ uncolored), CFD-COLOR-3 (colored gradient ≈ uncolored), CFD-COLOR-4 (byte-level deterministic).
 - BW-1 remains flaky due to GPU throttling (25/26 PASS, transient).
 - Verification: `cmake --build build --target TestCfdGpu --config Release` passed; `TestCfdGpu.exe` 25/26 PASS (BW-1 pre-existing).
+
+2026-07-08
+- Phase 4-B (Real type abstraction) implemented:
+  - Created `include/aero_cfd/real.hpp`: `Real` type alias (float/double via AEROSIM_REAL_DOUBLE), math wrappers (real_sqrt, real_fabs, real_fmin, real_fmax, real_isfinite, real_cos, real_sin), atomic wrappers (real_atomic_add/min/max). Guarded with static + __CUDACC__ for MSVC/CUDA dual compilation without ODR violations.
+  - Replaced float -> Real + CUDA intrinsic wrappers across all 25 files (10 headers, 6 .cpp, 8 .cu, 6 test files).
+  - Removed local atomic_min_float/atomic_max_float in reconstruction_gpu.cu and gpu_diagnostics.cu (now use real_atomic_min/real_atomic_max from real.hpp).
+  - Fixed VTK writer: format string "Real" -> "float" (VTK keyword, not C++ type).
+  - Fixed non-CUDA test executables in CMakeLists.txt: added LANGUAGE CUDA + CUDA_SEPARABLE_COMPILATION ON + CUDA_RESOLVE_DEVICE_SYMBOLS ON for linking missile_lib.
+- Verification: `cmake --build build --config Release -j` passed; all 7 test executables built successfully:
+  - TestCfdMesh: 5/5 PASS
+  - TestCfdEuler: 8/8 PASS
+  - TestCfdViscous: 11/11 PASS
+  - TestCfdReconstruction: 7/7 PASS
+  - TestCfdDiagnostics: 4/4 PASS (VTK bug fixed)
+  - TestCfdNs: ALL PASS
+  - TestCfdGpu: 25/26 PASS (BW-1 pre-existing flaky)

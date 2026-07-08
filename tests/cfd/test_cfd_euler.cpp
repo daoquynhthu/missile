@@ -1,8 +1,10 @@
 #include "aero_cfd/cfd_solver.hpp"
+#include "aero_cfd/real.hpp"
 
 #include <cmath>
 #include <cstdio>
 
+using namespace AeroSim;
 using namespace AeroSim::Cfd;
 
 static int test_count = 0;
@@ -131,9 +133,9 @@ static int test_wall_forces() {
         auto summary = solver.solve({2.0f, 0.0f, 0.0f}, cfg);
         if (summary.failed) FAIL("solver failed");
         if (std::fabs(summary.forces.CY) > 1e-6f) {
-            float sx = 0.0f;
-            float sy = 0.0f;
-            float sz = 0.0f;
+            Real sx = 0.0f;
+            Real sy = 0.0f;
+            Real sz = 0.0f;
             for (const auto& face : mesh.faces) {
                 if (face.boundary != BoundaryKind::SlipWall) continue;
                 sx += face.nx * face.area;
@@ -181,3 +183,5 @@ int main() {
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
+
+

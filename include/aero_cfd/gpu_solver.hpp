@@ -1,3 +1,4 @@
+#include "aero_cfd/real.hpp"
 #pragma once
 
 #include "aero_cfd/cfd_config.hpp"
@@ -24,10 +25,12 @@ CfdSolveSummary solve_gpu(
     const FreestreamCondition& condition,
     const CfdConfig& config,
     int* d_failed,
-    float* d_min_dt,
-    float* d_l2_sum,
-    float* d_forces,
+    Real* d_min_dt,
+    Real* d_l2_sum,
+    Real* d_forces,
     std::string* error = nullptr);
 
 } // namespace Cfd
 } // namespace AeroSim
+
+

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_state.hpp"
 
@@ -17,12 +18,12 @@ enum class DiagnosticLevel : int {
 };
 
 struct StateBounds {
-    float min_rho = 0.0f;
-    float max_rho = 0.0f;
-    float min_p = 0.0f;
-    float max_p = 0.0f;
-    float min_mach = 0.0f;
-    float max_mach = 0.0f;
+    Real min_rho = 0.0f;
+    Real max_rho = 0.0f;
+    Real min_p = 0.0f;
+    Real max_p = 0.0f;
+    Real min_mach = 0.0f;
+    Real max_mach = 0.0f;
     int bad_cell = -1;
     bool valid = false;
 };
@@ -30,9 +31,9 @@ struct StateBounds {
 struct DtLimiterSnapshot {
     int iteration = -1;
     int cell = -1;
-    float dt = 0.0f;
-    float h_min = 0.0f;
-    float signal_speed = 0.0f;
+    Real dt = 0.0f;
+    Real h_min = 0.0f;
+    Real signal_speed = 0.0f;
 };
 
 struct FailureSnapshot {
@@ -50,20 +51,20 @@ struct CfdDiagnostics {
     FailureSnapshot failure;
 };
 
-StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, float gamma);
+StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, Real gamma);
 
 FailureSnapshot make_failure_snapshot(
     int iteration,
     int cell,
     const char* reason,
     const ConservativeState& q,
-    float gamma);
+    Real gamma);
 
 bool write_vtk_cells(
     const char* path,
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    float gamma,
+    Real gamma,
     std::string* error = nullptr);
 
 } // namespace Cfd

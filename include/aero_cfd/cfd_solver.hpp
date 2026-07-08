@@ -1,3 +1,4 @@
+#include "aero_cfd/real.hpp"
 #pragma once
 
 #include "aero_cfd/cfd_config.hpp"
@@ -14,7 +15,7 @@ namespace Cfd {
 struct CfdSolveSummary {
     CfdForceResult forces;
     CfdDiagnostics diagnostics;
-    std::vector<float> residual_history;
+    std::vector<Real> residual_history;
     bool converged = false;
     bool failed = false;
 };
@@ -39,9 +40,11 @@ private:
 bool assert_oracle_equivalent(
     const CfdSolveSummary& gpu,
     const CfdSolveSummary& cpu,
-    float tol_residual,
-    float tol_forces,
+    Real tol_residual,
+    Real tol_forces,
     std::string* error);
 
 } // namespace Cfd
 } // namespace AeroSim
+
+

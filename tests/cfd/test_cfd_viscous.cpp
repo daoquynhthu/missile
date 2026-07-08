@@ -1,9 +1,11 @@
 #include "aero_cfd/viscous.hpp"
+#include "aero_cfd/real.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <vector>
 
+using namespace AeroSim;
 using namespace AeroSim::Cfd;
 
 static int test_count = 0;
@@ -25,15 +27,15 @@ static int test_sutherland() {
 
     TEST("CFD-VISC-2 Sutherland viscosity is normalized at reference temperature");
     {
-        float mu = sutherland_viscosity(1.0f);
+        Real mu = sutherland_viscosity(1.0f);
         if (std::fabs(mu - 1.0f) > 1e-6f) FAIL("mu=%g", mu);
         PASS;
     }
 
     TEST("CFD-VISC-3 Sutherland viscosity increases with temperature");
     {
-        float cold = sutherland_viscosity(0.5f);
-        float hot = sutherland_viscosity(2.0f);
+        Real cold = sutherland_viscosity(0.5f);
+        Real hot = sutherland_viscosity(2.0f);
         if (!(cold > 0.0f && hot > cold)) FAIL("cold=%g hot=%g", cold, hot);
         PASS;
     }
@@ -152,8 +154,8 @@ static int test_viscous_flux_and_timestep() {
 
     TEST("CFD-VISC-9 viscous timestep scales with h squared");
     {
-        float dt1 = viscous_timestep(1.0f, 0.01f, 1000.0f, 0.5f, 0.25f);
-        float dt2 = viscous_timestep(1.0f, 0.02f, 1000.0f, 0.5f, 0.25f);
+        Real dt1 = viscous_timestep(1.0f, 0.01f, 1000.0f, 0.5f, 0.25f);
+        Real dt2 = viscous_timestep(1.0f, 0.02f, 1000.0f, 0.5f, 0.25f);
         if (std::fabs(dt2 / dt1 - 4.0f) > 1e-5f) FAIL("ratio=%g", dt2 / dt1);
         PrimitiveState w;
         w.rho = 1.0f;
@@ -206,3 +208,5 @@ int main() {
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
+
+

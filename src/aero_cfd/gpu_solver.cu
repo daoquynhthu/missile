@@ -1,4 +1,5 @@
 #include "aero_cfd/cfd_config.hpp"
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_residual.hpp"
 #include "aero_cfd/cfd_result.hpp"
@@ -9,12 +10,10 @@
 #include "aero_cfd/gpu_solver.hpp"
 #include "aero_cfd/gpu_solver_internal.hpp"
 #include "aero_cfd/diagnostics.hpp"
-
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cuda_runtime.h>
-
 namespace AeroSim {
 namespace Cfd {
 
@@ -22,23 +21,23 @@ namespace {
 
 __global__ void check_status_kernel(
     const int* d_failed,
-    const float* d_l2_sum,
+    const Real* d_l2_sum,
     int nvar_ncells,
-    float convergence_tol,
-    float* d_residual_history_slot) {
+    Real convergence_tol,
+    Real* d_residual_history_slot) {
     if (threadIdx.x != 0 || blockIdx.x != 0) return;
     if (*d_failed != 0) {
         *d_residual_history_slot = -1.0f;
         return;
     }
-    float l2 = sqrtf(*d_l2_sum / static_cast<float>(nvar_ncells));
+    Real l2 = real_sqrt(*d_l2_sum / static_cast<Real>(nvar_ncells));
     *d_residual_history_slot = l2;
 }
 
 } // namespace
 
-static void solve_gpu_free(int* d_failed, float* d_min_dt, float* d_l2_sum, float* d_forces,
-    float* d_residual_history, float* d_state_bounds_history, int* d_failure_cell, float* d_failure_state) {
+static void solve_gpu_free(int* d_failed, Real* d_min_dt, Real* d_l2_sum, Real* d_forces,
+    Real* d_residual_history, Real* d_state_bounds_history, int* d_failure_cell, Real* d_failure_state) {
     cudaFree(d_failed); cudaFree(d_min_dt); cudaFree(d_l2_sum); cudaFree(d_forces);
     cudaFree(d_residual_history); cudaFree(d_state_bounds_history);
     cudaFree(d_failure_cell); cudaFree(d_failure_state);
@@ -49,17 +48,17 @@ static CfdSolveSummary solve_gpu_impl(
     const FreestreamCondition& condition,
     const CfdConfig& config,
     int* d_failed,
-    float* d_min_dt,
-    float* d_l2_sum,
-    float* d_forces,
-    float* d_residual_history,
-    float* d_state_bounds_history,
+    Real* d_min_dt,
+    Real* d_l2_sum,
+    Real* d_forces,
+    Real* d_residual_history,
+    Real* d_state_bounds_history,
     int* d_failure_cell,
-    float* d_failure_state,
+    Real* d_failure_state,
     bool owned_buffers,
     std::string* error) {
     CfdSolveSummary summary;
-    std::vector<float> host_residual_history;
+    std::vector<Real> host_residual_history;
     int host_failed = 0;
     bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
 
@@ -108,7 +107,7 @@ static CfdSolveSummary solve_gpu_impl(
 
     host_residual_history.assign(config.max_iter, 0.0f);
     if (!cuda_check(cudaMemcpy(host_residual_history.data(), d_residual_history,
-            config.max_iter * sizeof(float), cudaMemcpyDeviceToHost), "read residual history", error)) goto fail;
+            config.max_iter * sizeof(Real), cudaMemcpyDeviceToHost), "read residual history", error)) goto fail;
 
     if (host_failed != 0) {
         if (error) *error = "GPU solver failed during iteration";
@@ -146,9 +145,9 @@ static CfdSolveSummary solve_gpu_impl(
     }
 
     if (diagnostics_enabled) {
-        std::vector<float> bounds_host(config.max_iter * 6);
+        std::vector<Real> bounds_host(config.max_iter * 6);
         if (!cuda_check(cudaMemcpy(bounds_host.data(), d_state_bounds_history,
-                config.max_iter * 6 * sizeof(float), cudaMemcpyDeviceToHost), "read state bounds history", error)) goto fail;
+                config.max_iter * 6 * sizeof(Real), cudaMemcpyDeviceToHost), "read state bounds history", error)) goto fail;
 
         for (int i = 0; i < config.max_iter; ++i) {
             StateBounds sb;
@@ -164,9 +163,9 @@ static CfdSolveSummary solve_gpu_impl(
 
         if (host_failed != 0 && d_failure_cell) {
             int host_failure_cell = -1;
-            float host_failure_state[5] = {0.0f};
+            Real host_failure_state[5] = {0.0f};
             cudaMemcpy(&host_failure_cell, d_failure_cell, sizeof(int), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_failure_state, d_failure_state, 5 * sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_failure_state, d_failure_state, 5 * sizeof(Real), cudaMemcpyDeviceToHost);
 
             if (host_failure_cell >= 0) {
                 int fail_iter = 0;
@@ -192,27 +191,27 @@ static CfdSolveSummary solve_gpu_impl(
         }
         if (!cuda_check(cudaDeviceSynchronize(), "wall force sync", error)) goto fail;
 
-        float forces[6];
-        if (!cuda_check(cudaMemcpy(forces, d_forces, 6 * sizeof(float), cudaMemcpyDeviceToHost), "read d_forces", error)) goto fail;
+        Real forces[6];
+        if (!cuda_check(cudaMemcpy(forces, d_forces, 6 * sizeof(Real), cudaMemcpyDeviceToHost), "read d_forces", error)) goto fail;
 
-        float q_inf = 0.5f * condition.mach * condition.mach;
-        float inv_force_ref = 1.0f / fmaxf(q_inf * config.ref_area, 1e-30f);
+        Real q_inf = 0.5f * condition.mach * condition.mach;
+        Real inv_force_ref = 1.0f / real_fmax(q_inf * config.ref_area, 1e-30f);
         summary.forces.CX = forces[0] * inv_force_ref;
         summary.forces.CY = forces[1] * inv_force_ref;
         summary.forces.CZ = forces[2] * inv_force_ref;
-        summary.forces.Cl = forces[3] / fmaxf(q_inf * config.ref_area * config.ref_span, 1e-30f);
-        summary.forces.Cm = forces[4] / fmaxf(q_inf * config.ref_area * config.ref_length, 1e-30f);
-        summary.forces.Cn = forces[5] / fmaxf(q_inf * config.ref_area * config.ref_span, 1e-30f);
+        summary.forces.Cl = forces[3] / real_fmax(q_inf * config.ref_area * config.ref_span, 1e-30f);
+        summary.forces.Cm = forces[4] / real_fmax(q_inf * config.ref_area * config.ref_length, 1e-30f);
+        summary.forces.Cn = forces[5] / real_fmax(q_inf * config.ref_area * config.ref_span, 1e-30f);
 
-        constexpr float kPi = 3.14159265358979323846f;
-        float alpha = condition.alpha_deg * kPi / 180.0f;
-        float beta = condition.beta_deg * kPi / 180.0f;
-        float ca = cosf(alpha);
-        float sa = sinf(alpha);
-        float cb = cosf(beta);
-        float sb = sinf(beta);
-        float fsx = summary.forces.CX * ca * cb + summary.forces.CY * sb + summary.forces.CZ * sa * cb;
-        float fsz = -summary.forces.CX * sa + summary.forces.CZ * ca;
+        constexpr Real kPi = 3.14159265358979323846f;
+        Real alpha = condition.alpha_deg * kPi / 180.0f;
+        Real beta = condition.beta_deg * kPi / 180.0f;
+        Real ca = real_cos(alpha);
+        Real sa = real_sin(alpha);
+        Real cb = real_cos(beta);
+        Real sb = real_sin(beta);
+        Real fsx = summary.forces.CX * ca * cb + summary.forces.CY * sb + summary.forces.CZ * sa * cb;
+        Real fsz = -summary.forces.CX * sa + summary.forces.CZ * ca;
         summary.forces.CD = -fsx;
         summary.forces.CL = -fsz;
 
@@ -244,25 +243,25 @@ CfdSolveSummary solve_gpu(
     }
 
     int* d_failed = nullptr;
-    float* d_min_dt = nullptr;
-    float* d_l2_sum = nullptr;
-    float* d_forces = nullptr;
-    float* d_residual_history = nullptr;
-    float* d_state_bounds_history = nullptr;
+    Real* d_min_dt = nullptr;
+    Real* d_l2_sum = nullptr;
+    Real* d_forces = nullptr;
+    Real* d_residual_history = nullptr;
+    Real* d_state_bounds_history = nullptr;
     int* d_failure_cell = nullptr;
-    float* d_failure_state = nullptr;
+    Real* d_failure_state = nullptr;
 
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-    if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(float)), "cudaMalloc d_min_dt", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-    if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(float)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-    if (!cuda_check(cudaMalloc(&d_forces, 6 * sizeof(float)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-    if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(float)), "cudaMalloc d_residual_history", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(Real)), "cudaMalloc d_min_dt", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(Real)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_forces, 6 * sizeof(Real)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(Real)), "cudaMalloc d_residual_history", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
 
     bool diag = config.diagnostic_level != DiagnosticLevel::Off;
     if (diag) {
-        if (!cuda_check(cudaMalloc(&d_state_bounds_history, config.max_iter * 6 * sizeof(float)), "cudaMalloc d_state_bounds_history", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+        if (!cuda_check(cudaMalloc(&d_state_bounds_history, config.max_iter * 6 * sizeof(Real)), "cudaMalloc d_state_bounds_history", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
         if (!cuda_check(cudaMalloc(&d_failure_cell, sizeof(int)), "cudaMalloc d_failure_cell", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-        if (!cuda_check(cudaMalloc(&d_failure_state, 5 * sizeof(float)), "cudaMalloc d_failure_state", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+        if (!cuda_check(cudaMalloc(&d_failure_state, 5 * sizeof(Real)), "cudaMalloc d_failure_state", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
         if (!cuda_check(cudaMemset(d_failure_cell, 0xFF, sizeof(int)), "init d_failure_cell", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     }
 
@@ -275,9 +274,9 @@ CfdSolveSummary solve_gpu(
     const FreestreamCondition& condition,
     const CfdConfig& config,
     int* d_failed,
-    float* d_min_dt,
-    float* d_l2_sum,
-    float* d_forces,
+    Real* d_min_dt,
+    Real* d_l2_sum,
+    Real* d_forces,
     std::string* error) {
     if (d_mesh.cell_count() == 0 || d_mesh.face_count() == 0) {
         CfdSolveSummary s;
@@ -286,18 +285,18 @@ CfdSolveSummary solve_gpu(
         return s;
     }
 
-    float* d_residual_history = nullptr;
-    float* d_state_bounds_history = nullptr;
+    Real* d_residual_history = nullptr;
+    Real* d_state_bounds_history = nullptr;
     int* d_failure_cell = nullptr;
-    float* d_failure_state = nullptr;
+    Real* d_failure_state = nullptr;
 
-    if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(float)), "cudaMalloc d_residual_history", error)) { cudaFree(d_residual_history); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(Real)), "cudaMalloc d_residual_history", error)) { cudaFree(d_residual_history); CfdSolveSummary s; s.failed = true; return s; }
 
     bool diag = config.diagnostic_level != DiagnosticLevel::Off;
     if (diag) {
-        if (!cuda_check(cudaMalloc(&d_state_bounds_history, config.max_iter * 6 * sizeof(float)), "cudaMalloc d_state_bounds_history", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); CfdSolveSummary s; s.failed = true; return s; }
+        if (!cuda_check(cudaMalloc(&d_state_bounds_history, config.max_iter * 6 * sizeof(Real)), "cudaMalloc d_state_bounds_history", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); CfdSolveSummary s; s.failed = true; return s; }
         if (!cuda_check(cudaMalloc(&d_failure_cell, sizeof(int)), "cudaMalloc d_failure_cell", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); cudaFree(d_failure_cell); CfdSolveSummary s; s.failed = true; return s; }
-        if (!cuda_check(cudaMalloc(&d_failure_state, 5 * sizeof(float)), "cudaMalloc d_failure_state", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); cudaFree(d_failure_cell); cudaFree(d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+        if (!cuda_check(cudaMalloc(&d_failure_state, 5 * sizeof(Real)), "cudaMalloc d_failure_state", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); cudaFree(d_failure_cell); cudaFree(d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
         if (!cuda_check(cudaMemset(d_failure_cell, 0xFF, sizeof(int)), "init d_failure_cell", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); cudaFree(d_failure_cell); cudaFree(d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     }
 
@@ -312,3 +311,7 @@ CfdSolveSummary solve_gpu(
 
 } // namespace Cfd
 } // namespace AeroSim
+
+
+
+

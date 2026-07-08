@@ -381,6 +381,40 @@ Gate:
 
 ---
 
+## Phase 4-B — Real 类型抽象
+
+Goal: 用 `Real` 类型别名替代硬编码 `float`，支持 `AEROSIM_REAL_DOUBLE` 宏切换 double 精度。
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero_cfd/real.hpp` | NEW | `Real` 类型别名 + 数学/原子操作包装 |
+| `include/aero_cfd/*.hpp` (10 个) | MODIFY | `float` → `Real` |
+| `src/aero_cfd/*.cpp` (6 个) | MODIFY | `float` → `Real` |
+| `src/aero_cfd/*.cu` (8 个) | MODIFY | `float` → `Real` + CUDA 内联函数包装 |
+| `tests/cfd/*.cpp` (6 个) | MODIFY | `float` → `Real` + `using namespace AeroSim` |
+| `CMakeLists.txt` | MODIFY | 添加 `option(AEROSIM_REAL_DOUBLE)` |
+
+Tasks:
+
+- [x] `real.hpp`: `Real` 类型 + sqrt/fabs/fmin/fmax/isfinite/cos/sin/atomicAdd/atomicMin/atomicMax 包装
+- [x] 机械替换 25 个文件
+- [x] 修复 MSVC 主机侧 `__device__` 函数 ODR 冲突（static 关键字 + __CUDACC__ 守卫）
+- [x] 修复 VTK 输出中 `"Real"` 字面量 → `"float"`（VTK 数据格式关键字）
+- [x] 修复非 CUDA 测试可执行文件链接 `missile_lib` 的 CUDA 属性
+- [x] `option(AEROSIM_REAL_DOUBLE)` CMake 选项
+- [x] 验证：`AEROSIM_REAL_DOUBLE=0` 全部测试 PASS
+- [x] 验证：`AEROSIM_REAL_DOUBLE=1` 编译成功，Mesh 测试 PASS
+
+Gate:
+
+- [x] `AEROSIM_REAL_DOUBLE=0`（默认 float）：全部测试 bit-wise 与 Phase 4 一致。
+- [x] `AEROSIM_REAL_DOUBLE=1`（double）：编译通过，基础测试 PASS。
+- [x] CUDA 原子操作统一收敛到 `real_atomic_min`/`real_atomic_max`，去除局部定义。
+
+---
+
 ## Phase 5 — GPU Viscous Navier-Stokes
 
 Goal: port laminar NS viscous flux, wall shear, and heat flux to GPU. Integrate into `solve_gpu()`.

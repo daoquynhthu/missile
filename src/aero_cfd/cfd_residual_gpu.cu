@@ -1,34 +1,33 @@
 #include "aero_cfd/cfd_residual.hpp"
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/cuda_utils.hpp"
-
 #include <cuda_runtime.h>
-
 namespace AeroSim {
 namespace Cfd {
 
 namespace {
 
-__device__ bool d_conservative_to_primitive(const float* q, int cell, int nvar, float gamma, float& rho, float& u, float& v, float& w, float& p) {
+__device__ bool d_conservative_to_primitive(const Real* q, int cell, int nvar, Real gamma, Real& rho, Real& u, Real& v, Real& w, Real& p) {
     rho = q[cell * nvar + 0];
-    if (rho <= 0.0f || !__finitef(rho)) return false;
-    float inv_rho = 1.0f / rho;
+    if (rho <= 0.0f || !real_isfinite(rho)) return false;
+    Real inv_rho = 1.0f / rho;
     u = q[cell * nvar + 1] * inv_rho;
     v = q[cell * nvar + 2] * inv_rho;
     w = q[cell * nvar + 3] * inv_rho;
-    float kinetic = 0.5f * (u*u + v*v + w*w);
+    Real kinetic = 0.5f * (u*u + v*v + w*w);
     p = (gamma - 1.0f) * (q[cell * nvar + 4] - rho * kinetic);
-    return __finitef(u) && __finitef(v) && __finitef(w) && __finitef(p) && p > 0.0f;
+    return real_isfinite(u) && real_isfinite(v) && real_isfinite(w) && real_isfinite(p) && p > 0.0f;
 }
 
-__device__ float d_speed_of_sound(float rho, float p, float gamma) {
-    return sqrtf(gamma * p / rho);
+__device__ Real d_speed_of_sound(Real rho, Real p, Real gamma) {
+    return real_sqrt(gamma * p / rho);
 }
 
-__device__ void d_physical_flux(float rho, float u, float v, float w, float p, float gamma,
-    float nx, float ny, float nz, float& mass, float& mom_x, float& mom_y, float& mom_z, float& energy) {
-    float vn = u*nx + v*ny + w*nz;
-    float kinetic = 0.5f * (u*u + v*v + w*w);
-    float rho_E = p / (gamma - 1.0f) + rho * kinetic;
+__device__ void d_physical_flux(Real rho, Real u, Real v, Real w, Real p, Real gamma,
+    Real nx, Real ny, Real nz, Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy) {
+    Real vn = u*nx + v*ny + w*nz;
+    Real kinetic = 0.5f * (u*u + v*v + w*w);
+    Real rho_E = p / (gamma - 1.0f) + rho * kinetic;
     mass = rho * vn;
     mom_x = rho * u * vn + p * nx;
     mom_y = rho * v * vn + p * ny;
@@ -36,8 +35,8 @@ __device__ void d_physical_flux(float rho, float u, float v, float w, float p, f
     energy = (rho_E + p) * vn;
 }
 
-__device__ void d_slip_wall_flux(float p, float nx, float ny, float nz,
-    float& mass, float& mom_x, float& mom_y, float& mom_z, float& energy) {
+__device__ void d_slip_wall_flux(Real p, Real nx, Real ny, Real nz,
+    Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy) {
     mass = 0.0f;
     mom_x = p * nx;
     mom_y = p * ny;
@@ -45,11 +44,11 @@ __device__ void d_slip_wall_flux(float p, float nx, float ny, float nz,
     energy = 0.0f;
 }
 
-__device__ void d_farfield_ghost_state(float left_rho, float left_u, float left_v, float left_w, float left_p,
-    float inf_rho, float inf_p, float inf_u, float inf_v, float inf_w, float inf_a,
-    float nx, float ny, float nz,
-    float& ghost_rho, float& ghost_p, float& ghost_u, float& ghost_v, float& ghost_w) {
-    float vn_inf = inf_u*nx + inf_v*ny + inf_w*nz;
+__device__ void d_farfield_ghost_state(Real left_rho, Real left_u, Real left_v, Real left_w, Real left_p,
+    Real inf_rho, Real inf_p, Real inf_u, Real inf_v, Real inf_w, Real inf_a,
+    Real nx, Real ny, Real nz,
+    Real& ghost_rho, Real& ghost_p, Real& ghost_u, Real& ghost_v, Real& ghost_w) {
+    Real vn_inf = inf_u*nx + inf_v*ny + inf_w*nz;
     if (vn_inf >= inf_a) {
         ghost_rho = left_rho; ghost_p = left_p;
         ghost_u = left_u; ghost_v = left_v; ghost_w = left_w;
@@ -60,47 +59,47 @@ __device__ void d_farfield_ghost_state(float left_rho, float left_u, float left_
 }
 
 __device__ void d_hllc_flux(
-    float rhoL, float uL, float vL, float wL, float pL,
-    float rhoR, float uR, float vR, float wR, float pR,
-    float gamma, float nx, float ny, float nz,
-    float& mass, float& mom_x, float& mom_y, float& mom_z, float& energy) {
-    float vn_l = uL*nx + vL*ny + wL*nz;
-    float vn_r = uR*nx + vR*ny + wR*nz;
-    float a_l = d_speed_of_sound(rhoL, pL, gamma);
-    float a_r = d_speed_of_sound(rhoR, pR, gamma);
-    float s_l = fminf(vn_l - a_l, vn_r - a_r);
-    float s_r = fmaxf(vn_l + a_l, vn_r + a_r);
+    Real rhoL, Real uL, Real vL, Real wL, Real pL,
+    Real rhoR, Real uR, Real vR, Real wR, Real pR,
+    Real gamma, Real nx, Real ny, Real nz,
+    Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy) {
+    Real vn_l = uL*nx + vL*ny + wL*nz;
+    Real vn_r = uR*nx + vR*ny + wR*nz;
+    Real a_l = d_speed_of_sound(rhoL, pL, gamma);
+    Real a_r = d_speed_of_sound(rhoR, pR, gamma);
+    Real s_l = real_fmin(vn_l - a_l, vn_r - a_r);
+    Real s_r = real_fmax(vn_l + a_l, vn_r + a_r);
 
-    float fL_mass, fL_mx, fL_my, fL_mz, fL_en;
-    float fR_mass, fR_mx, fR_my, fR_mz, fR_en;
+    Real fL_mass, fL_mx, fL_my, fL_mz, fL_en;
+    Real fR_mass, fR_mx, fR_my, fR_mz, fR_en;
     d_physical_flux(rhoL, uL, vL, wL, pL, gamma, nx, ny, nz, fL_mass, fL_mx, fL_my, fL_mz, fL_en);
     d_physical_flux(rhoR, uR, vR, wR, pR, gamma, nx, ny, nz, fR_mass, fR_mx, fR_my, fR_mz, fR_en);
 
     if (s_l >= 0.0f) { mass = fL_mass; mom_x = fL_mx; mom_y = fL_my; mom_z = fL_mz; energy = fL_en; return; }
     if (s_r <= 0.0f) { mass = fR_mass; mom_x = fR_mx; mom_y = fR_my; mom_z = fR_mz; energy = fR_en; return; }
 
-    float denom = rhoL * (s_l - vn_l) - rhoR * (s_r - vn_r);
-    if (fabsf(denom) < 1e-30f) denom = copysignf(1e-30f, denom);
-    float s_m = (pR - pL + rhoL*vn_l*(s_l - vn_l) - rhoR*vn_r*(s_r - vn_r)) / denom;
+    Real denom = rhoL * (s_l - vn_l) - rhoR * (s_r - vn_r);
+    if (real_fabs(denom) < 1e-30f) denom = real_copysign(1e-30f, denom);
+    Real s_m = (pR - pL + rhoL*vn_l*(s_l - vn_l) - rhoR*vn_r*(s_r - vn_r)) / denom;
 
     if (s_m >= 0.0f) {
-        float rho_star = rhoL * (s_l - vn_l) / (s_l - s_m);
-        float kineticL = 0.5f * (uL*uL + vL*vL + wL*wL);
-        float e_l = pL / ((gamma - 1.0f) * rhoL) + kineticL;
-        float sld_l = s_l - vn_l;
-        if (fabsf(sld_l) < 1e-30f) sld_l = copysignf(1e-30f, sld_l);
-        float e_star = e_l + (s_m - vn_l) * (s_m + pL / (rhoL * sld_l));
-        float qL_rho = rhoL;
-        float qL_rhou = rhoL * uL;
-        float qL_rhov = rhoL * vL;
-        float qL_rhow = rhoL * wL;
-        float qL_rhoE = pL / (gamma - 1.0f) + rhoL * kineticL;
+        Real rho_star = rhoL * (s_l - vn_l) / (s_l - s_m);
+        Real kineticL = 0.5f * (uL*uL + vL*vL + wL*wL);
+        Real e_l = pL / ((gamma - 1.0f) * rhoL) + kineticL;
+        Real sld_l = s_l - vn_l;
+        if (real_fabs(sld_l) < 1e-30f) sld_l = real_copysign(1e-30f, sld_l);
+        Real e_star = e_l + (s_m - vn_l) * (s_m + pL / (rhoL * sld_l));
+        Real qL_rho = rhoL;
+        Real qL_rhou = rhoL * uL;
+        Real qL_rhov = rhoL * vL;
+        Real qL_rhow = rhoL * wL;
+        Real qL_rhoE = pL / (gamma - 1.0f) + rhoL * kineticL;
 
-        float qs_rho = rho_star;
-        float qs_rhou = rho_star * (uL + (s_m - vn_l) * nx);
-        float qs_rhov = rho_star * (vL + (s_m - vn_l) * ny);
-        float qs_rhow = rho_star * (wL + (s_m - vn_l) * nz);
-        float qs_rhoE = rho_star * e_star;
+        Real qs_rho = rho_star;
+        Real qs_rhou = rho_star * (uL + (s_m - vn_l) * nx);
+        Real qs_rhov = rho_star * (vL + (s_m - vn_l) * ny);
+        Real qs_rhow = rho_star * (wL + (s_m - vn_l) * nz);
+        Real qs_rhoE = rho_star * e_star;
 
         mass = fL_mass + s_l * (qs_rho - qL_rho);
         mom_x = fL_mx + s_l * (qs_rhou - qL_rhou);
@@ -108,23 +107,23 @@ __device__ void d_hllc_flux(
         mom_z = fL_mz + s_l * (qs_rhow - qL_rhow);
         energy = fL_en + s_l * (qs_rhoE - qL_rhoE);
     } else {
-        float rho_star = rhoR * (s_r - vn_r) / (s_r - s_m);
-        float kineticR = 0.5f * (uR*uR + vR*vR + wR*wR);
-        float e_r = pR / ((gamma - 1.0f) * rhoR) + kineticR;
-        float sld_r = s_r - vn_r;
-        if (fabsf(sld_r) < 1e-30f) sld_r = copysignf(1e-30f, sld_r);
-        float e_star = e_r + (s_m - vn_r) * (s_m + pR / (rhoR * sld_r));
-        float qR_rho = rhoR;
-        float qR_rhou = rhoR * uR;
-        float qR_rhov = rhoR * vR;
-        float qR_rhow = rhoR * wR;
-        float qR_rhoE = pR / (gamma - 1.0f) + rhoR * kineticR;
+        Real rho_star = rhoR * (s_r - vn_r) / (s_r - s_m);
+        Real kineticR = 0.5f * (uR*uR + vR*vR + wR*wR);
+        Real e_r = pR / ((gamma - 1.0f) * rhoR) + kineticR;
+        Real sld_r = s_r - vn_r;
+        if (real_fabs(sld_r) < 1e-30f) sld_r = real_copysign(1e-30f, sld_r);
+        Real e_star = e_r + (s_m - vn_r) * (s_m + pR / (rhoR * sld_r));
+        Real qR_rho = rhoR;
+        Real qR_rhou = rhoR * uR;
+        Real qR_rhov = rhoR * vR;
+        Real qR_rhow = rhoR * wR;
+        Real qR_rhoE = pR / (gamma - 1.0f) + rhoR * kineticR;
 
-        float qs_rho = rho_star;
-        float qs_rhou = rho_star * (uR + (s_m - vn_r) * nx);
-        float qs_rhov = rho_star * (vR + (s_m - vn_r) * ny);
-        float qs_rhow = rho_star * (wR + (s_m - vn_r) * nz);
-        float qs_rhoE = rho_star * e_star;
+        Real qs_rho = rho_star;
+        Real qs_rhou = rho_star * (uR + (s_m - vn_r) * nx);
+        Real qs_rhov = rho_star * (vR + (s_m - vn_r) * ny);
+        Real qs_rhow = rho_star * (wR + (s_m - vn_r) * nz);
+        Real qs_rhoE = rho_star * e_star;
 
         mass = fR_mass + s_r * (qs_rho - qR_rho);
         mom_x = fR_mx + s_r * (qs_rhou - qR_rhou);
@@ -135,10 +134,10 @@ __device__ void d_hllc_flux(
 }
 
 __device__ void d_reconstruct_primitive(
-    const float* gradients, int cell,
-    float dx, float dy, float dz,
-    float& rho, float& u, float& v, float& w, float& p) {
-    const float* g = gradients + cell * 15;
+    const Real* gradients, int cell,
+    Real dx, Real dy, Real dz,
+    Real& rho, Real& u, Real& v, Real& w, Real& p) {
+    const Real* g = gradients + cell * 15;
     rho = rho + g[0]*dx + g[1]*dy + g[2]*dz;
     u = u + g[3]*dx + g[4]*dy + g[5]*dz;
     v = v + g[6]*dx + g[7]*dy + g[8]*dz;
@@ -147,64 +146,64 @@ __device__ void d_reconstruct_primitive(
 }
 
 __global__ void euler_residual_kernel_atomic(
-    const float* d_nx, const float* d_ny, const float* d_nz,
-    const float* d_area,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz,
+    const Real* d_area,
     const int* d_left_cell, const int* d_right_cell,
     const int* d_boundary,
-    const float* d_q,
+    const Real* d_q,
     int face_count, int nvar, int n_cells,
-    float gamma,
-    float inf_rho, float inf_p,
-    float inf_u, float inf_v, float inf_w, float inf_a,
-    float* d_residual,
+    Real gamma,
+    Real inf_rho, Real inf_p,
+    Real inf_u, Real inf_v, Real inf_w, Real inf_a,
+    Real* d_residual,
     int* d_failed,
-    const float* d_gradients,
-    const float* d_face_cx, const float* d_face_cy, const float* d_face_cz,
-    const float* d_cx, const float* d_cy, const float* d_cz) {
+    const Real* d_gradients,
+    const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
+    const Real* d_cx, const Real* d_cy, const Real* d_cz) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
 
     int left = d_left_cell[idx];
     if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
     int bnd = d_boundary[idx];
-    float nx = d_nx[idx];
-    float ny = d_ny[idx];
-    float nz = d_nz[idx];
-    float area = d_area[idx];
+    Real nx = d_nx[idx];
+    Real ny = d_ny[idx];
+    Real nz = d_nz[idx];
+    Real area = d_area[idx];
 
-    float rhoL, uL, vL, wL, pL;
+    Real rhoL, uL, vL, wL, pL;
     if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
         atomicExch(d_failed, 1);
         return;
     }
 
     if (d_gradients != nullptr) {
-        float dx = d_face_cx[idx] - d_cx[left];
-        float dy = d_face_cy[idx] - d_cy[left];
-        float dz = d_face_cz[idx] - d_cz[left];
+        Real dx = d_face_cx[idx] - d_cx[left];
+        Real dy = d_face_cy[idx] - d_cy[left];
+        Real dz = d_face_cz[idx] - d_cz[left];
         d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL);
-        if (!__finitef(rhoL) || rhoL <= 0.0f || !__finitef(pL) || pL <= 0.0f) {
+        if (!real_isfinite(rhoL) || rhoL <= 0.0f || !real_isfinite(pL) || pL <= 0.0f) {
             atomicExch(d_failed, 1);
             return;
         }
     }
 
-    float mass, mom_x, mom_y, mom_z, energy;
+    Real mass, mom_x, mom_y, mom_z, energy;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
-        float rhoR, uR, vR, wR, pR;
+        Real rhoR, uR, vR, wR, pR;
         if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
             atomicExch(d_failed, 1);
             return;
         }
         if (d_gradients != nullptr) {
-            float dx = d_face_cx[idx] - d_cx[right];
-            float dy = d_face_cy[idx] - d_cy[right];
-            float dz = d_face_cz[idx] - d_cz[right];
+            Real dx = d_face_cx[idx] - d_cx[right];
+            Real dy = d_face_cy[idx] - d_cy[right];
+            Real dz = d_face_cz[idx] - d_cz[right];
             d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR);
-            if (!__finitef(rhoR) || rhoR <= 0.0f || !__finitef(pR) || pR <= 0.0f) {
+            if (!real_isfinite(rhoR) || rhoR <= 0.0f || !real_isfinite(pR) || pR <= 0.0f) {
                 atomicExch(d_failed, 1);
                 return;
             }
@@ -214,96 +213,96 @@ __global__ void euler_residual_kernel_atomic(
     } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy);
     } else {
-        float ghrho, ghp, ghu, ghv, ghw;
+        Real ghrho, ghp, ghu, ghv, ghw;
         d_farfield_ghost_state(rhoL, uL, vL, wL, pL, inf_rho, inf_p, inf_u, inf_v, inf_w, inf_a,
             nx, ny, nz, ghrho, ghp, ghu, ghv, ghw);
         d_hllc_flux(rhoL, uL, vL, wL, pL, ghrho, ghu, ghv, ghw, ghp, gamma, nx, ny, nz,
             mass, mom_x, mom_y, mom_z, energy);
     }
 
-    float fmass = mass * area;
-    float fmx = mom_x * area;
-    float fmy = mom_y * area;
-    float fmz = mom_z * area;
-    float fen = energy * area;
+    Real fmass = mass * area;
+    Real fmx = mom_x * area;
+    Real fmy = mom_y * area;
+    Real fmz = mom_z * area;
+    Real fen = energy * area;
 
-    atomicAdd(&d_residual[left * nvar + 0], -fmass);
-    atomicAdd(&d_residual[left * nvar + 1], -fmx);
-    atomicAdd(&d_residual[left * nvar + 2], -fmy);
-    atomicAdd(&d_residual[left * nvar + 3], -fmz);
-    atomicAdd(&d_residual[left * nvar + 4], -fen);
+    real_atomic_add(&d_residual[left * nvar + 0], -fmass);
+    real_atomic_add(&d_residual[left * nvar + 1], -fmx);
+    real_atomic_add(&d_residual[left * nvar + 2], -fmy);
+    real_atomic_add(&d_residual[left * nvar + 3], -fmz);
+    real_atomic_add(&d_residual[left * nvar + 4], -fen);
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right >= 0 && right < n_cells) {
-        atomicAdd(&d_residual[right * nvar + 0], fmass);
-        atomicAdd(&d_residual[right * nvar + 1], fmx);
-        atomicAdd(&d_residual[right * nvar + 2], fmy);
-        atomicAdd(&d_residual[right * nvar + 3], fmz);
-        atomicAdd(&d_residual[right * nvar + 4], fen);
+        real_atomic_add(&d_residual[right * nvar + 0], fmass);
+        real_atomic_add(&d_residual[right * nvar + 1], fmx);
+        real_atomic_add(&d_residual[right * nvar + 2], fmy);
+        real_atomic_add(&d_residual[right * nvar + 3], fmz);
+        real_atomic_add(&d_residual[right * nvar + 4], fen);
         }
     }
 }
 
 __global__ void euler_residual_kernel_colored(
-    const float* d_nx, const float* d_ny, const float* d_nz,
-    const float* d_area,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz,
+    const Real* d_area,
     const int* d_left_cell, const int* d_right_cell,
     const int* d_boundary,
-    const float* d_q,
+    const Real* d_q,
     int face_start, int face_end, int nvar, int n_cells,
-    float gamma,
-    float inf_rho, float inf_p,
-    float inf_u, float inf_v, float inf_w, float inf_a,
-    float* d_residual,
+    Real gamma,
+    Real inf_rho, Real inf_p,
+    Real inf_u, Real inf_v, Real inf_w, Real inf_a,
+    Real* d_residual,
     int* d_failed,
-    const float* d_gradients,
-    const float* d_face_cx, const float* d_face_cy, const float* d_face_cz,
-    const float* d_cx, const float* d_cy, const float* d_cz) {
+    const Real* d_gradients,
+    const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
+    const Real* d_cx, const Real* d_cy, const Real* d_cz) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
     if (idx >= face_end) return;
 
     int left = d_left_cell[idx];
     if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
     int bnd = d_boundary[idx];
-    float nx = d_nx[idx];
-    float ny = d_ny[idx];
-    float nz = d_nz[idx];
-    float area = d_area[idx];
+    Real nx = d_nx[idx];
+    Real ny = d_ny[idx];
+    Real nz = d_nz[idx];
+    Real area = d_area[idx];
 
-    float rhoL, uL, vL, wL, pL;
+    Real rhoL, uL, vL, wL, pL;
     if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
         atomicExch(d_failed, 1);
         return;
     }
 
     if (d_gradients != nullptr) {
-        float dx = d_face_cx[idx] - d_cx[left];
-        float dy = d_face_cy[idx] - d_cy[left];
-        float dz = d_face_cz[idx] - d_cz[left];
+        Real dx = d_face_cx[idx] - d_cx[left];
+        Real dy = d_face_cy[idx] - d_cy[left];
+        Real dz = d_face_cz[idx] - d_cz[left];
         d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL);
-        if (!__finitef(rhoL) || rhoL <= 0.0f || !__finitef(pL) || pL <= 0.0f) {
+        if (!real_isfinite(rhoL) || rhoL <= 0.0f || !real_isfinite(pL) || pL <= 0.0f) {
             atomicExch(d_failed, 1);
             return;
         }
     }
 
-    float mass, mom_x, mom_y, mom_z, energy;
+    Real mass, mom_x, mom_y, mom_z, energy;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
-        float rhoR, uR, vR, wR, pR;
+        Real rhoR, uR, vR, wR, pR;
         if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
             atomicExch(d_failed, 1);
             return;
         }
         if (d_gradients != nullptr) {
-            float dx = d_face_cx[idx] - d_cx[right];
-            float dy = d_face_cy[idx] - d_cy[right];
-            float dz = d_face_cz[idx] - d_cz[right];
+            Real dx = d_face_cx[idx] - d_cx[right];
+            Real dy = d_face_cy[idx] - d_cy[right];
+            Real dz = d_face_cz[idx] - d_cz[right];
             d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR);
-            if (!__finitef(rhoR) || rhoR <= 0.0f || !__finitef(pR) || pR <= 0.0f) {
+            if (!real_isfinite(rhoR) || rhoR <= 0.0f || !real_isfinite(pR) || pR <= 0.0f) {
                 atomicExch(d_failed, 1);
                 return;
             }
@@ -313,18 +312,18 @@ __global__ void euler_residual_kernel_colored(
     } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy);
     } else {
-        float ghrho, ghp, ghu, ghv, ghw;
+        Real ghrho, ghp, ghu, ghv, ghw;
         d_farfield_ghost_state(rhoL, uL, vL, wL, pL, inf_rho, inf_p, inf_u, inf_v, inf_w, inf_a,
             nx, ny, nz, ghrho, ghp, ghu, ghv, ghw);
         d_hllc_flux(rhoL, uL, vL, wL, pL, ghrho, ghu, ghv, ghw, ghp, gamma, nx, ny, nz,
             mass, mom_x, mom_y, mom_z, energy);
     }
 
-    float fmass = mass * area;
-    float fmx = mom_x * area;
-    float fmy = mom_y * area;
-    float fmz = mom_z * area;
-    float fen = energy * area;
+    Real fmass = mass * area;
+    Real fmx = mom_x * area;
+    Real fmy = mom_y * area;
+    Real fmz = mom_z * area;
+    Real fen = energy * area;
 
     d_residual[left * nvar + 0] += -fmass;
     d_residual[left * nvar + 1] += -fmx;
@@ -349,7 +348,7 @@ __global__ void euler_residual_kernel_colored(
 bool launch_euler_residual_kernel(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     int* d_failed,
     cudaEvent_t start_event,
     std::string* error,
@@ -365,7 +364,7 @@ bool launch_euler_residual_kernel(
 
     DeviceFaceData fd = mesh.face_data();
     DeviceCellData cd = mesh.cell_data();
-    float a_inf = speed_of_sound(freestream, gamma);
+    Real a_inf = speed_of_sound(freestream, gamma);
 
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
@@ -431,7 +430,7 @@ bool read_kernel_failed_flag(int* d_failed, std::string* error) {
 bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     int* d_failed,
     std::string* error,
     int reconstruction_order) {
@@ -447,7 +446,7 @@ bool compute_euler_residual_gpu(
 bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     std::string* error,
     int reconstruction_order) {
     int* d_failed = nullptr;
@@ -460,8 +459,8 @@ bool compute_euler_residual_gpu(
 bool compute_euler_residual_gpu_timed(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
-    float gamma,
-    float* elapsed_ms,
+    Real gamma,
+    Real* elapsed_ms,
     std::string* error,
     int reconstruction_order) {
     if (elapsed_ms) *elapsed_ms = 0.0f;
@@ -499,7 +498,7 @@ bool compute_euler_residual_gpu(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     std::vector<EulerFlux>& residual,
     std::string* error) {
     DeviceMesh device_mesh;
@@ -510,12 +509,12 @@ bool compute_euler_residual_gpu(
 }
 
 std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh) {
-    std::size_t face_bytes = mesh.faces.size() * 7 * sizeof(float);
+    std::size_t face_bytes = mesh.faces.size() * 7 * sizeof(Real);
     std::size_t state_reads = 0;
     for (const auto& face : mesh.faces) {
-        state_reads += DeviceMesh::NVAR * sizeof(float);
+        state_reads += DeviceMesh::NVAR * sizeof(Real);
         if (face.boundary == BoundaryKind::Interior) {
-            state_reads += DeviceMesh::NVAR * sizeof(float);
+            state_reads += DeviceMesh::NVAR * sizeof(Real);
         }
     }
     std::size_t residual_writes = state_reads;
@@ -524,3 +523,7 @@ std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh) {
 
 } // namespace Cfd
 } // namespace AeroSim
+
+
+
+

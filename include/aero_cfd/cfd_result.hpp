@@ -1,21 +1,23 @@
 #pragma once
 
+#include "aero_cfd/real.hpp"
+
 namespace AeroSim {
 namespace Cfd {
 
 struct CfdForceResult {
-    float CX = 0.0f;
-    float CY = 0.0f;
-    float CZ = 0.0f;
-    float CD = 0.0f;
-    float CL = 0.0f;
-    float Cl = 0.0f;
-    float Cm = 0.0f;
-    float Cn = 0.0f;
-    float Q_wall = 0.0f;
-    float q_stag = 0.0f;
+    Real CX = 0.0f;
+    Real CY = 0.0f;
+    Real CZ = 0.0f;
+    Real CD = 0.0f;
+    Real CL = 0.0f;
+    Real Cl = 0.0f;
+    Real Cm = 0.0f;
+    Real Cn = 0.0f;
+    Real Q_wall = 0.0f;
+    Real q_stag = 0.0f;
     int iterations = 0;
-    float residual = 0.0f;
+    Real residual = 0.0f;
 };
 
 } // namespace Cfd

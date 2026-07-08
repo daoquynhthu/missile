@@ -1,10 +1,12 @@
 #include "aero_cfd/reconstruction.hpp"
+#include "aero_cfd/real.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
 
+using namespace AeroSim;
 using namespace AeroSim::Cfd;
 
 static int test_count = 0;
@@ -106,7 +108,7 @@ static int test_positive_guard() {
         PrimitiveGradient g;
         g.drho_dx = -10.0f;
         g.dp_dx = -20.0f;
-        float theta = 1.0f;
+        Real theta = 1.0f;
         auto out = reconstruct_primitive_positive(center, g, 0.1f, 0.0f, 0.0f, 0.2f, 0.2f, &theta);
         if (theta >= 1.0f || theta <= 0.0f) FAIL("theta=%g", theta);
         if (out.rho < 0.2f - 1e-6f) FAIL("rho=%g", out.rho);
@@ -126,7 +128,7 @@ static int test_positive_guard() {
         PrimitiveGradient g;
         g.drho_dx = 0.5f;
         g.dp_dx = -0.5f;
-        float theta = 0.0f;
+        Real theta = 0.0f;
         auto guarded = reconstruct_primitive_positive(center, g, 0.1f, 0.0f, 0.0f, 0.2f, 0.2f, &theta);
         auto raw = reconstruct_primitive(center, g, 0.1f, 0.0f, 0.0f);
         if (std::fabs(theta - 1.0f) > 1e-6f) FAIL("theta=%g", theta);
@@ -167,7 +169,7 @@ static int test_limiter() {
         auto limiters = compute_barth_jespersen_limiters(mesh, q, gradients, 1.4f);
         if (limiters.size() != mesh.cells.size()) FAIL("limiter size=%zu", limiters.size());
 
-        float min_p_limiter = 1.0f;
+        Real min_p_limiter = 1.0f;
         for (const auto& limiter : limiters) min_p_limiter = std::min(min_p_limiter, limiter.p);
         if (min_p_limiter >= 1.0f) FAIL("min pressure limiter=%g", min_p_limiter);
 
@@ -187,3 +189,5 @@ int main() {
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
+
+

@@ -7,7 +7,7 @@ bool compute_euler_residual_cpu(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     std::vector<EulerFlux>& residual) {
     if (q.size() != mesh.cells.size()) return false;
     residual.assign(q.size(), EulerFlux{});
@@ -28,7 +28,7 @@ bool compute_euler_residual_cpu(
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
         }
 
-        float area = face.area;
+        Real area = face.area;
         residual[face.left_cell].mass -= flux.mass * area;
         residual[face.left_cell].mom_x -= flux.mom_x * area;
         residual[face.left_cell].mom_y -= flux.mom_y * area;
@@ -49,3 +49,4 @@ bool compute_euler_residual_cpu(
 
 } // namespace Cfd
 } // namespace AeroSim
+

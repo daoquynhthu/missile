@@ -1,30 +1,29 @@
 #include "aero_cfd/reconstruction.hpp"
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/cuda_utils.hpp"
 #include "aero_cfd/device_mesh.hpp"
-
 #include <cuda_runtime.h>
-
 namespace AeroSim {
 namespace Cfd {
 
 namespace {
 
-__global__ void init_float_one_kernel(float* ptr, int n) {
+__global__ void init_float_one_kernel(Real* ptr, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) ptr[idx] = 1.0f;
 }
 
-__device__ bool d_conservative_to_primitive(const float* q, int cell, int nvar, float gamma,
-    float& rho, float& u, float& v, float& w, float& p) {
+__device__ bool d_conservative_to_primitive(const Real* q, int cell, int nvar, Real gamma,
+    Real& rho, Real& u, Real& v, Real& w, Real& p) {
     rho = q[cell * nvar + 0];
-    if (rho <= 0.0f || !__finitef(rho)) return false;
-    float inv_rho = 1.0f / rho;
+    if (rho <= 0.0f || !real_isfinite(rho)) return false;
+    Real inv_rho = 1.0f / rho;
     u = q[cell * nvar + 1] * inv_rho;
     v = q[cell * nvar + 2] * inv_rho;
     w = q[cell * nvar + 3] * inv_rho;
-    float kinetic = 0.5f * (u*u + v*v + w*w);
+    Real kinetic = 0.5f * (u*u + v*v + w*w);
     p = (gamma - 1.0f) * (q[cell * nvar + 4] - rho * kinetic);
-    return __finitef(u) && __finitef(v) && __finitef(w) && __finitef(p) && p > 0.0f;
+    return real_isfinite(u) && real_isfinite(v) && real_isfinite(w) && real_isfinite(p) && p > 0.0f;
 }
 
 __device__ PrimitiveGradient d_apply_limiter(PrimitiveGradient gradient, PrimitiveLimiter limiter) {
@@ -52,38 +51,16 @@ __global__ void apply_limiter_kernel(PrimitiveGradient* gradients, const Primiti
     gradients[idx] = d_apply_limiter(gradients[idx], limiters[idx]);
 }
 
-__device__ float atomic_min_float(float* addr, float val) {
-    unsigned int* addr_as_int = reinterpret_cast<unsigned int*>(addr);
-    unsigned int old = *addr_as_int;
-    unsigned int assumed;
-    do {
-        assumed = old;
-        old = atomicCAS(addr_as_int, assumed,
-            __float_as_int(fminf(val, __int_as_float(assumed))));
-    } while (assumed != old);
-    return __int_as_float(old);
-}
 
-__device__ float atomic_max_float(float* addr, float val) {
-    unsigned int* addr_as_int = reinterpret_cast<unsigned int*>(addr);
-    unsigned int old = *addr_as_int;
-    unsigned int assumed;
-    do {
-        assumed = old;
-        old = atomicCAS(addr_as_int, assumed,
-            __float_as_int(fmaxf(val, __int_as_float(assumed))));
-    } while (assumed != old);
-    return __int_as_float(old);
-}
 
 __global__ void gg_gradient_kernel_atomic(
-    const float* d_q,
+    const Real* d_q,
     int nvar, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
-    const float* d_nx, const float* d_ny, const float* d_nz, const float* d_area,
-    const float* d_volume,
-    float gamma,
-    float* d_gradients,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
+    const Real* d_volume,
+    Real gamma,
+    Real* d_gradients,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
@@ -92,20 +69,20 @@ __global__ void gg_gradient_kernel_atomic(
     if (left < 0 || left >= n_cells) return;
     int bnd = d_boundary[idx];
 
-    float rhoL, uL, vL, wL, pL;
+    Real rhoL, uL, vL, wL, pL;
     if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
 
-    float nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-    float area = d_area[idx];
+    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+    Real area = d_area[idx];
 
-    float rhoF, uF, vF, wF, pF;
+    Real rhoF, uF, vF, wF, pF;
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
-        float rhoR, uR, vR, wR, pR;
+        Real rhoR, uR, vR, wR, pR;
         if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
@@ -120,28 +97,28 @@ __global__ void gg_gradient_kernel_atomic(
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
-        float right_scale = -area / d_volume[right];
-        float* gR = d_gradients + right * DeviceMesh::NGRAD;
-        float drho_r = rhoF - rhoR;
-        float du_r = uF - uR;
-        float dv_r = vF - vR;
-        float dw_r = wF - wR;
-        float dp_r = pF - pR;
-        atomicAdd(&gR[0], drho_r * nx * right_scale);
-        atomicAdd(&gR[1], drho_r * ny * right_scale);
-        atomicAdd(&gR[2], drho_r * nz * right_scale);
-        atomicAdd(&gR[3], du_r * nx * right_scale);
-        atomicAdd(&gR[4], du_r * ny * right_scale);
-        atomicAdd(&gR[5], du_r * nz * right_scale);
-        atomicAdd(&gR[6], dv_r * nx * right_scale);
-        atomicAdd(&gR[7], dv_r * ny * right_scale);
-        atomicAdd(&gR[8], dv_r * nz * right_scale);
-        atomicAdd(&gR[9], dw_r * nx * right_scale);
-        atomicAdd(&gR[10], dw_r * ny * right_scale);
-        atomicAdd(&gR[11], dw_r * nz * right_scale);
-        atomicAdd(&gR[12], dp_r * nx * right_scale);
-        atomicAdd(&gR[13], dp_r * ny * right_scale);
-        atomicAdd(&gR[14], dp_r * nz * right_scale);
+        Real right_scale = -area / d_volume[right];
+        Real* gR = d_gradients + right * DeviceMesh::NGRAD;
+        Real drho_r = rhoF - rhoR;
+        Real du_r = uF - uR;
+        Real dv_r = vF - vR;
+        Real dw_r = wF - wR;
+        Real dp_r = pF - pR;
+        real_atomic_add(&gR[0], drho_r * nx * right_scale);
+        real_atomic_add(&gR[1], drho_r * ny * right_scale);
+        real_atomic_add(&gR[2], drho_r * nz * right_scale);
+        real_atomic_add(&gR[3], du_r * nx * right_scale);
+        real_atomic_add(&gR[4], du_r * ny * right_scale);
+        real_atomic_add(&gR[5], du_r * nz * right_scale);
+        real_atomic_add(&gR[6], dv_r * nx * right_scale);
+        real_atomic_add(&gR[7], dv_r * ny * right_scale);
+        real_atomic_add(&gR[8], dv_r * nz * right_scale);
+        real_atomic_add(&gR[9], dw_r * nx * right_scale);
+        real_atomic_add(&gR[10], dw_r * ny * right_scale);
+        real_atomic_add(&gR[11], dw_r * nz * right_scale);
+        real_atomic_add(&gR[12], dp_r * nx * right_scale);
+        real_atomic_add(&gR[13], dp_r * ny * right_scale);
+        real_atomic_add(&gR[14], dp_r * nz * right_scale);
     } else {
         rhoF = rhoL; uF = uL; vF = vL; wF = wL; pF = pL;
     }
@@ -150,40 +127,40 @@ __global__ void gg_gradient_kernel_atomic(
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
-    float left_scale = area / d_volume[left];
-    float drho = rhoF - rhoL;
-    float du = uF - uL;
-    float dv = vF - vL;
-    float dw = wF - wL;
-    float dp = pF - pL;
+    Real left_scale = area / d_volume[left];
+    Real drho = rhoF - rhoL;
+    Real du = uF - uL;
+    Real dv = vF - vL;
+    Real dw = wF - wL;
+    Real dp = pF - pL;
 
-    float* gL = d_gradients + left * DeviceMesh::NGRAD;
-    atomicAdd(&gL[0], drho * nx * left_scale);
-    atomicAdd(&gL[1], drho * ny * left_scale);
-    atomicAdd(&gL[2], drho * nz * left_scale);
-    atomicAdd(&gL[3], du * nx * left_scale);
-    atomicAdd(&gL[4], du * ny * left_scale);
-    atomicAdd(&gL[5], du * nz * left_scale);
-    atomicAdd(&gL[6], dv * nx * left_scale);
-    atomicAdd(&gL[7], dv * ny * left_scale);
-    atomicAdd(&gL[8], dv * nz * left_scale);
-    atomicAdd(&gL[9], dw * nx * left_scale);
-    atomicAdd(&gL[10], dw * ny * left_scale);
-    atomicAdd(&gL[11], dw * nz * left_scale);
-    atomicAdd(&gL[12], dp * nx * left_scale);
-    atomicAdd(&gL[13], dp * ny * left_scale);
-    atomicAdd(&gL[14], dp * nz * left_scale);
+    Real* gL = d_gradients + left * DeviceMesh::NGRAD;
+    real_atomic_add(&gL[0], drho * nx * left_scale);
+    real_atomic_add(&gL[1], drho * ny * left_scale);
+    real_atomic_add(&gL[2], drho * nz * left_scale);
+    real_atomic_add(&gL[3], du * nx * left_scale);
+    real_atomic_add(&gL[4], du * ny * left_scale);
+    real_atomic_add(&gL[5], du * nz * left_scale);
+    real_atomic_add(&gL[6], dv * nx * left_scale);
+    real_atomic_add(&gL[7], dv * ny * left_scale);
+    real_atomic_add(&gL[8], dv * nz * left_scale);
+    real_atomic_add(&gL[9], dw * nx * left_scale);
+    real_atomic_add(&gL[10], dw * ny * left_scale);
+    real_atomic_add(&gL[11], dw * nz * left_scale);
+    real_atomic_add(&gL[12], dp * nx * left_scale);
+    real_atomic_add(&gL[13], dp * ny * left_scale);
+    real_atomic_add(&gL[14], dp * nz * left_scale);
 }
 
 __global__ void gg_gradient_kernel_colored(
-    const float* d_q,
+    const Real* d_q,
     int nvar, int n_cells,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
-    const float* d_nx, const float* d_ny, const float* d_nz, const float* d_area,
-    const float* d_volume,
-    float gamma,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
+    const Real* d_volume,
+    Real gamma,
     int face_start, int face_end,
-    float* d_gradients,
+    Real* d_gradients,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
     if (idx >= face_end) return;
@@ -192,20 +169,20 @@ __global__ void gg_gradient_kernel_colored(
     if (left < 0 || left >= n_cells) return;
     int bnd = d_boundary[idx];
 
-    float rhoL, uL, vL, wL, pL;
+    Real rhoL, uL, vL, wL, pL;
     if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
 
-    float nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-    float area = d_area[idx];
+    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+    Real area = d_area[idx];
 
-    float rhoF, uF, vF, wF, pF;
+    Real rhoF, uF, vF, wF, pF;
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
-        float rhoR, uR, vR, wR, pR;
+        Real rhoR, uR, vR, wR, pR;
         if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
@@ -220,13 +197,13 @@ __global__ void gg_gradient_kernel_colored(
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
-        float right_scale = -area / d_volume[right];
-        float* gR = d_gradients + right * DeviceMesh::NGRAD;
-        float drho_r = rhoF - rhoR;
-        float du_r = uF - uR;
-        float dv_r = vF - vR;
-        float dw_r = wF - wR;
-        float dp_r = pF - pR;
+        Real right_scale = -area / d_volume[right];
+        Real* gR = d_gradients + right * DeviceMesh::NGRAD;
+        Real drho_r = rhoF - rhoR;
+        Real du_r = uF - uR;
+        Real dv_r = vF - vR;
+        Real dw_r = wF - wR;
+        Real dp_r = pF - pR;
         gR[0] += drho_r * nx * right_scale;
         gR[1] += drho_r * ny * right_scale;
         gR[2] += drho_r * nz * right_scale;
@@ -250,14 +227,14 @@ __global__ void gg_gradient_kernel_colored(
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
-    float left_scale = area / d_volume[left];
-    float drho = rhoF - rhoL;
-    float du = uF - uL;
-    float dv = vF - vL;
-    float dw = wF - wL;
-    float dp = pF - pL;
+    Real left_scale = area / d_volume[left];
+    Real drho = rhoF - rhoL;
+    Real du = uF - uL;
+    Real dv = vF - vL;
+    Real dw = wF - wL;
+    Real dp = pF - pL;
 
-    float* gL = d_gradients + left * DeviceMesh::NGRAD;
+    Real* gL = d_gradients + left * DeviceMesh::NGRAD;
     gL[0] += drho * nx * left_scale;
     gL[1] += drho * ny * left_scale;
     gL[2] += drho * nz * left_scale;
@@ -278,15 +255,15 @@ __global__ void gg_gradient_kernel_colored(
 constexpr int kMINMAX_STRIDE = 10;
 
 __global__ void init_minmax_kernel(
-    const float* d_q, int nvar, int n_cells, float gamma,
-    float* d_minmax,
+    const Real* d_q, int nvar, int n_cells, Real gamma,
+    Real* d_minmax,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
-    float rho, u, v, w, p;
+    Real rho, u, v, w, p;
     if (!d_conservative_to_primitive(d_q, idx, nvar, gamma, rho, u, v, w, p)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
-        float* m = d_minmax + idx * kMINMAX_STRIDE;
+        Real* m = d_minmax + idx * kMINMAX_STRIDE;
         m[0] = 1e10f;  m[1] = -1e10f;
         m[2] = 1e10f;  m[3] = -1e10f;
         m[4] = 1e10f;  m[5] = -1e10f;
@@ -294,7 +271,7 @@ __global__ void init_minmax_kernel(
         m[8] = 1e10f;  m[9] = -1e10f;
         return;
     }
-    float* m = d_minmax + idx * kMINMAX_STRIDE;
+    Real* m = d_minmax + idx * kMINMAX_STRIDE;
     m[0] = rho; m[1] = rho;
     m[2] = u;   m[3] = u;
     m[4] = v;   m[5] = v;
@@ -303,10 +280,10 @@ __global__ void init_minmax_kernel(
 }
 
 __global__ void update_minmax_kernel(
-    const float* d_q, int nvar, int n_cells, int n_faces,
+    const Real* d_q, int nvar, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
-    float gamma,
-    float* d_minmax,
+    Real gamma,
+    Real* d_minmax,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
@@ -316,8 +293,8 @@ __global__ void update_minmax_kernel(
     int right = d_right_cell[idx];
     if (left < 0 || left >= n_cells || right < 0 || right >= n_cells) return;
 
-    float rhoL, uL, vL, wL, pL;
-    float rhoR, uR, vR, wR, pR;
+    Real rhoL, uL, vL, wL, pL;
+    Real rhoR, uR, vR, wR, pR;
     if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
@@ -327,19 +304,19 @@ __global__ void update_minmax_kernel(
         return;
     }
 
-    auto update = [](float* min_addr, float* max_addr, float val) {
-        atomic_min_float(min_addr, val);
-        atomic_max_float(max_addr, val);
+    auto update = [](Real* min_addr, Real* max_addr, Real val) {
+        real_atomic_min(min_addr, val);
+        real_atomic_max(max_addr, val);
     };
 
-    float* mL = d_minmax + left * kMINMAX_STRIDE;
+    Real* mL = d_minmax + left * kMINMAX_STRIDE;
     update(&mL[0], &mL[1], rhoR);
     update(&mL[2], &mL[3], uR);
     update(&mL[4], &mL[5], vR);
     update(&mL[6], &mL[7], wR);
     update(&mL[8], &mL[9], pR);
 
-    float* mR = d_minmax + right * kMINMAX_STRIDE;
+    Real* mR = d_minmax + right * kMINMAX_STRIDE;
     update(&mR[0], &mR[1], rhoL);
     update(&mR[2], &mR[3], uL);
     update(&mR[4], &mR[5], vL);
@@ -347,29 +324,29 @@ __global__ void update_minmax_kernel(
     update(&mR[8], &mR[9], pL);
 }
 
-__device__ float limiter_theta_device(float center, float reconstructed, float min_val, float max_val) {
+__device__ Real limiter_theta_device(Real center, Real reconstructed, Real min_val, Real max_val) {
     if (reconstructed > max_val) {
-        float denom = reconstructed - center;
+        Real denom = reconstructed - center;
         if (denom <= 0.0f) return 0.0f;
-        return fmaxf(0.0f, fminf(1.0f, (max_val - center) / denom));
+        return real_fmax(0.0f, real_fmin(1.0f, (max_val - center) / denom));
     }
     if (reconstructed < min_val) {
-        float denom = reconstructed - center;
+        Real denom = reconstructed - center;
         if (denom >= 0.0f) return 0.0f;
-        return fmaxf(0.0f, fminf(1.0f, (min_val - center) / denom));
+        return real_fmax(0.0f, real_fmin(1.0f, (min_val - center) / denom));
     }
     return 1.0f;
 }
 
 __global__ void bj_limiter_kernel(
-    const float* d_q, int nvar, int n_cells, int n_faces,
+    const Real* d_q, int nvar, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
-    const float* d_face_cx, const float* d_face_cy, const float* d_face_cz,
-    const float* d_cx, const float* d_cy, const float* d_cz,
-    float gamma,
-    const float* d_gradients,
-    const float* d_minmax,
-    float* d_limiters,
+    const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
+    const Real* d_cx, const Real* d_cy, const Real* d_cz,
+    Real gamma,
+    const Real* d_gradients,
+    const Real* d_minmax,
+    Real* d_limiters,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
@@ -378,83 +355,83 @@ __global__ void bj_limiter_kernel(
     if (left < 0 || left >= n_cells) return;
     int bnd = d_boundary[idx];
 
-    float rhoL, uL, vL, wL, pL;
+    Real rhoL, uL, vL, wL, pL;
     if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
 
-    float dxL = d_face_cx[idx] - d_cx[left];
-    float dyL = d_face_cy[idx] - d_cy[left];
-    float dzL = d_face_cz[idx] - d_cz[left];
+    Real dxL = d_face_cx[idx] - d_cx[left];
+    Real dyL = d_face_cy[idx] - d_cy[left];
+    Real dzL = d_face_cz[idx] - d_cz[left];
 
-    const float* gL = d_gradients + left * DeviceMesh::NGRAD;
-    float rec_rho = rhoL + gL[0]*dxL + gL[1]*dyL + gL[2]*dzL;
-    float rec_u = uL + gL[3]*dxL + gL[4]*dyL + gL[5]*dzL;
-    float rec_v = vL + gL[6]*dxL + gL[7]*dyL + gL[8]*dzL;
-    float rec_w = wL + gL[9]*dxL + gL[10]*dyL + gL[11]*dzL;
-    float rec_p = pL + gL[12]*dxL + gL[13]*dyL + gL[14]*dzL;
+    const Real* gL = d_gradients + left * DeviceMesh::NGRAD;
+    Real rec_rho = rhoL + gL[0]*dxL + gL[1]*dyL + gL[2]*dzL;
+    Real rec_u = uL + gL[3]*dxL + gL[4]*dyL + gL[5]*dzL;
+    Real rec_v = vL + gL[6]*dxL + gL[7]*dyL + gL[8]*dzL;
+    Real rec_w = wL + gL[9]*dxL + gL[10]*dyL + gL[11]*dzL;
+    Real rec_p = pL + gL[12]*dxL + gL[13]*dyL + gL[14]*dzL;
 
-    const float* mL = d_minmax + left * kMINMAX_STRIDE;
-    float t_rho = limiter_theta_device(rhoL, rec_rho, mL[0], mL[1]);
-    float t_u = limiter_theta_device(uL, rec_u, mL[2], mL[3]);
-    float t_v = limiter_theta_device(vL, rec_v, mL[4], mL[5]);
-    float t_w = limiter_theta_device(wL, rec_w, mL[6], mL[7]);
-    float t_p = limiter_theta_device(pL, rec_p, mL[8], mL[9]);
+    const Real* mL = d_minmax + left * kMINMAX_STRIDE;
+    Real t_rho = limiter_theta_device(rhoL, rec_rho, mL[0], mL[1]);
+    Real t_u = limiter_theta_device(uL, rec_u, mL[2], mL[3]);
+    Real t_v = limiter_theta_device(vL, rec_v, mL[4], mL[5]);
+    Real t_w = limiter_theta_device(wL, rec_w, mL[6], mL[7]);
+    Real t_p = limiter_theta_device(pL, rec_p, mL[8], mL[9]);
 
-    float* limL = d_limiters + left * 5;
-    atomic_min_float(&limL[0], t_rho);
-    atomic_min_float(&limL[1], t_u);
-    atomic_min_float(&limL[2], t_v);
-    atomic_min_float(&limL[3], t_w);
-    atomic_min_float(&limL[4], t_p);
+    Real* limL = d_limiters + left * 5;
+    real_atomic_min(&limL[0], t_rho);
+    real_atomic_min(&limL[1], t_u);
+    real_atomic_min(&limL[2], t_v);
+    real_atomic_min(&limL[3], t_w);
+    real_atomic_min(&limL[4], t_p);
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
-        float rhoR, uR, vR, wR, pR;
+        Real rhoR, uR, vR, wR, pR;
         if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
 
-        float dxR = d_face_cx[idx] - d_cx[right];
-        float dyR = d_face_cy[idx] - d_cy[right];
-        float dzR = d_face_cz[idx] - d_cz[right];
+        Real dxR = d_face_cx[idx] - d_cx[right];
+        Real dyR = d_face_cy[idx] - d_cy[right];
+        Real dzR = d_face_cz[idx] - d_cz[right];
 
-        const float* gR = d_gradients + right * DeviceMesh::NGRAD;
+        const Real* gR = d_gradients + right * DeviceMesh::NGRAD;
         rec_rho = rhoR + gR[0]*dxR + gR[1]*dyR + gR[2]*dzR;
         rec_u = uR + gR[3]*dxR + gR[4]*dyR + gR[5]*dzR;
         rec_v = vR + gR[6]*dxR + gR[7]*dyR + gR[8]*dzR;
         rec_w = wR + gR[9]*dxR + gR[10]*dyR + gR[11]*dzR;
         rec_p = pR + gR[12]*dxR + gR[13]*dyR + gR[14]*dzR;
 
-        const float* mR = d_minmax + right * kMINMAX_STRIDE;
+        const Real* mR = d_minmax + right * kMINMAX_STRIDE;
         t_rho = limiter_theta_device(rhoR, rec_rho, mR[0], mR[1]);
         t_u = limiter_theta_device(uR, rec_u, mR[2], mR[3]);
         t_v = limiter_theta_device(vR, rec_v, mR[4], mR[5]);
         t_w = limiter_theta_device(wR, rec_w, mR[6], mR[7]);
         t_p = limiter_theta_device(pR, rec_p, mR[8], mR[9]);
 
-        float* limR = d_limiters + right * 5;
-        atomic_min_float(&limR[0], t_rho);
-        atomic_min_float(&limR[1], t_u);
-        atomic_min_float(&limR[2], t_v);
-        atomic_min_float(&limR[3], t_w);
-        atomic_min_float(&limR[4], t_p);
+        Real* limR = d_limiters + right * 5;
+        real_atomic_min(&limR[0], t_rho);
+        real_atomic_min(&limR[1], t_u);
+        real_atomic_min(&limR[2], t_v);
+        real_atomic_min(&limR[3], t_w);
+        real_atomic_min(&limR[4], t_p);
     }
 }
 
 } // namespace
 
-bool compute_gradients_gpu(DeviceMesh& mesh, float gamma, std::string* error, int* d_failed) {
+bool compute_gradients_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int* d_failed) {
     if (mesh.cell_count() == 0 || mesh.face_count() == 0) return true;
     if (!mesh.gradients_device()) {
         if (error) *error = "gradients buffer not allocated";
         return false;
     }
 
-    std::size_t grad_bytes = DeviceMesh::NGRAD * mesh.cell_count() * sizeof(float);
+    std::size_t grad_bytes = DeviceMesh::NGRAD * mesh.cell_count() * sizeof(Real);
     if (!cuda_check(cudaMemset(mesh.gradients_device(), 0, grad_bytes), "cudaMemset gradients", error)) return false;
 
     int block = 128;
@@ -507,7 +484,7 @@ bool compute_gradients_gpu(DeviceMesh& mesh, float gamma, std::string* error, in
     return true;
 }
 
-bool compute_limiters_gpu(DeviceMesh& mesh, float gamma, std::string* error, int* d_failed) {
+bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int* d_failed) {
     if (mesh.cell_count() == 0 || mesh.face_count() == 0) return true;
     if (!mesh.gradients_device() || !mesh.limiters_device()) {
         if (error) *error = "gradient/limiter buffers not allocated";
@@ -516,9 +493,9 @@ bool compute_limiters_gpu(DeviceMesh& mesh, float gamma, std::string* error, int
 
     int nc = static_cast<int>(mesh.cell_count());
     int nf = static_cast<int>(mesh.face_count());
-    std::size_t minmax_bytes = kMINMAX_STRIDE * static_cast<std::size_t>(nc) * sizeof(float);
+    std::size_t minmax_bytes = kMINMAX_STRIDE * static_cast<std::size_t>(nc) * sizeof(Real);
 
-    float* d_minmax = nullptr;
+    Real* d_minmax = nullptr;
     if (!cuda_check(cudaMalloc(&d_minmax, minmax_bytes), "cudaMalloc minmax", error)) return false;
 
     int block = 128;
@@ -586,3 +563,7 @@ bool apply_limiter_gpu(DeviceMesh& mesh, bool sync, std::string* error) {
 
 } // namespace Cfd
 } // namespace AeroSim
+
+
+
+

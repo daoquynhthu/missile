@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_state.hpp"
 #include "aero_cfd/reconstruction.hpp"
@@ -12,45 +13,45 @@ namespace AeroSim {
 namespace Cfd {
 
 struct DeviceFaceData {
-    float* nx = nullptr;
-    float* ny = nullptr;
-    float* nz = nullptr;
-    float* area = nullptr;
+    Real* nx = nullptr;
+    Real* ny = nullptr;
+    Real* nz = nullptr;
+    Real* area = nullptr;
     int* left_cell = nullptr;
     int* right_cell = nullptr;
     int* boundary = nullptr;
-    float* cx = nullptr;
-    float* cy = nullptr;
-    float* cz = nullptr;
+    Real* cx = nullptr;
+    Real* cy = nullptr;
+    Real* cz = nullptr;
 };
 
 struct ConstDeviceFaceData {
-    const float* nx = nullptr;
-    const float* ny = nullptr;
-    const float* nz = nullptr;
-    const float* area = nullptr;
+    const Real* nx = nullptr;
+    const Real* ny = nullptr;
+    const Real* nz = nullptr;
+    const Real* area = nullptr;
     const int* left_cell = nullptr;
     const int* right_cell = nullptr;
     const int* boundary = nullptr;
-    const float* cx = nullptr;
-    const float* cy = nullptr;
-    const float* cz = nullptr;
+    const Real* cx = nullptr;
+    const Real* cy = nullptr;
+    const Real* cz = nullptr;
 };
 
 struct DeviceCellData {
-    float* volume = nullptr;
-    float* h_min = nullptr;
-    float* cx = nullptr;
-    float* cy = nullptr;
-    float* cz = nullptr;
+    Real* volume = nullptr;
+    Real* h_min = nullptr;
+    Real* cx = nullptr;
+    Real* cy = nullptr;
+    Real* cz = nullptr;
 };
 
 struct ConstDeviceCellData {
-    const float* volume = nullptr;
-    const float* h_min = nullptr;
-    const float* cx = nullptr;
-    const float* cy = nullptr;
-    const float* cz = nullptr;
+    const Real* volume = nullptr;
+    const Real* h_min = nullptr;
+    const Real* cx = nullptr;
+    const Real* cy = nullptr;
+    const Real* cz = nullptr;
 };
 
 class DeviceMesh {
@@ -92,38 +93,38 @@ public:
     DeviceCellData cell_data();
     ConstDeviceCellData cell_data() const;
 
-    float* state_device() const { return d_q_; }
-    float* residual_device() const { return d_residual_; }
-    float* gradients_device() const { return d_gradients_; }
-    float* limiters_device() const { return d_limiters_; }
+    Real* state_device() const { return d_q_; }
+    Real* residual_device() const { return d_residual_; }
+    Real* gradients_device() const { return d_gradients_; }
+    Real* limiters_device() const { return d_limiters_; }
 
 private:
     std::size_t cell_count_ = 0;
     std::size_t face_count_ = 0;
 
-    float* d_q_ = nullptr;
-    float* d_residual_ = nullptr;
+    Real* d_q_ = nullptr;
+    Real* d_residual_ = nullptr;
 
-    float* d_nx_ = nullptr;
-    float* d_ny_ = nullptr;
-    float* d_nz_ = nullptr;
-    float* d_area_ = nullptr;
+    Real* d_nx_ = nullptr;
+    Real* d_ny_ = nullptr;
+    Real* d_nz_ = nullptr;
+    Real* d_area_ = nullptr;
     int* d_left_cell_ = nullptr;
     int* d_right_cell_ = nullptr;
     int* d_boundary_ = nullptr;
 
-    float* d_volume_ = nullptr;
-    float* d_h_min_ = nullptr;
-    float* d_cx_ = nullptr;
-    float* d_cy_ = nullptr;
-    float* d_cz_ = nullptr;
+    Real* d_volume_ = nullptr;
+    Real* d_h_min_ = nullptr;
+    Real* d_cx_ = nullptr;
+    Real* d_cy_ = nullptr;
+    Real* d_cz_ = nullptr;
 
-    float* d_face_cx_ = nullptr;
-    float* d_face_cy_ = nullptr;
-    float* d_face_cz_ = nullptr;
+    Real* d_face_cx_ = nullptr;
+    Real* d_face_cy_ = nullptr;
+    Real* d_face_cz_ = nullptr;
 
-    float* d_gradients_ = nullptr;
-    float* d_limiters_ = nullptr;
+    Real* d_gradients_ = nullptr;
+    Real* d_limiters_ = nullptr;
 
     int n_colors_ = 0;
     int* d_color_offsets_ = nullptr;

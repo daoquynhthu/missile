@@ -1,4 +1,5 @@
 #include "aero_cfd/cfd_config.hpp"
+#include "aero_cfd/real.hpp"
 #include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_residual.hpp"
 #include "aero_cfd/cfd_solver.hpp"
@@ -12,14 +13,15 @@
 
 #include <algorithm>
 #include <cmath>
+
+using namespace AeroSim;
+using namespace AeroSim::Cfd;
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
 #include <cuda_runtime.h>
-
-using namespace AeroSim::Cfd;
 
 static int test_count = 0;
 static int pass_count = 0;
@@ -28,7 +30,7 @@ static int pass_count = 0;
 #define PASS do { pass_count++; std::printf("PASS\n"); } while(0)
 #define FAIL(fmt, ...) do { std::printf("FAIL: " fmt "\n", ##__VA_ARGS__); return 1; } while(0)
 
-static bool near(float a, float b, float tol) {
+static bool near(Real a, Real b, Real tol) {
     return std::fabs(a - b) <= tol * (1.0f + std::max(std::fabs(a), std::fabs(b)));
 }
 
@@ -134,7 +136,7 @@ static int test_gpu_limiter() {
         std::vector<PrimitiveGradient> gradients(3);
         std::vector<PrimitiveLimiter> limiters(3);
         for (int i = 0; i < 3; ++i) {
-            gradients[i].drho_dx = 1.0f + static_cast<float>(i);
+            gradients[i].drho_dx = 1.0f + static_cast<Real>(i);
             gradients[i].drho_dy = -2.0f;
             gradients[i].du_dx = 0.5f;
             gradients[i].dv_dy = -0.25f;
@@ -145,7 +147,7 @@ static int test_gpu_limiter() {
             limiters[i].u = 0.5f;
             limiters[i].v = 0.75f;
             limiters[i].w = 1.0f;
-            limiters[i].p = 0.1f * static_cast<float>(i + 1);
+            limiters[i].p = 0.1f * static_cast<Real>(i + 1);
         }
 
         DeviceMesh mesh_d;
@@ -189,12 +191,12 @@ static int test_gpu_timing() {
         std::string error;
         if (!mesh_d.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
         if (!mesh_d.upload_state(q, &error)) FAIL("%s", error.c_str());
-        float elapsed_ms = -1.0f;
+        Real elapsed_ms = -1.0f;
         if (!compute_euler_residual_gpu_timed(mesh_d, w, 1.4f, &elapsed_ms, &error)) FAIL("%s", error.c_str());
         if (elapsed_ms < 0.0f) FAIL("elapsed_ms=%g", elapsed_ms);
         std::size_t bytes = estimate_euler_residual_gpu_bytes(mesh);
         if (bytes == 0) FAIL("estimated bytes=%zu", bytes);
-        float bandwidth_gb_s = elapsed_ms > 0.0f ? (static_cast<float>(bytes) / (elapsed_ms * 1.0e6f)) : 0.0f;
+        Real bandwidth_gb_s = elapsed_ms > 0.0f ? (static_cast<Real>(bytes) / (elapsed_ms * 1.0e6f)) : 0.0f;
         if (bandwidth_gb_s < 0.0f) FAIL("bandwidth=%g", bandwidth_gb_s);
         PASS;
     }
@@ -219,10 +221,10 @@ static int test_real_mesh_equivalence() {
 
         if (gpu.size() != cpu.size()) FAIL("size mismatch gpu=%zu cpu=%zu", gpu.size(), cpu.size());
 
-        float max_rel = 0.0f;
+        Real max_rel = 0.0f;
         int bad_cell = -1;
         for (std::size_t i = 0; i < cpu.size(); ++i) {
-            float dm = std::fabs(gpu[i].mass - cpu[i].mass) / (1.0f + std::max(std::fabs(gpu[i].mass), std::fabs(cpu[i].mass)));
+            Real dm = std::fabs(gpu[i].mass - cpu[i].mass) / (1.0f + std::max(std::fabs(gpu[i].mass), std::fabs(cpu[i].mass)));
             if (dm > max_rel) { max_rel = dm; bad_cell = static_cast<int>(i); }
         }
         if (max_rel > 1e-6f) FAIL("max relative diff=%g at cell=%d", max_rel, bad_cell);
@@ -258,8 +260,8 @@ static int test_gpu_solver_equivalence_cube() {
         CfdSolveSummary cpu_result = solver.solve(cond, cpu_cfg);
         if (cpu_result.failed) FAIL("CPU solve failed");
 
-        float gpu_l2 = gpu_result.residual_history.empty() ? 0.0f : gpu_result.residual_history.back();
-        float cpu_l2 = cpu_result.residual_history.empty() ? 0.0f : cpu_result.residual_history.back();
+        Real gpu_l2 = gpu_result.residual_history.empty() ? 0.0f : gpu_result.residual_history.back();
+        Real cpu_l2 = cpu_result.residual_history.empty() ? 0.0f : cpu_result.residual_history.back();
 
         if (std::fabs(gpu_l2 - cpu_l2) > 1e-6f) FAIL("L2 mismatch GPU=%g CPU=%g", gpu_l2, cpu_l2);
         PASS;
@@ -342,14 +344,14 @@ static int test_gpu_flat_plate_convergence() {
 
         if (cpu_result.residual_history.empty() || gpu_result.residual_history.empty()) FAIL("no convergence history");
 
-        float cpu_l2 = cpu_result.residual_history.back();
-        float gpu_l2 = gpu_result.residual_history.back();
-        float ratio = cpu_l2 > 0.0f ? gpu_l2 / cpu_l2 : 1.0f;
+        Real cpu_l2 = cpu_result.residual_history.back();
+        Real gpu_l2 = gpu_result.residual_history.back();
+        Real ratio = cpu_l2 > 0.0f ? gpu_l2 / cpu_l2 : 1.0f;
 
         if (ratio > 1e3f) FAIL("GPU/Cpu L2 ratio=%g (GPU=%g CPU=%g)", ratio, gpu_l2, cpu_l2);
         if (gpu_l2 > 1.0f) FAIL("GPU L2=%g not converged", gpu_l2);
 
-        float cx_tol = 0.1f;
+        Real cx_tol = 0.1f;
         if (std::fabs(gpu_result.forces.CX - cpu_result.forces.CX) > cx_tol) FAIL("CX GPU=%g CPU=%g", gpu_result.forces.CX, cpu_result.forces.CX);
         PASS;
     }
@@ -584,7 +586,7 @@ static int test_recon_constant_state_zero_gradients() {
         if (!d_mesh.download_gradients(gpu_grads, &error)) FAIL("%s", error.c_str());
         if (gpu_grads.size() != cpu_grads.size()) FAIL("size mismatch: cpu=%zu gpu=%zu", cpu_grads.size(), gpu_grads.size());
 
-        float max_cpu = 0.0f, max_gpu = 0.0f;
+        Real max_cpu = 0.0f, max_gpu = 0.0f;
         for (std::size_t i = 0; i < cpu_grads.size(); ++i) {
             auto& c = cpu_grads[i];
             auto& g = gpu_grads[i];
@@ -604,17 +606,17 @@ static int test_recon_gradient_match() {
         CfdMesh mesh = generate_structured_cube_mesh(2.0f, 11);
         compute_mesh_metrics(mesh);
 
-        float gamma = 1.4f;
+        Real gamma = 1.4f;
         std::vector<ConservativeState> q(mesh.cells.size());
         for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
-            float x = mesh.cells[i].cx;
-            float y = mesh.cells[i].cy;
-            float rho = 1.0f + 0.1f * x;
-            float u = 2.0f + 0.05f * y;
-            float v = -0.1f * x;
-            float w = 0.0f;
-            float p = 1.0f / gamma + 0.05f * x - 0.02f * y;
-            float e = p / (gamma - 1.0f) + 0.5f * rho * (u*u + v*v + w*w);
+            Real x = mesh.cells[i].cx;
+            Real y = mesh.cells[i].cy;
+            Real rho = 1.0f + 0.1f * x;
+            Real u = 2.0f + 0.05f * y;
+            Real v = -0.1f * x;
+            Real w = 0.0f;
+            Real p = 1.0f / gamma + 0.05f * x - 0.02f * y;
+            Real e = p / (gamma - 1.0f) + 0.5f * rho * (u*u + v*v + w*w);
             q[i].rho = rho;
             q[i].rho_u = rho * u;
             q[i].rho_v = rho * v;
@@ -635,7 +637,7 @@ static int test_recon_gradient_match() {
         if (!d_mesh.download_gradients(gpu_grads, &error)) FAIL("%s", error.c_str());
         if (gpu_grads.size() != cpu_grads.size()) FAIL("size mismatch: cpu=%zu gpu=%zu", cpu_grads.size(), gpu_grads.size());
 
-        float tol = 2e-6f;
+        Real tol = 2e-6f;
         for (std::size_t i = 0; i < cpu_grads.size(); ++i) {
             auto& c = cpu_grads[i];
             auto& g = gpu_grads[i];
@@ -664,7 +666,7 @@ static int test_recon_first_order_regression() {
         PrimitiveState w;
         w.rho = 1.0f; w.u = 2.0f; w.p = 1.0f / 1.4f;
         std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
-        float gamma = 1.4f;
+        Real gamma = 1.4f;
 
         std::vector<EulerFlux> cpu_res(mesh.cells.size());
         if (!compute_euler_residual_cpu(mesh, q, w, gamma, cpu_res)) FAIL("CPU residual failed");
@@ -679,7 +681,7 @@ static int test_recon_first_order_regression() {
         std::vector<EulerFlux> gpu_res;
         if (!d_mesh.download_residual(gpu_res, &error)) FAIL("%s", error.c_str());
 
-        float tol = 1e-12f;
+        Real tol = 1e-12f;
         for (std::size_t i = 0; i < cpu_res.size(); ++i) {
             if (!near(gpu_res[i].mass, cpu_res[i].mass, tol)) FAIL("cell=%zu mass cpu=%g gpu=%g", i, cpu_res[i].mass, gpu_res[i].mass);
             if (!near(gpu_res[i].mom_x, cpu_res[i].mom_x, tol)) FAIL("cell=%zu mom_x cpu=%g gpu=%g", i, cpu_res[i].mom_x, gpu_res[i].mom_x);
@@ -720,8 +722,8 @@ static int test_oracle_bandwidth() {
         if (!cuda_check(cudaDeviceGetAttribute(&bus_width_bits, cudaDevAttrGlobalMemoryBusWidth, 0), "cudaDevAttrGlobalMemoryBusWidth")) {
             FAIL("cudaDevAttrGlobalMemoryBusWidth failed");
         }
-        float theoretical = 2.0e-6f * static_cast<float>(mem_clock_khz) *
-            static_cast<float>(bus_width_bits) / 8.0f;
+        Real theoretical = 2.0e-6f * static_cast<Real>(mem_clock_khz) *
+            static_cast<Real>(bus_width_bits) / 8.0f;
 
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
         compute_mesh_metrics(mesh);
@@ -735,13 +737,13 @@ static int test_oracle_bandwidth() {
         if (!d_mesh.upload_mesh(mesh, &error, true)) FAIL("%s", error.c_str());
         if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
 
-        float elapsed_ms = -1.0f;
+        Real elapsed_ms = -1.0f;
         if (!compute_euler_residual_gpu_timed(d_mesh, w, 1.4f, &elapsed_ms, &error)) FAIL("%s", error.c_str());
         if (elapsed_ms <= 0.0f) FAIL("elapsed_ms=%g", elapsed_ms);
 
         std::size_t bytes = estimate_euler_residual_gpu_bytes(mesh);
-        float bandwidth = static_cast<float>(bytes) / (elapsed_ms * 1.0e6f);
-        float ratio = theoretical > 0.0f ? bandwidth / theoretical : 0.0f;
+        Real bandwidth = static_cast<Real>(bytes) / (elapsed_ms * 1.0e6f);
+        Real ratio = theoretical > 0.0f ? bandwidth / theoretical : 0.0f;
 
         if (ratio < 0.5f) FAIL("bandwidth ratio=%g (BW=%g GB/s, theoretical=%g GB/s)", ratio, bandwidth, theoretical);
         PASS;
@@ -782,7 +784,7 @@ static int test_diag_state_bounds_gpu_cpu_match() {
         std::size_t n = gpu_result.diagnostics.state_bounds_history.size();
         if (n == 0 || n > cfg.max_iter) FAIL("bounds count out of range: %zu", n);
 
-        float tol = 2e-5f;
+        Real tol = 2e-5f;
         for (std::size_t i = 0; i < n; ++i) {
             auto& g = gpu_result.diagnostics.state_bounds_history[i];
             auto& c = cpu_result.diagnostics.state_bounds_history[i + 1];
@@ -869,7 +871,7 @@ static int test_recon_order2_converged_forces() {
         if (!std::isfinite(r2.forces.CL)) FAIL("order=2 CL not finite");
 
         if (r1.forces.CX != r2.forces.CX) {
-            float diff = std::fabs(r2.forces.CX - r1.forces.CX);
+            Real diff = std::fabs(r2.forces.CX - r1.forces.CX);
             if (diff < 1e-12f) FAIL("order=2 forces identical to order=1 (reconstruction not running)");
         }
 
@@ -905,7 +907,7 @@ static int test_color_residual_matches_uncolored() {
         PrimitiveState w;
         w.rho = 1.0f; w.u = 2.0f; w.p = 1.0f / 1.4f;
         std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
-        float gamma = 1.4f;
+        Real gamma = 1.4f;
         std::string error;
 
         DeviceMesh colored;
@@ -923,7 +925,7 @@ static int test_color_residual_matches_uncolored() {
         std::vector<EulerFlux> uncolored_res;
         if (!uncolored.download_residual(uncolored_res, &error)) FAIL("uncolored download: %s", error.c_str());
 
-        float tol = 1e-6f;
+        Real tol = 1e-6f;
         for (std::size_t i = 0; i < colored_res.size(); ++i) {
             if (!near(colored_res[i].mass, uncolored_res[i].mass, tol))
                 FAIL("cell=%zu mass colored=%g uncolored=%g", i, colored_res[i].mass, uncolored_res[i].mass);
@@ -947,16 +949,16 @@ static int test_color_gradient_matches_uncolored() {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 11);
         compute_mesh_metrics(mesh);
 
-        float gamma = 1.4f;
+        Real gamma = 1.4f;
         std::vector<ConservativeState> q(mesh.cells.size());
         for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
-            float x = mesh.cells[i].cx;
-            float y = mesh.cells[i].cy;
-            float rho = 1.0f + 0.1f * x;
-            float u = 2.0f + 0.05f * y;
-            float v = -0.1f * x;
-            float p = 1.0f / gamma + 0.05f * x - 0.02f * y;
-            float e = p / (gamma - 1.0f) + 0.5f * rho * (u*u + v*v);
+            Real x = mesh.cells[i].cx;
+            Real y = mesh.cells[i].cy;
+            Real rho = 1.0f + 0.1f * x;
+            Real u = 2.0f + 0.05f * y;
+            Real v = -0.1f * x;
+            Real p = 1.0f / gamma + 0.05f * x - 0.02f * y;
+            Real e = p / (gamma - 1.0f) + 0.5f * rho * (u*u + v*v);
             q[i].rho = rho;
             q[i].rho_u = rho * u;
             q[i].rho_v = rho * v;
@@ -980,7 +982,7 @@ static int test_color_gradient_matches_uncolored() {
         std::vector<PrimitiveGradient> uncolored_grads;
         if (!uncolored.download_gradients(uncolored_grads, &error)) FAIL("uncolored download: %s", error.c_str());
 
-        float tol = 2e-6f;
+        Real tol = 2e-6f;
         for (std::size_t i = 0; i < colored_grads.size(); ++i) {
             auto& c = colored_grads[i];
             auto& u = uncolored_grads[i];
@@ -1006,7 +1008,7 @@ static int test_color_deterministic_residual() {
         PrimitiveState w;
         w.rho = 1.0f; w.u = 2.0f; w.p = 1.0f / 1.4f;
         std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
-        float gamma = 1.4f;
+        Real gamma = 1.4f;
         std::string error;
 
         DeviceMesh d_mesh;
@@ -1016,9 +1018,9 @@ static int test_color_deterministic_residual() {
         int* d_failed = nullptr;
         if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", &error)) FAIL("%s", error.c_str());
 
-        std::size_t residual_bytes = d_mesh.cell_count() * DeviceMesh::NVAR * sizeof(float);
-        std::vector<float> res1(d_mesh.cell_count() * DeviceMesh::NVAR);
-        std::vector<float> res2(d_mesh.cell_count() * DeviceMesh::NVAR);
+        std::size_t residual_bytes = d_mesh.cell_count() * DeviceMesh::NVAR * sizeof(Real);
+        std::vector<Real> res1(d_mesh.cell_count() * DeviceMesh::NVAR);
+        std::vector<Real> res2(d_mesh.cell_count() * DeviceMesh::NVAR);
 
         if (!compute_euler_residual_gpu(d_mesh, w, gamma, d_failed, &error)) FAIL("1st run: %s", error.c_str());
         if (!cuda_check(cudaMemcpy(res1.data(), d_mesh.residual_device(), residual_bytes, cudaMemcpyDeviceToHost), "1st download", &error)) FAIL("%s", error.c_str());
@@ -1067,3 +1069,4 @@ int main() {
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
+

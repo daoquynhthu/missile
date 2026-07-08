@@ -1,3 +1,4 @@
+#include "aero_cfd/real.hpp"
 #pragma once
 
 #include "aero_cfd/cfd_mesh.hpp"
@@ -16,13 +17,13 @@ bool compute_euler_residual_cpu(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     std::vector<EulerFlux>& residual);
 
 bool launch_euler_residual_kernel(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     int* d_failed,
     cudaEvent_t start_event = nullptr,
     std::string* error = nullptr,
@@ -31,7 +32,7 @@ bool launch_euler_residual_kernel(
 bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     int* d_failed,
     std::string* error = nullptr,
     int reconstruction_order = 1);
@@ -39,15 +40,15 @@ bool compute_euler_residual_gpu(
 bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     std::string* error = nullptr,
     int reconstruction_order = 1);
 
 bool compute_euler_residual_gpu_timed(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,
-    float gamma,
-    float* elapsed_ms,
+    Real gamma,
+    Real* elapsed_ms,
     std::string* error = nullptr,
     int reconstruction_order = 1);
 
@@ -57,9 +58,11 @@ bool compute_euler_residual_gpu(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const PrimitiveState& freestream,
-    float gamma,
+    Real gamma,
     std::vector<EulerFlux>& residual,
     std::string* error = nullptr);
 
 } // namespace Cfd
 } // namespace AeroSim
+
+
