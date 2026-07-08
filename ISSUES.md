@@ -586,3 +586,167 @@ Both `CfdSolver::solve()` and `compute_euler_residual_cpu()` are purely first-or
 - `cpu_oracle=true` with `reconstruction_order=2` would always report mismatch.
 
 Status: Design gap. Not blocking Phase 4 gate (1st-order regression only). Deferred until CPU solver is extended with 2nd-order support or the oracle is explicitly configured to skip comparison when `reconstruction_order>1`. See also PH4-A-6.
+
+## Phase 4-B Audit (2026-07-08)
+
+4 路并行子 Agent 审计结果汇总（Phase 4-A/4-B/MPI/CUDA Safety）。
+
+### Category A: 活跃正确性 bug（编译进入 Release 构建）
+
+**PH4-B-1: `solve_gpu_impl` 重复残差历史追加 + 收敛标志覆盖** [HIGH]
+`src/aero_cfd/gpu_solver.cu:134-144, 152-162`
+
+`summary.residual_history` 追加和 `summary.converged` 设置的逻辑连续出现两次。第二个块（lines 152-162）将同一批残差值再次追加到 `residual_history`，并可能覆盖第一个块设置的 `converged` 标志。
+
+影响：每次 GPU solve 输出的 `residual_history` 长度是实际迭代次数的两倍；oracle 对比测试因使用 `std::min(gpu.size(), cpu.size())` 截断而未暴露此问题。
+
+修复：删除第二个重复块（lines 152-162）。
+
+**PH4-B-2: 故障快照 `cudaMemcpy` 未做错误检查** [HIGH]
+`src/aero_cfd/gpu_solver.cu:184-185`
+
+```cpp
+cudaMemcpy(&host_failure_cell, d_failure_cell, sizeof(int), cudaMemcpyDeviceToHost);
+cudaMemcpy(host_failure_state, d_failure_state, 5 * sizeof(Real), cudaMemcpyDeviceToHost);
+```
+
+两处 `cudaMemcpy` 没有 `cuda_check` 包装。如果 device 指针无效或拷贝失败，错误被静默吞没。
+
+**PH4-B-3: `gpu_timestep.cu` 使用 `__float_as_int` + `unsigned int*` CAS — 与 `Real=double` 不兼容** [HIGH]
+`src/aero_cfd/gpu_timestep.cu:38-45`
+
+CAS-based 原子 min 归约使用 `__float_as_int(dt)` 和 `reinterpret_cast<unsigned int*>(d_min_dt)`，假设 `Real` 为 4 字节。`AEROSIM_REAL_DOUBLE=1` 时，`Real=double`（8 字节），此代码读写 `d_min_dt` 的低 4 字节，产生错误结果。
+
+应改为使用 `real_atomic_min`（已在 `real.hpp` 中提供，内部通过 `reinterpret_cast` 到 `unsigned long long*` 处理 double）。
+
+同时 `FLT_MAX` 作为初始 sentinel 也应改为 `std::numeric_limits<Real>::max()`。
+
+**PH4-B-4: 多个 kernel 使用 `FLT_MAX`/`-FLT_MAX` 初始化 Real 累加器** [MEDIUM]
+`src/aero_cfd/gpu_diagnostics.cu:17-22, 38-40, 62-64`
+`src/aero_cfd/reconstruction_gpu.cu:267-271`
+
+`FLT_MAX` (~3.4e38) 在 `Real=double` 下远小于 `DBL_MAX` (~1.8e308)。双精度物理量可以合法超过 `FLT_MAX`，归约产生错误（非极值）。
+
+应替换为 `std::numeric_limits<Real>::max()`/`std::numeric_limits<Real>::lowest()`。
+
+**PH4-B-5: Pi 常量使用 `f` 后缀 — `Real=double` 精度损失** [MEDIUM]
+`src/aero_cfd/gpu_solver.cu:223`, `src/aero_cfd/cfd_solver.cpp:66-67`
+
+```cpp
+constexpr Real kPi = 3.14159265358979323846f;  // f 后缀截断为 float (~7 位有效数字)
+Real alpha = condition.alpha_deg * 3.14159265358979323846f / 180.0f;
+```
+
+`Real=double` 时只有 ~7 位有效数字（~15 位本应可用）。应去掉 `f` 后缀或使用 `L` 后缀。
+
+### Category B: 接口设计缺陷（当前未激活，但在 `MPI_ENABLED` 下可达）
+
+**PH4-B-6: `allocate_halo()` 调用 `release()` 破坏已上载的网格数据** [HIGH]
+`src/aero_cfd/device_mesh.cu:438`
+
+```cpp
+bool DeviceMesh::allocate_halo(int n_halo_cells) {
+    ...
+    release();  // 释放所有 device 缓冲（d_q_, d_nx_, ...），cell_count_=0
+    ...
+}
+```
+
+在已调用 `upload_mesh()` 的 `DeviceMesh` 上调用 `allocate_halo(N)`（N>0）会无条件销毁所有网格数据。`release()` 释放 20+ 个 device 指针并将 `cell_count_` 清零，后续 solver 操作将解引用空指针。
+
+当前受 `#ifdef MPI_ENABLED` 保护不会编译，但接口契约违反直觉。
+
+修复：`allocate_halo` 只分配 halo 缓冲，不应当调用全局 `release()`。或要求调用者在分配 halo 之前保证空 mesh。
+
+**PH4-B-7: `allocate_halo(<=0)` 不释放旧缓冲 + `has_halo()` 语义不一致** [MEDIUM]
+`src/aero_cfd/device_mesh.cu:433-437`, `include/aero_cfd/device_mesh.hpp:102`
+
+```cpp
+// allocate_halo(<=0) 仅设置 n_halo_cells_=0，不释放旧指针
+if (n_halo_cells <= 0) {
+    n_halo_cells_ = 0;
+    return true;  // 旧 d_halo_indices_ 等仍非空 — 内存泄漏
+}
+// has_halo() 仅检查指针，不检查 n_halo_cells_
+bool has_halo() const { return d_halo_indices_ != nullptr; }
+```
+
+调用序列 `allocate_halo(100)` → `allocate_halo(0)` 导致 3 个 GPU 内存泄漏，且 `has_halo()` 错误返回 `true`。
+
+修复：`allocate_halo(<=0)` 应释放旧缓冲；`has_halo()` 应同时检查 `n_halo_cells_ > 0`。
+
+### Category C: 构建/维护问题
+
+**PH4-B-8: 非 CUDA 测试目标不必要地编译为 `LANGUAGE CUDA`** [MEDIUM]
+`CMakeLists.txt:313-365`
+
+`TestCfdMesh/Euler/Diagnostics/Reconstruction/Viscous` 6 个测试目标将 `.cpp` 文件编译为 `LANGUAGE CUDA` 并启用 `CUDA_SEPARABLE_COMPILATION` + `CUDA_RESOLVE_DEVICE_SYMBOLS`。这些文件不含任何 `__global__`/`__device__` 函数，仅链接 `missile_lib`，应可编译为纯 C++。
+
+当前配置增加 NVCC 编译开销和设备链接时间。修复方式：将 `real.hpp` 中 `AEROSIM_REAL_HOST_DEVICE` 宏在非 `__CUDACC__` 路径下 `static inline` 的定义迁移到头文件，使这些 `.cpp` 可以安全地作为纯 C++ 编译。
+
+**PH4-B-9: `cudaFree` 调用未检查错误** [MEDIUM]
+`src/aero_cfd/gpu_solver.cu:41-43, 322-325, 455, 487, 493`
+`src/aero_cfd/reconstruction_gpu.cu:507, 513, 517, 528`
+`src/aero_cfd/device_mesh.cu:126`
+
+多处 `cudaFree` 没有错误检查。`device_mesh.cu` 的 `cuda_free_and_null` 使用 `assert(ok)`（Release 构建消失）。
+
+建议：统一使用带 `cuda_check` 的包装或 `cuda_free_and_null` 并移除 `assert`。
+
+**PH4-B-10: `CUDA_KERNEL_CHECK` 宏定义但从未使用** [INFO]
+`include/aero_cfd/cuda_utils.hpp:9`
+
+`AGENTS.md` 要求 "kernel launches via `CUDA_KERNEL_CHECK()`"，但所有 kernel launch 使用内联 `cuda_check(cudaGetLastError(), ...)` 模式。宏应被使用或文档应更新。
+
+### Category D: 潜在数值安全性问题
+
+**PH4-B-11: 重构 kernel 中 `d_volume` 无 NaN 检查** [LOW]
+`src/aero_cfd/reconstruction_gpu.cu:96, 126, 196, 226`
+
+```cpp
+if (d_volume[right] <= 0.0f) { ... }
+```
+NaN 体积会悄无声息地通过（`NaN <= 0.0f` 为 false）。虽然网格度量预期有效，但缺少对损坏显存的防护。
+
+**PH4-B-12: `check_status_kernel` 未检查 `d_l2_sum` 的有限性** [LOW]
+`src/aero_cfd/gpu_solver.cu:33`
+
+```cpp
+Real l2 = real_sqrt(*d_l2_sum / static_cast<Real>(nvar_ncells));
+```
+NaN `d_l2_sum`（来自损坏的 `real_atomic_add`）会传播到残差历史而无法检测。
+
+**PH4-B-13: init_minmax/update_minmax/bj_limiter kernel 未着色** [LOW]
+`src/aero_cfd/reconstruction_gpu.cu:282-325, 341-423`
+
+limiter 计算管道的三个 kernel 仍使用原子操作遍历全部 face，未受益于面着色确定性归约。不影响正确性，但 limiter 计算不可字节级确定（与 COLOR-4 级别不同）。
+
+建议：后续扩展着色到 limiter 管道。
+
+### Category E: 可移植性问题
+
+**PH4-B-14: `real_isfinite` double 路径使用未限定的 `isfinite()`** [LOW]
+`include/aero_cfd/real.hpp:23`
+
+```cpp
+AEROSIM_REAL_HOST_DEVICE bool real_isfinite(Real x) { return isfinite(x); }
+```
+MSVC 主机路径下 `isfinite` 不一定在全局命名空间可用。float 路径正确使用 `std::isfinite()`。double 路径应一致。
+
+**PH4-B-15: 非 `__CUDACC__` 路径下 atomic 包装是死代码** [INFO]
+`include/aero_cfd/real.hpp:57-83`
+
+double 路径的 `#else`（非 `__CUDACC__`）提供 host 端 `real_atomic_add/min/max` 实现，使用了 CUDA 函数（`atomicAdd`/`atomicCAS`）。由于没有 host 代码调用这些函数，它们永远不会被实例化。float 路径正确使用了 `#ifdef __CUDACC__` 守卫。double 路径应同样处理。
+
+### 汇总
+
+| 严重性 | 数量 | 项目 |
+|--------|------|------|
+| HIGH | 3 | PH4-B-1 (活跃重复残差), PH4-B-2 (未检查 cudaMemcpy), PH4-B-3 (Real=double 不兼容) |
+| HIGH (dormant) | 1 | PH4-B-6 (allocate_halo 破坏网格数据, MPI only) |
+| MEDIUM | 4 | PH4-B-4 (FLT_MAX), PH4-B-5 (Pi 精度), PH4-B-7 (has_halo 语义), PH4-B-9 (cudaFree 未检查) |
+| MEDIUM (build) | 1 | PH4-B-8 (测试目标不必要 CUDA 编译) |
+| LOW | 3 | PH4-B-11 (volume NaN), PH4-B-12 (l2 NaN), PH4-B-13 (limiter 未着色), PH4-B-14 (isfinite 限定) |
+| INFO | 2 | PH4-B-10 (CUDA_KERNEL_CHECK 未用), PH4-B-15 (atomic 死代码) |
+
+Total: 4 HIGH / 5 MEDIUM / 4 LOW / 2 INFO = 15 findings.
