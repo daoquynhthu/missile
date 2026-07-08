@@ -344,6 +344,7 @@ bool DeviceMesh::upload_state(const std::vector<ConservativeState>& q, std::stri
         flat[i * NVAR + 2] = q[i].rho_v;
         flat[i * NVAR + 3] = q[i].rho_w;
         flat[i * NVAR + 4] = q[i].rho_E;
+        flat[i * NVAR + 5] = q[i].rho_nu_tilde;
     }
     return cuda_check(cudaMemcpy(d_q_, flat.data(), nc * NVAR * sizeof(Real), cudaMemcpyHostToDevice), "cudaMemcpy upload_state", error);
 }

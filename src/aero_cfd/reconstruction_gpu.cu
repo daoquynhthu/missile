@@ -433,6 +433,7 @@ bool compute_gradients_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int
 
     std::size_t grad_bytes = DeviceMesh::NGRAD * mesh.cell_count() * sizeof(Real);
     if (!cuda_check(cudaMemset(mesh.gradients_device(), 0, grad_bytes), "cudaMemset gradients", error)) return false;
+    if (d_failed && !cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset d_failed", error)) return false;
 
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
@@ -490,6 +491,7 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
         if (error) *error = "gradient/limiter buffers not allocated";
         return false;
     }
+    if (d_failed && !cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset d_failed", error)) return false;
 
     int nc = static_cast<int>(mesh.cell_count());
     int nf = static_cast<int>(mesh.face_count());
@@ -512,8 +514,8 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
         gamma, d_minmax, d_failed);
     if (!cuda_check(cudaGetLastError(), "update_minmax_kernel", error)) { cuda_free_safe(d_minmax); return false; }
 
-    int limiter_grid = (nc * 5 + block - 1) / block;
-    init_float_one_kernel<<<limiter_grid, block>>>(mesh.limiters_device(), nc * 5);
+    int limiter_grid = (nc * 6 + block - 1) / block;
+    init_float_one_kernel<<<limiter_grid, block>>>(mesh.limiters_device(), nc * 6);
     if (!cuda_check(cudaGetLastError(), "init_float_one limiters", error)) { cuda_free_safe(d_minmax); return false; }
 
     bj_limiter_kernel<<<face_grid, block>>>(

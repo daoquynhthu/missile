@@ -533,7 +533,8 @@ Files:
 
 Tasks:
 
-- [x] Extend state from 5 to 6 variables (`rho*nu_tilde`)
+- [x] Phase 7.0: NVAR=6 structural — cfd_state, cfd_config, device_mesh, reconstruction, CPU HLLC/residual
+- [x] Phase 7.1: GPU kernel turbulence propagation — d_conservative_to_primitive, d_physical_flux, d_slip_wall_flux, d_hllc_flux, d_reconstruct_primitive, both residual kernels, upload_state
 - [ ] SA production term: `cb1 * Omega_tilde * nu_tilde`
 - [ ] SA destruction term: `cw1 * fw * (nu_tilde/d)^2`
 - [ ] SA diffusion: standard viscous operator

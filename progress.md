@@ -262,4 +262,9 @@
   - reconstruction.hpp: PrimitiveGradient.dnu_tilde_{dx,dy,dz}, PrimitiveLimiter.nu_tilde
   - cfd_solver.cpp: CPU residual normalization 5.0f→CFD_NVAR, HLLC 6th-component transport
   - reconstruction.cpp: all gradient/limiter/reconstruct functions handle 6 primitives
-- Build + TestCfdGpu 28/29 PASS (BW-1 pre-existing). Phase 7.1–7.5 deferred.
+- Phase 7.1 GPU kernel turbulence propagation:
+  - cfd_residual_gpu.cu: d_conservative_to_primitive, d_physical_flux, d_slip_wall_flux, d_hllc_flux, d_reconstruct_primitive, euler_residual_kernel_atomic, euler_residual_kernel_colored — all updated for 6th variable transport
+- Fixed d_failed reset in compute_gradients_gpu/compute_limiters_gpu (cudaMalloc non-zero garbage)
+- Fixed upload_state missing rho_nu_tilde (index 5)
+- Fixed limiter init size nc*5→nc*6 (PrimitiveLimiter now 6 fields)
+- Build + TestCfdGpu 28/29 PASS (BW-1 pre-existing). Phase 7.2–7.5 deferred.

@@ -7,7 +7,8 @@ namespace Cfd {
 
 namespace {
 
-__device__ bool d_conservative_to_primitive(const Real* q, int cell, int nvar, Real gamma, Real& rho, Real& u, Real& v, Real& w, Real& p) {
+__device__ bool d_conservative_to_primitive(const Real* q, int cell, int nvar, Real gamma,
+    Real& rho, Real& u, Real& v, Real& w, Real& p, Real& nu_tilde) {
     rho = q[cell * nvar + 0];
     if (rho <= 0.0f || !real_isfinite(rho)) return false;
     Real inv_rho = 1.0f / rho;
@@ -16,6 +17,7 @@ __device__ bool d_conservative_to_primitive(const Real* q, int cell, int nvar, R
     w = q[cell * nvar + 3] * inv_rho;
     Real kinetic = 0.5f * (u*u + v*v + w*w);
     p = (gamma - 1.0f) * (q[cell * nvar + 4] - rho * kinetic);
+    nu_tilde = q[cell * nvar + 5] * inv_rho;
     return real_isfinite(u) && real_isfinite(v) && real_isfinite(w) && real_isfinite(p) && p > 0.0f;
 }
 
@@ -23,8 +25,8 @@ __device__ Real d_speed_of_sound(Real rho, Real p, Real gamma) {
     return real_sqrt(gamma * p / rho);
 }
 
-__device__ void d_physical_flux(Real rho, Real u, Real v, Real w, Real p, Real gamma,
-    Real nx, Real ny, Real nz, Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy) {
+__device__ void d_physical_flux(Real rho, Real u, Real v, Real w, Real p, Real nu_tilde, Real gamma,
+    Real nx, Real ny, Real nz, Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy, Real& turbulence) {
     Real vn = u*nx + v*ny + w*nz;
     Real kinetic = 0.5f * (u*u + v*v + w*w);
     Real rho_E = p / (gamma - 1.0f) + rho * kinetic;
@@ -33,15 +35,17 @@ __device__ void d_physical_flux(Real rho, Real u, Real v, Real w, Real p, Real g
     mom_y = rho * v * vn + p * ny;
     mom_z = rho * w * vn + p * nz;
     energy = (rho_E + p) * vn;
+    turbulence = rho * nu_tilde * vn;
 }
 
 __device__ void d_slip_wall_flux(Real p, Real nx, Real ny, Real nz,
-    Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy) {
+    Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy, Real& turbulence) {
     mass = 0.0f;
     mom_x = p * nx;
     mom_y = p * ny;
     mom_z = p * nz;
     energy = 0.0f;
+    turbulence = 0.0f;
 }
 
 __device__ void d_farfield_ghost_state(Real left_rho, Real left_u, Real left_v, Real left_w, Real left_p,
@@ -59,10 +63,10 @@ __device__ void d_farfield_ghost_state(Real left_rho, Real left_u, Real left_v, 
 }
 
 __device__ void d_hllc_flux(
-    Real rhoL, Real uL, Real vL, Real wL, Real pL,
-    Real rhoR, Real uR, Real vR, Real wR, Real pR,
+    Real rhoL, Real uL, Real vL, Real wL, Real pL, Real nu_tildeL,
+    Real rhoR, Real uR, Real vR, Real wR, Real pR, Real nu_tildeR,
     Real gamma, Real nx, Real ny, Real nz,
-    Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy) {
+    Real& mass, Real& mom_x, Real& mom_y, Real& mom_z, Real& energy, Real& turbulence) {
     Real vn_l = uL*nx + vL*ny + wL*nz;
     Real vn_r = uR*nx + vR*ny + wR*nz;
     Real a_l = d_speed_of_sound(rhoL, pL, gamma);
@@ -70,13 +74,13 @@ __device__ void d_hllc_flux(
     Real s_l = real_fmin(vn_l - a_l, vn_r - a_r);
     Real s_r = real_fmax(vn_l + a_l, vn_r + a_r);
 
-    Real fL_mass, fL_mx, fL_my, fL_mz, fL_en;
-    Real fR_mass, fR_mx, fR_my, fR_mz, fR_en;
-    d_physical_flux(rhoL, uL, vL, wL, pL, gamma, nx, ny, nz, fL_mass, fL_mx, fL_my, fL_mz, fL_en);
-    d_physical_flux(rhoR, uR, vR, wR, pR, gamma, nx, ny, nz, fR_mass, fR_mx, fR_my, fR_mz, fR_en);
+    Real fL_mass, fL_mx, fL_my, fL_mz, fL_en, fL_turb;
+    Real fR_mass, fR_mx, fR_my, fR_mz, fR_en, fR_turb;
+    d_physical_flux(rhoL, uL, vL, wL, pL, nu_tildeL, gamma, nx, ny, nz, fL_mass, fL_mx, fL_my, fL_mz, fL_en, fL_turb);
+    d_physical_flux(rhoR, uR, vR, wR, pR, nu_tildeR, gamma, nx, ny, nz, fR_mass, fR_mx, fR_my, fR_mz, fR_en, fR_turb);
 
-    if (s_l >= 0.0f) { mass = fL_mass; mom_x = fL_mx; mom_y = fL_my; mom_z = fL_mz; energy = fL_en; return; }
-    if (s_r <= 0.0f) { mass = fR_mass; mom_x = fR_mx; mom_y = fR_my; mom_z = fR_mz; energy = fR_en; return; }
+    if (s_l >= 0.0f) { mass = fL_mass; mom_x = fL_mx; mom_y = fL_my; mom_z = fL_mz; energy = fL_en; turbulence = fL_turb; return; }
+    if (s_r <= 0.0f) { mass = fR_mass; mom_x = fR_mx; mom_y = fR_my; mom_z = fR_mz; energy = fR_en; turbulence = fR_turb; return; }
 
     Real denom = rhoL * (s_l - vn_l) - rhoR * (s_r - vn_r);
     if (real_fabs(denom) < 1e-30f) denom = real_copysign(1e-30f, denom);
@@ -94,18 +98,21 @@ __device__ void d_hllc_flux(
         Real qL_rhov = rhoL * vL;
         Real qL_rhow = rhoL * wL;
         Real qL_rhoE = pL / (gamma - 1.0f) + rhoL * kineticL;
+        Real qL_nu = rhoL * nu_tildeL;
 
         Real qs_rho = rho_star;
         Real qs_rhou = rho_star * (uL + (s_m - vn_l) * nx);
         Real qs_rhov = rho_star * (vL + (s_m - vn_l) * ny);
         Real qs_rhow = rho_star * (wL + (s_m - vn_l) * nz);
         Real qs_rhoE = rho_star * e_star;
+        Real qs_nu = qL_nu * (s_l - vn_l) / (s_l - s_m);
 
         mass = fL_mass + s_l * (qs_rho - qL_rho);
         mom_x = fL_mx + s_l * (qs_rhou - qL_rhou);
         mom_y = fL_my + s_l * (qs_rhov - qL_rhov);
         mom_z = fL_mz + s_l * (qs_rhow - qL_rhow);
         energy = fL_en + s_l * (qs_rhoE - qL_rhoE);
+        turbulence = fL_turb + s_l * (qs_nu - qL_nu);
     } else {
         Real rho_star = rhoR * (s_r - vn_r) / (s_r - s_m);
         Real kineticR = 0.5f * (uR*uR + vR*vR + wR*wR);
@@ -118,31 +125,35 @@ __device__ void d_hllc_flux(
         Real qR_rhov = rhoR * vR;
         Real qR_rhow = rhoR * wR;
         Real qR_rhoE = pR / (gamma - 1.0f) + rhoR * kineticR;
+        Real qR_nu = rhoR * nu_tildeR;
 
         Real qs_rho = rho_star;
         Real qs_rhou = rho_star * (uR + (s_m - vn_r) * nx);
         Real qs_rhov = rho_star * (vR + (s_m - vn_r) * ny);
         Real qs_rhow = rho_star * (wR + (s_m - vn_r) * nz);
         Real qs_rhoE = rho_star * e_star;
+        Real qs_nu = qR_nu * (s_r - vn_r) / (s_r - s_m);
 
         mass = fR_mass + s_r * (qs_rho - qR_rho);
         mom_x = fR_mx + s_r * (qs_rhou - qR_rhou);
         mom_y = fR_my + s_r * (qs_rhov - qR_rhov);
         mom_z = fR_mz + s_r * (qs_rhow - qR_rhow);
         energy = fR_en + s_r * (qs_rhoE - qR_rhoE);
+        turbulence = fR_turb + s_r * (qs_nu - qR_nu);
     }
 }
 
 __device__ void d_reconstruct_primitive(
     const Real* gradients, int cell,
     Real dx, Real dy, Real dz,
-    Real& rho, Real& u, Real& v, Real& w, Real& p) {
-    const Real* g = gradients + cell * 15;
+    Real& rho, Real& u, Real& v, Real& w, Real& p, Real& nu_tilde) {
+    const Real* g = gradients + cell * 18;
     rho = rho + g[0]*dx + g[1]*dy + g[2]*dz;
     u = u + g[3]*dx + g[4]*dy + g[5]*dz;
     v = v + g[6]*dx + g[7]*dy + g[8]*dz;
     w = w + g[9]*dx + g[10]*dy + g[11]*dz;
     p = p + g[12]*dx + g[13]*dy + g[14]*dz;
+    nu_tilde = nu_tilde + g[15]*dx + g[16]*dy + g[17]*dz;
 }
 
 __global__ void euler_residual_kernel_atomic(
@@ -171,8 +182,8 @@ __global__ void euler_residual_kernel_atomic(
     Real nz = d_nz[idx];
     Real area = d_area[idx];
 
-    Real rhoL, uL, vL, wL, pL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+    Real rhoL, uL, vL, wL, pL, nu_tildeL;
+    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL, nu_tildeL)) {
         atomicExch(d_failed, 1);
         return;
     }
@@ -181,20 +192,20 @@ __global__ void euler_residual_kernel_atomic(
         Real dx = d_face_cx[idx] - d_cx[left];
         Real dy = d_face_cy[idx] - d_cy[left];
         Real dz = d_face_cz[idx] - d_cz[left];
-        d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL);
+        d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL, nu_tildeL);
         if (!real_isfinite(rhoL) || rhoL <= 0.0f || !real_isfinite(pL) || pL <= 0.0f) {
             atomicExch(d_failed, 1);
             return;
         }
     }
 
-    Real mass, mom_x, mom_y, mom_z, energy;
+    Real mass, mom_x, mom_y, mom_z, energy, turbulence;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
-        Real rhoR, uR, vR, wR, pR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+        Real rhoR, uR, vR, wR, pR, nu_tildeR;
+        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR, nu_tildeR)) {
             atomicExch(d_failed, 1);
             return;
         }
@@ -202,22 +213,23 @@ __global__ void euler_residual_kernel_atomic(
             Real dx = d_face_cx[idx] - d_cx[right];
             Real dy = d_face_cy[idx] - d_cy[right];
             Real dz = d_face_cz[idx] - d_cz[right];
-            d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR);
+            d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR, nu_tildeR);
             if (!real_isfinite(rhoR) || rhoR <= 0.0f || !real_isfinite(pR) || pR <= 0.0f) {
                 atomicExch(d_failed, 1);
                 return;
             }
         }
-        d_hllc_flux(rhoL, uL, vL, wL, pL, rhoR, uR, vR, wR, pR, gamma, nx, ny, nz,
-            mass, mom_x, mom_y, mom_z, energy);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, rhoR, uR, vR, wR, pR, nu_tildeR, gamma, nx, ny, nz,
+            mass, mom_x, mom_y, mom_z, energy, turbulence);
     } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
-        d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy);
+        d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy, turbulence);
     } else {
         Real ghrho, ghp, ghu, ghv, ghw;
+        // Farfield nu_tilde: use freestream value (0 by default, passed via inf state in the future)
         d_farfield_ghost_state(rhoL, uL, vL, wL, pL, inf_rho, inf_p, inf_u, inf_v, inf_w, inf_a,
             nx, ny, nz, ghrho, ghp, ghu, ghv, ghw);
-        d_hllc_flux(rhoL, uL, vL, wL, pL, ghrho, ghu, ghv, ghw, ghp, gamma, nx, ny, nz,
-            mass, mom_x, mom_y, mom_z, energy);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, ghrho, ghu, ghv, ghw, ghp, 0.0f, gamma, nx, ny, nz,
+            mass, mom_x, mom_y, mom_z, energy, turbulence);
     }
 
     Real fmass = mass * area;
@@ -225,12 +237,14 @@ __global__ void euler_residual_kernel_atomic(
     Real fmy = mom_y * area;
     Real fmz = mom_z * area;
     Real fen = energy * area;
+    Real fturb = turbulence * area;
 
     real_atomic_add(&d_residual[left * nvar + 0], -fmass);
     real_atomic_add(&d_residual[left * nvar + 1], -fmx);
     real_atomic_add(&d_residual[left * nvar + 2], -fmy);
     real_atomic_add(&d_residual[left * nvar + 3], -fmz);
     real_atomic_add(&d_residual[left * nvar + 4], -fen);
+    real_atomic_add(&d_residual[left * nvar + 5], -fturb);
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
@@ -240,6 +254,7 @@ __global__ void euler_residual_kernel_atomic(
         real_atomic_add(&d_residual[right * nvar + 2], fmy);
         real_atomic_add(&d_residual[right * nvar + 3], fmz);
         real_atomic_add(&d_residual[right * nvar + 4], fen);
+        real_atomic_add(&d_residual[right * nvar + 5], fturb);
         }
     }
 }
@@ -270,8 +285,8 @@ __global__ void euler_residual_kernel_colored(
     Real nz = d_nz[idx];
     Real area = d_area[idx];
 
-    Real rhoL, uL, vL, wL, pL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+    Real rhoL, uL, vL, wL, pL, nu_tildeL;
+    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL, nu_tildeL)) {
         atomicExch(d_failed, 1);
         return;
     }
@@ -280,20 +295,20 @@ __global__ void euler_residual_kernel_colored(
         Real dx = d_face_cx[idx] - d_cx[left];
         Real dy = d_face_cy[idx] - d_cy[left];
         Real dz = d_face_cz[idx] - d_cz[left];
-        d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL);
+        d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL, nu_tildeL);
         if (!real_isfinite(rhoL) || rhoL <= 0.0f || !real_isfinite(pL) || pL <= 0.0f) {
             atomicExch(d_failed, 1);
             return;
         }
     }
 
-    Real mass, mom_x, mom_y, mom_z, energy;
+    Real mass, mom_x, mom_y, mom_z, energy, turbulence;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
-        Real rhoR, uR, vR, wR, pR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+        Real rhoR, uR, vR, wR, pR, nu_tildeR;
+        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR, nu_tildeR)) {
             atomicExch(d_failed, 1);
             return;
         }
@@ -301,22 +316,22 @@ __global__ void euler_residual_kernel_colored(
             Real dx = d_face_cx[idx] - d_cx[right];
             Real dy = d_face_cy[idx] - d_cy[right];
             Real dz = d_face_cz[idx] - d_cz[right];
-            d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR);
+            d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR, nu_tildeR);
             if (!real_isfinite(rhoR) || rhoR <= 0.0f || !real_isfinite(pR) || pR <= 0.0f) {
                 atomicExch(d_failed, 1);
                 return;
             }
         }
-        d_hllc_flux(rhoL, uL, vL, wL, pL, rhoR, uR, vR, wR, pR, gamma, nx, ny, nz,
-            mass, mom_x, mom_y, mom_z, energy);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, rhoR, uR, vR, wR, pR, nu_tildeR, gamma, nx, ny, nz,
+            mass, mom_x, mom_y, mom_z, energy, turbulence);
     } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
-        d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy);
+        d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy, turbulence);
     } else {
         Real ghrho, ghp, ghu, ghv, ghw;
         d_farfield_ghost_state(rhoL, uL, vL, wL, pL, inf_rho, inf_p, inf_u, inf_v, inf_w, inf_a,
             nx, ny, nz, ghrho, ghp, ghu, ghv, ghw);
-        d_hllc_flux(rhoL, uL, vL, wL, pL, ghrho, ghu, ghv, ghw, ghp, gamma, nx, ny, nz,
-            mass, mom_x, mom_y, mom_z, energy);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, ghrho, ghu, ghv, ghw, ghp, 0.0f, gamma, nx, ny, nz,
+            mass, mom_x, mom_y, mom_z, energy, turbulence);
     }
 
     Real fmass = mass * area;
@@ -324,12 +339,14 @@ __global__ void euler_residual_kernel_colored(
     Real fmy = mom_y * area;
     Real fmz = mom_z * area;
     Real fen = energy * area;
+    Real fturb = turbulence * area;
 
     d_residual[left * nvar + 0] += -fmass;
     d_residual[left * nvar + 1] += -fmx;
     d_residual[left * nvar + 2] += -fmy;
     d_residual[left * nvar + 3] += -fmz;
     d_residual[left * nvar + 4] += -fen;
+    d_residual[left * nvar + 5] += -fturb;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
@@ -339,6 +356,7 @@ __global__ void euler_residual_kernel_colored(
         d_residual[right * nvar + 2] += fmy;
         d_residual[right * nvar + 3] += fmz;
         d_residual[right * nvar + 4] += fen;
+        d_residual[right * nvar + 5] += fturb;
         }
     }
 }
