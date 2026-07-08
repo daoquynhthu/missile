@@ -76,7 +76,7 @@ __device__ float atomic_max_float(float* addr, float val) {
     return __int_as_float(old);
 }
 
-__global__ void gg_gradient_kernel(
+__global__ void gg_gradient_kernel_atomic(
     const float* d_q,
     int nvar, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
@@ -173,6 +173,106 @@ __global__ void gg_gradient_kernel(
     atomicAdd(&gL[12], dp * nx * left_scale);
     atomicAdd(&gL[13], dp * ny * left_scale);
     atomicAdd(&gL[14], dp * nz * left_scale);
+}
+
+__global__ void gg_gradient_kernel_colored(
+    const float* d_q,
+    int nvar, int n_cells,
+    const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
+    const float* d_nx, const float* d_ny, const float* d_nz, const float* d_area,
+    const float* d_volume,
+    float gamma,
+    int face_start, int face_end,
+    float* d_gradients,
+    int* d_failed) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
+    if (idx >= face_end) return;
+
+    int left = d_left_cell[idx];
+    if (left < 0 || left >= n_cells) return;
+    int bnd = d_boundary[idx];
+
+    float rhoL, uL, vL, wL, pL;
+    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
+        return;
+    }
+
+    float nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+    float area = d_area[idx];
+
+    float rhoF, uF, vF, wF, pF;
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        if (right < 0 || right >= n_cells) return;
+        float rhoR, uR, vR, wR, pR;
+        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+            if (d_failed) atomicCAS(d_failed, 0, 1);
+            return;
+        }
+        rhoF = 0.5f * (rhoL + rhoR);
+        uF = 0.5f * (uL + uR);
+        vF = 0.5f * (vL + vR);
+        wF = 0.5f * (wL + wR);
+        pF = 0.5f * (pL + pR);
+
+        if (d_volume[right] <= 0.0f) {
+            if (d_failed) atomicCAS(d_failed, 0, 1);
+            return;
+        }
+        float right_scale = -area / d_volume[right];
+        float* gR = d_gradients + right * DeviceMesh::NGRAD;
+        float drho_r = rhoF - rhoR;
+        float du_r = uF - uR;
+        float dv_r = vF - vR;
+        float dw_r = wF - wR;
+        float dp_r = pF - pR;
+        gR[0] += drho_r * nx * right_scale;
+        gR[1] += drho_r * ny * right_scale;
+        gR[2] += drho_r * nz * right_scale;
+        gR[3] += du_r * nx * right_scale;
+        gR[4] += du_r * ny * right_scale;
+        gR[5] += du_r * nz * right_scale;
+        gR[6] += dv_r * nx * right_scale;
+        gR[7] += dv_r * ny * right_scale;
+        gR[8] += dv_r * nz * right_scale;
+        gR[9] += dw_r * nx * right_scale;
+        gR[10] += dw_r * ny * right_scale;
+        gR[11] += dw_r * nz * right_scale;
+        gR[12] += dp_r * nx * right_scale;
+        gR[13] += dp_r * ny * right_scale;
+        gR[14] += dp_r * nz * right_scale;
+    } else {
+        rhoF = rhoL; uF = uL; vF = vL; wF = wL; pF = pL;
+    }
+
+    if (d_volume[left] <= 0.0f) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
+        return;
+    }
+    float left_scale = area / d_volume[left];
+    float drho = rhoF - rhoL;
+    float du = uF - uL;
+    float dv = vF - vL;
+    float dw = wF - wL;
+    float dp = pF - pL;
+
+    float* gL = d_gradients + left * DeviceMesh::NGRAD;
+    gL[0] += drho * nx * left_scale;
+    gL[1] += drho * ny * left_scale;
+    gL[2] += drho * nz * left_scale;
+    gL[3] += du * nx * left_scale;
+    gL[4] += du * ny * left_scale;
+    gL[5] += du * nz * left_scale;
+    gL[6] += dv * nx * left_scale;
+    gL[7] += dv * ny * left_scale;
+    gL[8] += dv * nz * left_scale;
+    gL[9] += dw * nx * left_scale;
+    gL[10] += dw * ny * left_scale;
+    gL[11] += dw * nz * left_scale;
+    gL[12] += dp * nx * left_scale;
+    gL[13] += dp * ny * left_scale;
+    gL[14] += dp * nz * left_scale;
 }
 
 constexpr int kMINMAX_STRIDE = 10;
@@ -359,19 +459,40 @@ bool compute_gradients_gpu(DeviceMesh& mesh, float gamma, std::string* error, in
 
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
-    int grid = (nf + block - 1) / block;
+    int nc = static_cast<int>(mesh.cell_count());
+    int n_colors = mesh.color_count();
     DeviceFaceData fd = mesh.face_data();
     DeviceCellData cd = mesh.cell_data();
 
-    gg_gradient_kernel<<<grid, block>>>(
-        mesh.state_device(),
-        DeviceMesh::NVAR, static_cast<int>(mesh.cell_count()), nf,
-        fd.left_cell, fd.right_cell, fd.boundary,
-        fd.nx, fd.ny, fd.nz, fd.area,
-        cd.volume, gamma,
-        mesh.gradients_device(),
-        d_failed);
-    if (!cuda_check(cudaGetLastError(), "gg_gradient_kernel", error)) return false;
+    if (n_colors > 0) {
+        for (int c = 0; c < n_colors; ++c) {
+            int start = mesh.host_color_offsets()[c];
+            int end   = mesh.host_color_offsets()[c + 1];
+            int nf_c  = end - start;
+            int grid_c = (nf_c + block - 1) / block;
+            gg_gradient_kernel_colored<<<grid_c, block>>>(
+                mesh.state_device(),
+                DeviceMesh::NVAR, nc,
+                fd.left_cell, fd.right_cell, fd.boundary,
+                fd.nx, fd.ny, fd.nz, fd.area,
+                cd.volume, gamma,
+                start, end,
+                mesh.gradients_device(),
+                d_failed);
+            if (!cuda_check(cudaGetLastError(), "gg_gradient_kernel_colored", error)) return false;
+        }
+    } else {
+        int grid = (nf + block - 1) / block;
+        gg_gradient_kernel_atomic<<<grid, block>>>(
+            mesh.state_device(),
+            DeviceMesh::NVAR, nc, nf,
+            fd.left_cell, fd.right_cell, fd.boundary,
+            fd.nx, fd.ny, fd.nz, fd.area,
+            cd.volume, gamma,
+            mesh.gradients_device(),
+            d_failed);
+        if (!cuda_check(cudaGetLastError(), "gg_gradient_kernel_atomic", error)) return false;
+    }
     if (!cuda_check(cudaDeviceSynchronize(), "gg_gradient_kernel synchronize", error)) return false;
 
     if (d_failed) {

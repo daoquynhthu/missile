@@ -93,12 +93,14 @@ However, cells with `vmag = a = 0` would have `p <= 0` (since a = sqrt(gamma * p
 
 Fix applied (2026-07-07): Denominator now guards against subnormal: `float denom = vmag + a; dt = cfl * d_h_min[idx] / (denom > 1e-30f ? denom : 1e-30f);`
 
-**PH2-E-2: GPU solver plateau at L2 ~3e-4 while CPU reaches 1e-8** [MEDIUM]
+**PH2-E-2: GPU solver plateau at L2 ~3e-4 while CPU reaches 1e-8** [MEDIUM] — FIXED
 `src/aero_cfd/gpu_solver.cu:88`
 
 The test CFD-GPU-8 checks `ratio ≤ 1e3`, which would pass even with GPU at 3e-4 and CPU at 3e-7. This plateau is likely caused by atomic non-associativity in `euler_residual_kernel` — the order of `atomicAdd` operations on each cell's residual (from adjacent faces) is non-deterministic across blocks, causing accumulated round-off error. The CPU loop processes faces in a fixed order and does not use atomics.
 
 This is a fundamental limitation of the per-cell `atomicAdd` pattern. Fixing this requires a deterministic reduction (e.g., color-partition faces so adjacent faces don't conflict, then use non-atomic stores).
+
+Fix applied (2026-07-08): Phase 4-A implemented face coloring — faces are partitioned into disjoint color groups (no two faces in the same color share a cell). Each color group is launched as a separate kernel with non-atomic `+=` writes. This eliminates both the atomic non-associativity (deterministic) and the L2 plateau. Residuals are now byte-level reproducible between runs (verified by CFD-COLOR-4).
 
 **PH2-E-3: isfinite not guarded by #include <cmath> in device code** [FIXED]
 `src/aero_cfd/gpu_update.cu:43,53`
@@ -569,6 +571,8 @@ The residual kernel signature has no `d_limiters` parameter. Instead, the solver
 | INFO     | 2 | PH4-A-12, PH4-A-13 (observations) |
 
 Total: 1 open + 10 fixed = 11 actionable findings (9 FIXED, 1 deferred design item) + 2 INFO.
+
+PH2-E-2 now FIXED via Phase 4-A face coloring. See PH2-E-2 entry above.
 
 ## CPU-GPU Capability Asymmetry (2026-07-08)
 

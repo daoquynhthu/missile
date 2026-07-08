@@ -57,6 +57,7 @@ class DeviceMesh {
 public:
     static constexpr int NVAR = 5;
     static constexpr int NGRAD = 15;
+    static constexpr int kMaxColors = 64;
 
     DeviceMesh() = default;
     ~DeviceMesh();
@@ -67,7 +68,7 @@ public:
     DeviceMesh(DeviceMesh&& other) noexcept;
     DeviceMesh& operator=(DeviceMesh&& other) noexcept;
 
-    bool upload_mesh(const CfdMesh& mesh, std::string* error = nullptr);
+    bool upload_mesh(const CfdMesh& mesh, std::string* error = nullptr, bool skip_coloring = false);
     bool upload_state(const std::vector<ConservativeState>& q, std::string* error = nullptr);
     bool upload_gradients(const std::vector<PrimitiveGradient>& gradients, std::string* error = nullptr);
     bool upload_limiters(const std::vector<PrimitiveLimiter>& limiters, std::string* error = nullptr);
@@ -81,6 +82,10 @@ public:
 
     std::size_t cell_count() const { return cell_count_; }
     std::size_t face_count() const { return face_count_; }
+
+    int color_count() const { return n_colors_; }
+    const int* color_offsets_device() const { return d_color_offsets_; }
+    const std::vector<int>& host_color_offsets() const { return host_color_offsets_; }
 
     DeviceFaceData face_data();
     ConstDeviceFaceData face_data() const;
@@ -119,6 +124,10 @@ private:
 
     float* d_gradients_ = nullptr;
     float* d_limiters_ = nullptr;
+
+    int n_colors_ = 0;
+    int* d_color_offsets_ = nullptr;
+    std::vector<int> host_color_offsets_;
 };
 
 } // namespace Cfd

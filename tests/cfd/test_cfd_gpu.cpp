@@ -732,7 +732,7 @@ static int test_oracle_bandwidth() {
 
         DeviceMesh d_mesh;
         std::string error;
-        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_mesh(mesh, &error, true)) FAIL("%s", error.c_str());
         if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
 
         float elapsed_ms = -1.0f;
@@ -878,6 +878,164 @@ static int test_recon_order2_converged_forces() {
     return 0;
 }
 
+static int test_color_count() {
+    TEST("CFD-COLOR-1 face coloring produces valid color count");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+
+        int nc = d_mesh.color_count();
+        if (nc <= 0) FAIL("color_count=%d (expected >0)", nc);
+        if (nc > DeviceMesh::kMaxColors) FAIL("color_count=%d > kMaxColors=%d", nc, DeviceMesh::kMaxColors);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_color_residual_matches_uncolored() {
+    TEST("CFD-COLOR-2 colored residual forces match uncolored");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w;
+        w.rho = 1.0f; w.u = 2.0f; w.p = 1.0f / 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        float gamma = 1.4f;
+        std::string error;
+
+        DeviceMesh colored;
+        if (!colored.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!colored.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (!compute_euler_residual_gpu(colored, w, gamma, &error)) FAIL("colored: %s", error.c_str());
+        std::vector<EulerFlux> colored_res;
+        if (!colored.download_residual(colored_res, &error)) FAIL("colored download: %s", error.c_str());
+        if (colored_res.empty()) FAIL("colored residual empty");
+
+        DeviceMesh uncolored;
+        if (!uncolored.upload_mesh(mesh, &error, true)) FAIL("uncolored upload: %s", error.c_str());
+        if (!uncolored.upload_state(q, &error)) FAIL("uncolored state: %s", error.c_str());
+        if (!compute_euler_residual_gpu(uncolored, w, gamma, &error)) FAIL("uncolored: %s", error.c_str());
+        std::vector<EulerFlux> uncolored_res;
+        if (!uncolored.download_residual(uncolored_res, &error)) FAIL("uncolored download: %s", error.c_str());
+
+        float tol = 1e-6f;
+        for (std::size_t i = 0; i < colored_res.size(); ++i) {
+            if (!near(colored_res[i].mass, uncolored_res[i].mass, tol))
+                FAIL("cell=%zu mass colored=%g uncolored=%g", i, colored_res[i].mass, uncolored_res[i].mass);
+            if (!near(colored_res[i].mom_x, uncolored_res[i].mom_x, tol))
+                FAIL("cell=%zu mom_x colored=%g uncolored=%g", i, colored_res[i].mom_x, uncolored_res[i].mom_x);
+            if (!near(colored_res[i].mom_y, uncolored_res[i].mom_y, tol))
+                FAIL("cell=%zu mom_y colored=%g uncolored=%g", i, colored_res[i].mom_y, uncolored_res[i].mom_y);
+            if (!near(colored_res[i].mom_z, uncolored_res[i].mom_z, tol))
+                FAIL("cell=%zu mom_z colored=%g uncolored=%g", i, colored_res[i].mom_z, uncolored_res[i].mom_z);
+            if (!near(colored_res[i].energy, uncolored_res[i].energy, tol))
+                FAIL("cell=%zu energy colored=%g uncolored=%g", i, colored_res[i].energy, uncolored_res[i].energy);
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_color_gradient_matches_uncolored() {
+    TEST("CFD-COLOR-3 colored gradient matches uncolored");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 11);
+        compute_mesh_metrics(mesh);
+
+        float gamma = 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size());
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            float x = mesh.cells[i].cx;
+            float y = mesh.cells[i].cy;
+            float rho = 1.0f + 0.1f * x;
+            float u = 2.0f + 0.05f * y;
+            float v = -0.1f * x;
+            float p = 1.0f / gamma + 0.05f * x - 0.02f * y;
+            float e = p / (gamma - 1.0f) + 0.5f * rho * (u*u + v*v);
+            q[i].rho = rho;
+            q[i].rho_u = rho * u;
+            q[i].rho_v = rho * v;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = e;
+        }
+
+        std::string error;
+
+        DeviceMesh colored;
+        if (!colored.upload_mesh(mesh, &error)) FAIL("colored upload: %s", error.c_str());
+        if (!colored.upload_state(q, &error)) FAIL("colored state: %s", error.c_str());
+        if (!compute_gradients_gpu(colored, gamma, &error)) FAIL("colored gradients: %s", error.c_str());
+        std::vector<PrimitiveGradient> colored_grads;
+        if (!colored.download_gradients(colored_grads, &error)) FAIL("colored download: %s", error.c_str());
+
+        DeviceMesh uncolored;
+        if (!uncolored.upload_mesh(mesh, &error, true)) FAIL("uncolored upload: %s", error.c_str());
+        if (!uncolored.upload_state(q, &error)) FAIL("uncolored state: %s", error.c_str());
+        if (!compute_gradients_gpu(uncolored, gamma, &error)) FAIL("uncolored gradients: %s", error.c_str());
+        std::vector<PrimitiveGradient> uncolored_grads;
+        if (!uncolored.download_gradients(uncolored_grads, &error)) FAIL("uncolored download: %s", error.c_str());
+
+        float tol = 2e-6f;
+        for (std::size_t i = 0; i < colored_grads.size(); ++i) {
+            auto& c = colored_grads[i];
+            auto& u = uncolored_grads[i];
+            if (!near(c.drho_dx, u.drho_dx, tol)) FAIL("cell=%zu drho_dx colored=%g uncolored=%g", i, c.drho_dx, u.drho_dx);
+            if (!near(c.drho_dy, u.drho_dy, tol)) FAIL("cell=%zu drho_dy colored=%g uncolored=%g", i, c.drho_dy, u.drho_dy);
+            if (!near(c.du_dx, u.du_dx, tol)) FAIL("cell=%zu du_dx colored=%g uncolored=%g", i, c.du_dx, u.du_dx);
+            if (!near(c.du_dy, u.du_dy, tol)) FAIL("cell=%zu du_dy colored=%g uncolored=%g", i, c.du_dy, u.du_dy);
+            if (!near(c.dv_dx, u.dv_dx, tol)) FAIL("cell=%zu dv_dx colored=%g uncolored=%g", i, c.dv_dx, u.dv_dx);
+            if (!near(c.dp_dx, u.dp_dx, tol)) FAIL("cell=%zu dp_dx colored=%g uncolored=%g", i, c.dp_dx, u.dp_dx);
+            if (!near(c.dp_dy, u.dp_dy, tol)) FAIL("cell=%zu dp_dy colored=%g uncolored=%g", i, c.dp_dy, u.dp_dy);
+        }
+        PASS;
+    }
+    return 0;
+}
+
+static int test_color_deterministic_residual() {
+    TEST("CFD-COLOR-4 colored residual is deterministic byte-level");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w;
+        w.rho = 1.0f; w.u = 2.0f; w.p = 1.0f / 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        float gamma = 1.4f;
+        std::string error;
+
+        DeviceMesh d_mesh;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("upload: %s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("state: %s", error.c_str());
+
+        int* d_failed = nullptr;
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", &error)) FAIL("%s", error.c_str());
+
+        std::size_t residual_bytes = d_mesh.cell_count() * DeviceMesh::NVAR * sizeof(float);
+        std::vector<float> res1(d_mesh.cell_count() * DeviceMesh::NVAR);
+        std::vector<float> res2(d_mesh.cell_count() * DeviceMesh::NVAR);
+
+        if (!compute_euler_residual_gpu(d_mesh, w, gamma, d_failed, &error)) FAIL("1st run: %s", error.c_str());
+        if (!cuda_check(cudaMemcpy(res1.data(), d_mesh.residual_device(), residual_bytes, cudaMemcpyDeviceToHost), "1st download", &error)) FAIL("%s", error.c_str());
+
+        if (!cuda_check(cudaMemset(d_mesh.residual_device(), 0, residual_bytes), "clear residual", &error)) FAIL("%s", error.c_str());
+        if (!compute_euler_residual_gpu(d_mesh, w, gamma, d_failed, &error)) FAIL("2nd run: %s", error.c_str());
+        if (!cuda_check(cudaMemcpy(res2.data(), d_mesh.residual_device(), residual_bytes, cudaMemcpyDeviceToHost), "2nd download", &error)) FAIL("%s", error.c_str());
+
+        if (std::memcmp(res1.data(), res2.data(), residual_bytes) != 0)
+            FAIL("residual differs between runs (non-deterministic)");
+
+        cudaFree(d_failed);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -902,6 +1060,10 @@ int main() {
     result |= test_oracle_bandwidth();
     result |= test_diag_state_bounds_gpu_cpu_match();
     result |= test_diag_failure_snapshot();
+    result |= test_color_count();
+    result |= test_color_residual_matches_uncolored();
+    result |= test_color_gradient_matches_uncolored();
+    result |= test_color_deterministic_residual();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

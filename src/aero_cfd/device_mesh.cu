@@ -1,7 +1,9 @@
 #include "aero_cfd/device_mesh.hpp"
 #include "aero_cfd/cuda_utils.hpp"
 
+#include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <utility>
 
@@ -53,6 +55,11 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_face_cx_ = other.d_face_cy_ = other.d_face_cz_ = nullptr;
     other.d_gradients_ = nullptr;
     other.d_limiters_ = nullptr;
+    n_colors_ = other.n_colors_;
+    d_color_offsets_ = other.d_color_offsets_;
+    host_color_offsets_ = std::move(other.host_color_offsets_);
+    other.n_colors_ = 0;
+    other.d_color_offsets_ = nullptr;
     return *this;
 }
 
@@ -114,6 +121,45 @@ static bool cuda_free_and_null(T*& ptr) {
     return err == cudaSuccess;
 }
 
+static int greedy_color_faces(
+    const std::vector<int>& h_left_cell,
+    const std::vector<int>& h_right_cell,
+    std::size_t n_faces,
+    int max_colors,
+    std::vector<int>& color_of_face)
+{
+    int max_cell = 0;
+    for (std::size_t f = 0; f < n_faces; ++f) {
+        if (h_left_cell[f] > max_cell) max_cell = h_left_cell[f];
+        if (h_right_cell[f] >= 0 && h_right_cell[f] > max_cell) max_cell = h_right_cell[f];
+    }
+    std::size_t n_cells = static_cast<std::size_t>(max_cell + 1);
+
+    std::vector<std::uint64_t> cell_used(n_cells, 0);
+    color_of_face.assign(n_faces, -1);
+    int n_colors_used = 0;
+
+    for (std::size_t f = 0; f < n_faces; ++f) {
+        int l = h_left_cell[f];
+        int r = h_right_cell[f];
+
+        std::uint64_t used = cell_used[static_cast<std::size_t>(l)];
+        if (r >= 0) used |= cell_used[static_cast<std::size_t>(r)];
+
+        int color = 0;
+        while (color < max_colors && (used & (static_cast<std::uint64_t>(1) << color))) ++color;
+
+        if (color >= max_colors) return 0;
+
+        color_of_face[f] = color;
+        cell_used[static_cast<std::size_t>(l)] |= (static_cast<std::uint64_t>(1) << color);
+        if (r >= 0) cell_used[static_cast<std::size_t>(r)] |= (static_cast<std::uint64_t>(1) << color);
+
+        if (color + 1 > n_colors_used) n_colors_used = color + 1;
+    }
+    return n_colors_used;
+}
+
 void DeviceMesh::release() {
 #define FREE_AND_ASSERT(ptr) do { bool ok = cuda_free_and_null(ptr); assert(ok); } while(0)
     FREE_AND_ASSERT(d_q_);
@@ -135,12 +181,15 @@ void DeviceMesh::release() {
     FREE_AND_ASSERT(d_face_cz_);
     FREE_AND_ASSERT(d_gradients_);
     FREE_AND_ASSERT(d_limiters_);
+    FREE_AND_ASSERT(d_color_offsets_);
 #undef FREE_AND_ASSERT
     cell_count_ = 0;
     face_count_ = 0;
+    n_colors_ = 0;
+    host_color_offsets_.clear();
 }
 
-bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error) {
+bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_coloring) {
     release();
     cell_count_ = mesh.cells.size();
     face_count_ = mesh.faces.size();
@@ -204,6 +253,39 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error) {
         h_left_cell[i] = f.left_cell; h_right_cell[i] = f.right_cell;
         h_face_cx[i] = f.cx; h_face_cy[i] = f.cy; h_face_cz[i] = f.cz;
     }
+    if (!skip_coloring && nf > 0) {
+        std::vector<int> color_of_face;
+        int nc_used = greedy_color_faces(h_left_cell, h_right_cell, nf, kMaxColors, color_of_face);
+        if (nc_used > 0) {
+            n_colors_ = nc_used;
+            host_color_offsets_.assign(n_colors_ + 1, 0);
+            for (std::size_t f = 0; f < nf; ++f) {
+                int c = color_of_face[f];
+                host_color_offsets_[static_cast<std::size_t>(c) + 1]++;
+            }
+            for (int c = 1; c <= n_colors_; ++c)
+                host_color_offsets_[c] += host_color_offsets_[c - 1];
+
+            std::vector<int> insert_pos = host_color_offsets_;
+            std::vector<int> dest(nf);
+            for (std::size_t f = 0; f < nf; ++f) {
+                int c = color_of_face[f];
+                dest[f] = insert_pos[c]++;
+            }
+
+            auto reorder = [&](auto& vec) {
+                auto copy = vec;
+                for (std::size_t f = 0; f < nf; ++f)
+                    vec[static_cast<std::size_t>(dest[f])] = copy[f];
+            };
+            reorder(h_nx); reorder(h_ny); reorder(h_nz);
+            reorder(h_area);
+            reorder(h_left_cell); reorder(h_right_cell);
+            reorder(temp_boundary);
+            reorder(h_face_cx); reorder(h_face_cy); reorder(h_face_cz);
+        }
+    }
+
     if (!copy(d_nx_, h_nx.data(), nf * sizeof(float), "cudaMemcpy nx")) return false;
     if (!copy(d_ny_, h_ny.data(), nf * sizeof(float), "cudaMemcpy ny")) return false;
     if (!copy(d_nz_, h_nz.data(), nf * sizeof(float), "cudaMemcpy nz")) return false;
@@ -230,6 +312,11 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error) {
     if (!cuda_check(cudaMemset(d_residual_, 0, nc * NVAR * sizeof(float)), "cudaMemset residual", error)) {
         release();
         return false;
+    }
+
+    if (n_colors_ > 0) {
+        if (!alloc(d_color_offsets_, static_cast<std::size_t>(n_colors_ + 1) * sizeof(int), "cudaMalloc color_offsets")) return false;
+        if (!copy(d_color_offsets_, host_color_offsets_.data(), static_cast<std::size_t>(n_colors_ + 1) * sizeof(int), "cudaMemcpy color_offsets")) return false;
     }
 
     return true;

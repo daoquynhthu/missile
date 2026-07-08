@@ -146,7 +146,7 @@ __device__ void d_reconstruct_primitive(
     p = p + g[12]*dx + g[13]*dy + g[14]*dz;
 }
 
-__global__ void euler_residual_kernel(
+__global__ void euler_residual_kernel_atomic(
     const float* d_nx, const float* d_ny, const float* d_nz,
     const float* d_area,
     const int* d_left_cell, const int* d_right_cell,
@@ -245,6 +245,105 @@ __global__ void euler_residual_kernel(
     }
 }
 
+__global__ void euler_residual_kernel_colored(
+    const float* d_nx, const float* d_ny, const float* d_nz,
+    const float* d_area,
+    const int* d_left_cell, const int* d_right_cell,
+    const int* d_boundary,
+    const float* d_q,
+    int face_start, int face_end, int nvar, int n_cells,
+    float gamma,
+    float inf_rho, float inf_p,
+    float inf_u, float inf_v, float inf_w, float inf_a,
+    float* d_residual,
+    int* d_failed,
+    const float* d_gradients,
+    const float* d_face_cx, const float* d_face_cy, const float* d_face_cz,
+    const float* d_cx, const float* d_cy, const float* d_cz) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
+    if (idx >= face_end) return;
+
+    int left = d_left_cell[idx];
+    if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
+    int bnd = d_boundary[idx];
+    float nx = d_nx[idx];
+    float ny = d_ny[idx];
+    float nz = d_nz[idx];
+    float area = d_area[idx];
+
+    float rhoL, uL, vL, wL, pL;
+    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+        atomicExch(d_failed, 1);
+        return;
+    }
+
+    if (d_gradients != nullptr) {
+        float dx = d_face_cx[idx] - d_cx[left];
+        float dy = d_face_cy[idx] - d_cy[left];
+        float dz = d_face_cz[idx] - d_cz[left];
+        d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL);
+        if (!__finitef(rhoL) || rhoL <= 0.0f || !__finitef(pL) || pL <= 0.0f) {
+            atomicExch(d_failed, 1);
+            return;
+        }
+    }
+
+    float mass, mom_x, mom_y, mom_z, energy;
+
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
+        float rhoR, uR, vR, wR, pR;
+        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+            atomicExch(d_failed, 1);
+            return;
+        }
+        if (d_gradients != nullptr) {
+            float dx = d_face_cx[idx] - d_cx[right];
+            float dy = d_face_cy[idx] - d_cy[right];
+            float dz = d_face_cz[idx] - d_cz[right];
+            d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR);
+            if (!__finitef(rhoR) || rhoR <= 0.0f || !__finitef(pR) || pR <= 0.0f) {
+                atomicExch(d_failed, 1);
+                return;
+            }
+        }
+        d_hllc_flux(rhoL, uL, vL, wL, pL, rhoR, uR, vR, wR, pR, gamma, nx, ny, nz,
+            mass, mom_x, mom_y, mom_z, energy);
+    } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
+        d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy);
+    } else {
+        float ghrho, ghp, ghu, ghv, ghw;
+        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, inf_rho, inf_p, inf_u, inf_v, inf_w, inf_a,
+            nx, ny, nz, ghrho, ghp, ghu, ghv, ghw);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, ghrho, ghu, ghv, ghw, ghp, gamma, nx, ny, nz,
+            mass, mom_x, mom_y, mom_z, energy);
+    }
+
+    float fmass = mass * area;
+    float fmx = mom_x * area;
+    float fmy = mom_y * area;
+    float fmz = mom_z * area;
+    float fen = energy * area;
+
+    d_residual[left * nvar + 0] += -fmass;
+    d_residual[left * nvar + 1] += -fmx;
+    d_residual[left * nvar + 2] += -fmy;
+    d_residual[left * nvar + 3] += -fmz;
+    d_residual[left * nvar + 4] += -fen;
+
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        if (right >= 0 && right < n_cells) {
+        d_residual[right * nvar + 0] += fmass;
+        d_residual[right * nvar + 1] += fmx;
+        d_residual[right * nvar + 2] += fmy;
+        d_residual[right * nvar + 3] += fmz;
+        d_residual[right * nvar + 4] += fen;
+        }
+    }
+}
+
 } // namespace
 
 bool launch_euler_residual_kernel(
@@ -270,23 +369,48 @@ bool launch_euler_residual_kernel(
 
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
-    int grid = (nf + block - 1) / block;
     int nc = static_cast<int>(mesh.cell_count());
     bool second_order = (reconstruction_order == 2 && mesh.gradients_device() != nullptr);
-    euler_residual_kernel<<<grid, block>>>(
-        fd.nx, fd.ny, fd.nz, fd.area,
-        fd.left_cell, fd.right_cell, fd.boundary,
-        mesh.state_device(),
-        nf, DeviceMesh::NVAR, nc,
-        gamma,
-        freestream.rho, freestream.p,
-        freestream.u, freestream.v, freestream.w, a_inf,
-        mesh.residual_device(),
-        d_failed,
-        second_order ? mesh.gradients_device() : nullptr,
-        fd.cx, fd.cy, fd.cz,
-        cd.cx, cd.cy, cd.cz);
-    if (!cuda_check(cudaGetLastError(), "euler_residual_kernel launch", error)) return false;
+    int n_colors = mesh.color_count();
+
+    if (n_colors > 0) {
+        for (int c = 0; c < n_colors; ++c) {
+            int start = mesh.host_color_offsets()[c];
+            int end   = mesh.host_color_offsets()[c + 1];
+            int nf_c  = end - start;
+            int grid_c = (nf_c + block - 1) / block;
+            euler_residual_kernel_colored<<<grid_c, block>>>(
+                fd.nx, fd.ny, fd.nz, fd.area,
+                fd.left_cell, fd.right_cell, fd.boundary,
+                mesh.state_device(),
+                start, end, DeviceMesh::NVAR, nc,
+                gamma,
+                freestream.rho, freestream.p,
+                freestream.u, freestream.v, freestream.w, a_inf,
+                mesh.residual_device(),
+                d_failed,
+                second_order ? mesh.gradients_device() : nullptr,
+                fd.cx, fd.cy, fd.cz,
+                cd.cx, cd.cy, cd.cz);
+            if (!cuda_check(cudaGetLastError(), "euler_residual_kernel_colored", error)) return false;
+        }
+    } else {
+        int grid = (nf + block - 1) / block;
+        euler_residual_kernel_atomic<<<grid, block>>>(
+            fd.nx, fd.ny, fd.nz, fd.area,
+            fd.left_cell, fd.right_cell, fd.boundary,
+            mesh.state_device(),
+            nf, DeviceMesh::NVAR, nc,
+            gamma,
+            freestream.rho, freestream.p,
+            freestream.u, freestream.v, freestream.w, a_inf,
+            mesh.residual_device(),
+            d_failed,
+            second_order ? mesh.gradients_device() : nullptr,
+            fd.cx, fd.cy, fd.cz,
+            cd.cx, cd.cy, cd.cz);
+        if (!cuda_check(cudaGetLastError(), "euler_residual_kernel_atomic", error)) return false;
+    }
     return true;
 }
 

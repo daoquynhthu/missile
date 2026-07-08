@@ -163,3 +163,12 @@
   - Solver loop passes `d_failed` to both functions.
 - BW-1 bandwidth test now also passes (likely throttling resolved).
 - Verification: `cmake --build build --target TestCfdGpu --config Release` passed; `TestCfdGpu.exe` 22/22 PASS.
+
+2026-07-08
+- Phase 4-A (face coloring deterministic reduction) implemented:
+  - `device_mesh.hpp/cu`: Added `greedy_color_faces` host-side greedy coloring on mesh upload, face array reordering by color, `d_color_offsets_` upload, `skip_coloring` flag. `kMaxColors=64`.
+  - `cfd_residual_gpu.cu`: Split `euler_residual_kernel` → `_atomic` (original) + `_colored` (face_start/face_end, non-atomic `+=`). `launch_euler_residual_kernel` loops over colors when available.
+  - `reconstruction_gpu.cu`: Split `gg_gradient_kernel` → `_atomic` + `_colored`. `compute_gradients_gpu` loops over colors.
+  - Tests: CFD-COLOR-1 (color_count valid), CFD-COLOR-2 (colored residual ≈ uncolored), CFD-COLOR-3 (colored gradient ≈ uncolored), CFD-COLOR-4 (byte-level deterministic).
+- BW-1 remains flaky due to GPU throttling (25/26 PASS, transient).
+- Verification: `cmake --build build --target TestCfdGpu --config Release` passed; `TestCfdGpu.exe` 25/26 PASS (BW-1 pre-existing).
