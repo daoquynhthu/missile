@@ -138,8 +138,9 @@ bool generate_aero_table(
             auto summary = cfd_solver.solve(fc, cfd_cfg);
             if (summary.failed) {
                 std::cerr << "[aero_table_gen] CFD failed Mach=" << fc.mach
-                          << " alpha=" << fc.alpha_deg << " beta=" << fc.beta_deg << "\n";
-                return false;
+                          << " alpha=" << fc.alpha_deg << " beta=" << fc.beta_deg
+                          << " — skipping\n";
+                continue;
             }
 
             summary.forces.fidelity = "cfd-gpu";

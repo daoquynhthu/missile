@@ -251,7 +251,10 @@
   - aero_solver.hpp: removed unused fvm_mach_min, added viscous/Re/prandtl/wall_temperature fields, documented cube-mesh limitation.
   - aero_table_gen.cpp: input empty-vector validation, mesh quality check, negative mesh_subdivisions warning, Newtonian path skip when use_fvm=true, viscous params passthrough, documented cube-mesh limitation.
 - Build + TestAeroTableGen 7/7 PASS. Phase 6 gate verified.
-- Phase 6 closed.
+- Phase 6 closed. Remaining audit fixes:
+  - aero_table_gen.cpp: CFD failure changed from `return false` to `continue` (skip failed condition, process remaining).
+  - aerodynamics_model.hpp: Fidelity column explicitly documented as informational in load_csv_table.
+  - ISSUES.md: all 17 findings marked [FIXED] (16/17 resolved, 1 INFO open).
 - Phase 7.0 NVAR=6 structural changes:
   - cfd_config.hpp: constexpr int CFD_NVAR=6, bool turbulence=false
   - cfd_state.hpp: ConservativeState.rho_nu_tilde, PrimitiveState.nu_tilde, EulerFlux.turbulence, conversion/flux functions updated

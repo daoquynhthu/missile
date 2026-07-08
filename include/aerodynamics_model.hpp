@@ -124,7 +124,9 @@ public:
                 }
             }
             if (row.size() >= 12) {
-                // Full format: mach,alpha,beta,CX,CY,CZ,CL,CD,L_D,Cl,Cm,Cn
+                // Full format: mach,alpha,beta,CX,CY,CZ,CL,CD,L_D,Cl,Cm,Cn[,Fidelity]
+                // Fidelity column (index 12) is informational; all coefficients
+                // are stored uniformly regardless of source.
                 double m = row[0];
                 double a = row[1];
                 
