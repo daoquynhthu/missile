@@ -63,8 +63,8 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeSt
     result.Cm = my / std::max(q_inf * config.ref_area * config.ref_length, 1e-30f);
     result.Cn = mz / std::max(q_inf * config.ref_area * config.ref_span, 1e-30f);
 
-    Real alpha = condition.alpha_deg * 3.14159265358979323846f / 180.0f;
-    Real beta = condition.beta_deg * 3.14159265358979323846f / 180.0f;
+    Real alpha = condition.alpha_deg * 3.14159265358979323846 / 180.0;
+    Real beta = condition.beta_deg * 3.14159265358979323846 / 180.0;
     Real ca = std::cos(alpha);
     Real sa = std::sin(alpha);
     Real cb = std::cos(beta);
@@ -78,8 +78,8 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeSt
 } // namespace
 
 PrimitiveState make_freestream(Real mach, Real alpha_deg, Real beta_deg, Real gamma) {
-    Real alpha = alpha_deg * 3.14159265358979323846f / 180.0f;
-    Real beta = beta_deg * 3.14159265358979323846f / 180.0f;
+    Real alpha = alpha_deg * 3.14159265358979323846 / 180.0;
+    Real beta = beta_deg * 3.14159265358979323846 / 180.0;
 
     PrimitiveState w;
     w.rho = 1.0f;

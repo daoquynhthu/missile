@@ -99,7 +99,7 @@ public:
     Real* limiters_device() const { return d_limiters_; }
 
     // MPI halo (reserved, no-op in single-GPU mode)
-    bool has_halo() const { return d_halo_indices_ != nullptr; }
+    bool has_halo() const { return d_halo_indices_ != nullptr && n_halo_cells_ > 0; }
     bool allocate_halo(int n_halo_cells);
     int* halo_indices_device() const { return d_halo_indices_; }
     Real* halo_send_device() const { return d_halo_send_buf_; }

@@ -2,15 +2,15 @@
 #include "aero_cfd/real.hpp"
 #include "aero_cfd/device_mesh.hpp"
 #include "aero_cfd/gpu_solver_internal.hpp"
-#include <cfloat>
 #include <cuda_runtime.h>
+#include <limits>
 namespace AeroSim {
 namespace Cfd {
 
 namespace {
 
-__global__ void init_float_max_kernel(Real* ptr) {
-    *ptr = FLT_MAX;
+__global__ void init_max_kernel(Real* ptr) {
+    *ptr = std::numeric_limits<Real>::max();
 }
 
 __global__ void timestep_kernel(
@@ -35,21 +35,14 @@ __global__ void timestep_kernel(
     Real a = real_sqrt(gamma * p / rho);
     Real denom = vmag + a;
     Real dt = cfl * d_h_min[idx] / (denom > 1e-30f ? denom : 1e-30f);
-    unsigned int candidate = __float_as_int(dt);
-    unsigned int* ptr = reinterpret_cast<unsigned int*>(d_min_dt);
-    unsigned int old = atomicCAS(ptr, __float_as_int(FLT_MAX), candidate);
-    while (old != __float_as_int(FLT_MAX) && candidate < old) {
-        unsigned int prev = atomicCAS(ptr, old, candidate);
-        if (prev == old) break;
-        old = prev;
-    }
+    real_atomic_min(d_min_dt, dt);
 }
 
 } // namespace
 
 bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt) {
-    init_float_max_kernel<<<1, 1>>>(d_min_dt);
-    if (!cuda_check(cudaGetLastError(), "init_float_max kernel launch")) return false;
+    init_max_kernel<<<1, 1>>>(d_min_dt);
+    if (!cuda_check(cudaGetLastError(), "init_max kernel launch")) return false;
 
     int block = 128;
     int nc = static_cast<int>(mesh.cell_count());

@@ -431,11 +431,13 @@ bool DeviceMesh::download_gradients(std::vector<PrimitiveGradient>& gradients, s
 }
 
 bool DeviceMesh::allocate_halo(int n_halo_cells) {
+    cuda_free_and_null(d_halo_indices_);
+    cuda_free_and_null(d_halo_send_buf_);
+    cuda_free_and_null(d_halo_recv_buf_);
+    n_halo_cells_ = 0;
     if (n_halo_cells <= 0) {
-        n_halo_cells_ = 0;
         return true;
     }
-    release();
     n_halo_cells_ = n_halo_cells;
     if (!cuda_check(cudaMalloc(&d_halo_indices_, n_halo_cells_ * sizeof(int)), "cudaMalloc halo_indices", nullptr)) {
         n_halo_cells_ = 0;

@@ -2,9 +2,9 @@
 #include "aero_cfd/real.hpp"
 #include "aero_cfd/device_mesh.hpp"
 #include "aero_cfd/gpu_solver_internal.hpp"
-#include <cfloat>
 #include <cmath>
 #include <cuda_runtime.h>
+#include <limits>
 namespace AeroSim {
 namespace Cfd {
 
@@ -14,12 +14,12 @@ namespace {
 
 __global__ void init_bounds_slot_kernel(Real* slot) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-        slot[0] = FLT_MAX;
-        slot[1] = -FLT_MAX;
-        slot[2] = FLT_MAX;
-        slot[3] = -FLT_MAX;
-        slot[4] = FLT_MAX;
-        slot[5] = -FLT_MAX;
+        slot[0] = std::numeric_limits<Real>::max();
+        slot[1] = std::numeric_limits<Real>::lowest();
+        slot[2] = std::numeric_limits<Real>::max();
+        slot[3] = std::numeric_limits<Real>::lowest();
+        slot[4] = std::numeric_limits<Real>::max();
+        slot[5] = std::numeric_limits<Real>::lowest();
     }
 }
 
@@ -35,9 +35,9 @@ __global__ void state_bounds_kernel(
     int tid = threadIdx.x;
     int idx = blockIdx.x * blockDim.x + tid;
 
-    Real l_min_rho = FLT_MAX, l_max_rho = -FLT_MAX;
-    Real l_min_p = FLT_MAX, l_max_p = -FLT_MAX;
-    Real l_min_mach = FLT_MAX, l_max_mach = -FLT_MAX;
+    Real l_min_rho = std::numeric_limits<Real>::max(), l_max_rho = std::numeric_limits<Real>::lowest();
+    Real l_min_p = std::numeric_limits<Real>::max(), l_max_p = std::numeric_limits<Real>::lowest();
+    Real l_min_mach = std::numeric_limits<Real>::max(), l_max_mach = std::numeric_limits<Real>::lowest();
 
     if (idx < n_cells) {
         Real rho = d_q[idx * nvar + 0];

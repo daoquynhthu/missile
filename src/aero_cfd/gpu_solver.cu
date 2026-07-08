@@ -143,24 +143,6 @@ static CfdSolveSummary solve_gpu_impl(
         }
     }
 
-        if (!compute_wall_forces_gpu(d_mesh, config.gamma, d_forces)) {
-            if (error) *error = "wall force kernel failed";
-            goto fail;
-        }
-        if (!cuda_check(cudaDeviceSynchronize(), "wall force sync", error)) goto fail;
-
-    {
-        int valid_iters = 0;
-        for (int i = 0; i < config.max_iter; ++i) {
-            if (host_residual_history[i] < 0.0f) break;
-            summary.residual_history.push_back(host_residual_history[i]);
-            valid_iters++;
-        }
-        if (!summary.failed && valid_iters > 0 && host_residual_history[valid_iters - 1] < config.convergence_tol) {
-            summary.converged = true;
-        }
-    }
-
     if (diagnostics_enabled) {
         std::vector<Real> bounds_host(config.max_iter * 6);
         if (!cuda_check(cudaMemcpy(bounds_host.data(), d_state_bounds_history,
@@ -181,8 +163,8 @@ static CfdSolveSummary solve_gpu_impl(
         if (host_failed != 0 && d_failure_cell) {
             int host_failure_cell = -1;
             Real host_failure_state[5] = {0.0f};
-            cudaMemcpy(&host_failure_cell, d_failure_cell, sizeof(int), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_failure_state, d_failure_state, 5 * sizeof(Real), cudaMemcpyDeviceToHost);
+            if (!cuda_check(cudaMemcpy(&host_failure_cell, d_failure_cell, sizeof(int), cudaMemcpyDeviceToHost), "read d_failure_cell", error)) goto fail;
+            if (!cuda_check(cudaMemcpy(host_failure_state, d_failure_state, 5 * sizeof(Real), cudaMemcpyDeviceToHost), "read d_failure_state", error)) goto fail;
 
             if (host_failure_cell >= 0) {
                 int fail_iter = 0;
@@ -220,7 +202,7 @@ static CfdSolveSummary solve_gpu_impl(
         summary.forces.Cm = forces[4] / real_fmax(q_inf * config.ref_area * config.ref_length, 1e-30f);
         summary.forces.Cn = forces[5] / real_fmax(q_inf * config.ref_area * config.ref_span, 1e-30f);
 
-        constexpr Real kPi = 3.14159265358979323846f;
+        constexpr Real kPi = 3.14159265358979323846;
         Real alpha = condition.alpha_deg * kPi / 180.0f;
         Real beta = condition.beta_deg * kPi / 180.0f;
         Real ca = real_cos(alpha);
