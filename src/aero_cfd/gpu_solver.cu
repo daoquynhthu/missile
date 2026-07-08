@@ -83,7 +83,15 @@ static CfdSolveSummary solve_gpu_impl(
             if (!apply_limiter_gpu(d_mesh, false, error)) goto fail;
         }
 
-        if (!compute_timestep_gpu(d_mesh, config.gamma, config.cfl, d_min_dt)) {
+        if (config.viscous && d_mesh.mu_device() == nullptr) {
+            if (!d_mesh.allocate_viscous()) {
+                if (error) *error = "allocate_viscous failed";
+                goto fail;
+            }
+        }
+
+        if (!compute_timestep_gpu(d_mesh, config.gamma, config.cfl, d_min_dt,
+                config.viscous, d_mesh.mu_device(), config.Re)) {
             if (error) *error = "timestep kernel failed";
             goto fail;
         }
@@ -91,6 +99,14 @@ static CfdSolveSummary solve_gpu_impl(
         if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed, nullptr, error,
                 config.reconstruction_order)) {
             goto fail;
+        }
+
+        if (config.viscous) {
+            if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
+                    config.mu_ref, config.T_ref, config.sutherland_T, d_failed)) {
+                if (error) *error = "viscous flux kernel failed";
+                goto fail;
+            }
         }
 
         if (!compute_update_gpu(d_mesh, d_min_dt, config.gamma, d_l2_sum, d_failed,
@@ -184,7 +200,9 @@ static CfdSolveSummary solve_gpu_impl(
     }
 
     if (!summary.failed) {
-        if (!compute_wall_forces_gpu(d_mesh, config.gamma, d_forces)) {
+        if (!compute_wall_forces_gpu(d_mesh, config.gamma, d_forces,
+                config.viscous, config.prandtl, config.mu_ref, config.T_ref,
+                config.sutherland_T, config.Re, config.wall_temperature)) {
             if (error) *error = "wall force kernel failed";
             goto fail;
         }

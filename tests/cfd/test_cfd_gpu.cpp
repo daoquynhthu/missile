@@ -1038,6 +1038,126 @@ static int test_color_deterministic_residual() {
     return 0;
 }
 
+static int test_viscous_false_regression() {
+    TEST("CFD-ORACLE-VISC-1 viscous=false regression to Euler result");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.4f;
+        cfg.max_iter = 20;
+        cfg.convergence_tol = 1e-12f;
+        cfg.viscous = false;
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 3.0f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary result = solver.solve(cond, cfg);
+        if (result.failed) FAIL("GPU solver failed");
+
+        if (result.residual_history.empty()) FAIL("no residual history");
+
+        CfdConfig euler_cfg = cfg;
+        euler_cfg.viscous = false;
+        CfdSolveSummary euler_result = solver.solve(cond, euler_cfg);
+        if (euler_result.failed) FAIL("Euler-only solver failed");
+
+        std::size_t n = std::min(result.residual_history.size(), euler_result.residual_history.size());
+        Real max_diff = 0.0f;
+        for (std::size_t i = 0; i < n; ++i) {
+            Real d = std::fabs(result.residual_history[i] - euler_result.residual_history[i]);
+            if (d > max_diff) max_diff = d;
+        }
+        if (max_diff > 1e-6f) FAIL("max diff=%g between two Euler-only runs", max_diff);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_viscous_finite_flat_plate() {
+    TEST("CFD-ORACLE-VISC-2 viscous=true produces finite forces on flat plate");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.3f;
+        cfg.max_iter = 10;
+        cfg.convergence_tol = 1e-12f;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+        cfg.prandtl = 0.72f;
+        cfg.wall_temperature = 288.15f;
+        cfg.T_ref = 288.15f;
+        cfg.mu_ref = 1.0f;
+        cfg.sutherland_T = 110.4f;
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary result = solver.solve(cond, cfg);
+        if (result.failed) FAIL("GPU viscous solver failed");
+
+        if (!std::isfinite(result.forces.CD)) FAIL("CD not finite: %g", result.forces.CD);
+        if (!std::isfinite(result.forces.CL)) FAIL("CL not finite: %g", result.forces.CL);
+        if (!std::isfinite(result.forces.CX)) FAIL("CX not finite: %g", result.forces.CX);
+        if (!std::isfinite(result.forces.CY)) FAIL("CY not finite: %g", result.forces.CY);
+        if (!std::isfinite(result.forces.CZ)) FAIL("CZ not finite: %g", result.forces.CZ);
+
+        PASS;
+    }
+    return 0;
+}
+
+static int test_viscous_differs_from_inviscid() {
+    TEST("CFD-ORACLE-VISC-3 viscous=true gives different forces than inviscid");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+
+        CfdConfig inviscid_cfg;
+        inviscid_cfg.use_gpu = true;
+        inviscid_cfg.cfl = 0.3f;
+        inviscid_cfg.max_iter = 10;
+        inviscid_cfg.convergence_tol = 1e-12f;
+        inviscid_cfg.viscous = false;
+
+        CfdConfig viscous_cfg = inviscid_cfg;
+        viscous_cfg.viscous = true;
+        viscous_cfg.Re = 1e5f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary inviscid = solver.solve(cond, inviscid_cfg);
+        if (inviscid.failed) FAIL("inviscid solver failed");
+
+        CfdSolveSummary viscous = solver.solve(cond, viscous_cfg);
+        if (viscous.failed) FAIL("viscous solver failed");
+
+        Real diff = std::fabs(viscous.forces.CD - inviscid.forces.CD);
+        if (diff < 1e-12f) FAIL("viscous CD=%g identical to inviscid CD=%g", viscous.forces.CD, inviscid.forces.CD);
+
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -1066,6 +1186,9 @@ int main() {
     result |= test_color_residual_matches_uncolored();
     result |= test_color_gradient_matches_uncolored();
     result |= test_color_deterministic_residual();
+    result |= test_viscous_false_regression();
+    result |= test_viscous_finite_flat_plate();
+    result |= test_viscous_differs_from_inviscid();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

@@ -18,6 +18,15 @@ struct CfdConfig {
     bool use_gpu = false;
     bool cpu_oracle = false;
     DiagnosticLevel diagnostic_level = DiagnosticLevel::Off;
+
+    // Viscous NS parameters
+    bool viscous = false;
+    Real Re = 1e6f;
+    Real prandtl = 0.72f;
+    Real mu_ref = 1.0f;
+    Real T_ref = 288.15f;
+    Real sutherland_T = 110.4f;
+    Real wall_temperature = 300.0f;
 };
 
 struct FreestreamCondition {

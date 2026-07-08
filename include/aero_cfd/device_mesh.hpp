@@ -105,6 +105,11 @@ public:
     Real* halo_send_device() const { return d_halo_send_buf_; }
     Real* halo_recv_device() const { return d_halo_recv_buf_; }
 
+    // Viscous buffers
+    bool allocate_viscous();
+    Real* mu_device() const { return d_mu_; }
+    Real* lam_device() const { return d_lam_; }
+
 private:
     std::size_t cell_count_ = 0;
     std::size_t face_count_ = 0;
@@ -132,6 +137,8 @@ private:
 
     Real* d_gradients_ = nullptr;
     Real* d_limiters_ = nullptr;
+    Real* d_mu_ = nullptr;
+    Real* d_lam_ = nullptr;
 
     int n_colors_ = 0;
     int* d_color_offsets_ = nullptr;

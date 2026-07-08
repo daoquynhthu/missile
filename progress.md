@@ -198,3 +198,16 @@
   - gpu_solver.cu: Added multi-stream structure under #ifdef MPI_ENABLED guard
     (stream_comp/stream_comm, exchange_halo placeholder, stream_comm sync).
 - Verification: --clean-first build passes; all 6 test suites PASS (BW-1 pre-existing).
+
+2026-07-08
+- Phase 4-B 多代理审计关闭（15 项发现，12 FIXED，1 WONTFIX，2 open）。
+  - PH4-B-9: `cuda_free_safe` 模板替换全项目 `cudaFree`（MEDIUM）。
+  - PH4-B-11: `reconstruction_gpu.cu` 中 `d_volume` 添加 `real_isfinite` 前置检查（LOW）。
+  - PH4-B-12: `check_status_kernel` 中 `d_l2_sum` 添加 `real_isfinite` 检查（LOW）。
+  - PH4-B-14: `real_isfinite` double 路径添加 `#ifdef __CUDA_ARCH__` 守卫（LOW）。
+  - PH4-B-15: 移除 double 路径非 `__CUDACC__` 的 dead atomic 包装（INFO）。
+  - PH4-B-8 标记为 WONTFIX：CUDA 可分离编译工具链限制。
+  - 剩余 open: PH4-B-13（limiter 未着色，LOW）、PH4-B-10（CUDA_KERNEL_CHECK 未用，INFO）。
+- 提交 `ebe6b08`。
+- Verification: `cmake --build build --config Release -j --clean-first` 通过；
+  6 CFD 测试套件全部 PASS（仅 BW-1 预存）。

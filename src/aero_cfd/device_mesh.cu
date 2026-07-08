@@ -41,6 +41,8 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     d_face_cz_ = other.d_face_cz_;
     d_gradients_ = other.d_gradients_;
     d_limiters_ = other.d_limiters_;
+    d_mu_ = other.d_mu_;
+    d_lam_ = other.d_lam_;
     other.cell_count_ = 0;
     other.face_count_ = 0;
     other.d_q_ = nullptr;
@@ -54,6 +56,8 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_face_cx_ = other.d_face_cy_ = other.d_face_cz_ = nullptr;
     other.d_gradients_ = nullptr;
     other.d_limiters_ = nullptr;
+    other.d_mu_ = nullptr;
+    other.d_lam_ = nullptr;
     d_halo_indices_ = other.d_halo_indices_;
     d_halo_send_buf_ = other.d_halo_send_buf_;
     d_halo_recv_buf_ = other.d_halo_recv_buf_;
@@ -181,6 +185,8 @@ void DeviceMesh::release() {
     cuda_free_safe(d_face_cz_);
     cuda_free_safe(d_gradients_);
     cuda_free_safe(d_limiters_);
+    cuda_free_safe(d_mu_);
+    cuda_free_safe(d_lam_);
     cuda_free_safe(d_color_offsets_);
     cuda_free_safe(d_halo_indices_);
     cuda_free_safe(d_halo_send_buf_);
@@ -420,6 +426,16 @@ bool DeviceMesh::download_gradients(std::vector<PrimitiveGradient>& gradients, s
     std::size_t nc = static_cast<std::size_t>(cell_count_);
     gradients.resize(nc);
     return cuda_check(cudaMemcpy(gradients.data(), d_gradients_, nc * sizeof(PrimitiveGradient), cudaMemcpyDeviceToHost), "cudaMemcpy download_gradients", error);
+}
+
+bool DeviceMesh::allocate_viscous() {
+    if (cell_count_ == 0) return false;
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    if (!cuda_check(cudaMalloc(&d_mu_, nc * sizeof(Real)), "cudaMalloc d_mu_", nullptr)) return false;
+    if (!cuda_check(cudaMalloc(&d_lam_, nc * sizeof(Real)), "cudaMalloc d_lam_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_mu_, 0, nc * sizeof(Real)), "cudaMemset d_mu_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_lam_, 0, nc * sizeof(Real)), "cudaMemset d_lam_", nullptr)) return false;
+    return true;
 }
 
 bool DeviceMesh::allocate_halo(int n_halo_cells) {
