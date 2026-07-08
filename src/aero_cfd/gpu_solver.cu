@@ -26,7 +26,7 @@ __global__ void check_status_kernel(
     Real convergence_tol,
     Real* d_residual_history_slot) {
     if (threadIdx.x != 0 || blockIdx.x != 0) return;
-    if (*d_failed != 0) {
+    if (*d_failed != 0 || !real_isfinite(*d_l2_sum)) {
         *d_residual_history_slot = -1.0f;
         return;
     }
@@ -38,9 +38,9 @@ __global__ void check_status_kernel(
 
 static void solve_gpu_free(int* d_failed, Real* d_min_dt, Real* d_l2_sum, Real* d_forces,
     Real* d_residual_history, Real* d_state_bounds_history, int* d_failure_cell, Real* d_failure_state) {
-    cudaFree(d_failed); cudaFree(d_min_dt); cudaFree(d_l2_sum); cudaFree(d_forces);
-    cudaFree(d_residual_history); cudaFree(d_state_bounds_history);
-    cudaFree(d_failure_cell); cudaFree(d_failure_state);
+    cuda_free_safe(d_failed); cuda_free_safe(d_min_dt); cuda_free_safe(d_l2_sum); cuda_free_safe(d_forces);
+    cuda_free_safe(d_residual_history); cuda_free_safe(d_state_bounds_history);
+    cuda_free_safe(d_failure_cell); cuda_free_safe(d_failure_state);
 }
 
 static CfdSolveSummary solve_gpu_impl(
@@ -289,22 +289,22 @@ CfdSolveSummary solve_gpu(
     int* d_failure_cell = nullptr;
     Real* d_failure_state = nullptr;
 
-    if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(Real)), "cudaMalloc d_residual_history", error)) { cudaFree(d_residual_history); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(Real)), "cudaMalloc d_residual_history", error)) { cuda_free_safe(d_residual_history); CfdSolveSummary s; s.failed = true; return s; }
 
     bool diag = config.diagnostic_level != DiagnosticLevel::Off;
     if (diag) {
-        if (!cuda_check(cudaMalloc(&d_state_bounds_history, config.max_iter * 6 * sizeof(Real)), "cudaMalloc d_state_bounds_history", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); CfdSolveSummary s; s.failed = true; return s; }
-        if (!cuda_check(cudaMalloc(&d_failure_cell, sizeof(int)), "cudaMalloc d_failure_cell", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); cudaFree(d_failure_cell); CfdSolveSummary s; s.failed = true; return s; }
-        if (!cuda_check(cudaMalloc(&d_failure_state, 5 * sizeof(Real)), "cudaMalloc d_failure_state", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); cudaFree(d_failure_cell); cudaFree(d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-        if (!cuda_check(cudaMemset(d_failure_cell, 0xFF, sizeof(int)), "init d_failure_cell", error)) { cudaFree(d_residual_history); cudaFree(d_state_bounds_history); cudaFree(d_failure_cell); cudaFree(d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+        if (!cuda_check(cudaMalloc(&d_state_bounds_history, config.max_iter * 6 * sizeof(Real)), "cudaMalloc d_state_bounds_history", error)) { cuda_free_safe(d_residual_history); cuda_free_safe(d_state_bounds_history); CfdSolveSummary s; s.failed = true; return s; }
+        if (!cuda_check(cudaMalloc(&d_failure_cell, sizeof(int)), "cudaMalloc d_failure_cell", error)) { cuda_free_safe(d_residual_history); cuda_free_safe(d_state_bounds_history); cuda_free_safe(d_failure_cell); CfdSolveSummary s; s.failed = true; return s; }
+        if (!cuda_check(cudaMalloc(&d_failure_state, 5 * sizeof(Real)), "cudaMalloc d_failure_state", error)) { cuda_free_safe(d_residual_history); cuda_free_safe(d_state_bounds_history); cuda_free_safe(d_failure_cell); cuda_free_safe(d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+        if (!cuda_check(cudaMemset(d_failure_cell, 0xFF, sizeof(int)), "init d_failure_cell", error)) { cuda_free_safe(d_residual_history); cuda_free_safe(d_state_bounds_history); cuda_free_safe(d_failure_cell); cuda_free_safe(d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     }
 
     CfdSolveSummary result = solve_gpu_impl(d_mesh, condition, config, d_failed, d_min_dt, d_l2_sum, d_forces,
         d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state, false, error);
-    cudaFree(d_residual_history);
-    cudaFree(d_state_bounds_history);
-    cudaFree(d_failure_cell);
-    cudaFree(d_failure_state);
+    cuda_free_safe(d_residual_history);
+    cuda_free_safe(d_state_bounds_history);
+    cuda_free_safe(d_failure_cell);
+    cuda_free_safe(d_failure_state);
     return result;
 }
 

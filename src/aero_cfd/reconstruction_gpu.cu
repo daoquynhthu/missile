@@ -93,7 +93,7 @@ __global__ void gg_gradient_kernel_atomic(
         wF = 0.5f * (wL + wR);
         pF = 0.5f * (pL + pR);
 
-        if (d_volume[right] <= 0.0f) {
+        if (!real_isfinite(d_volume[right]) || d_volume[right] <= 0.0f) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
@@ -123,7 +123,7 @@ __global__ void gg_gradient_kernel_atomic(
         rhoF = rhoL; uF = uL; vF = vL; wF = wL; pF = pL;
     }
 
-    if (d_volume[left] <= 0.0f) {
+    if (!real_isfinite(d_volume[left]) || d_volume[left] <= 0.0f) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
@@ -193,7 +193,7 @@ __global__ void gg_gradient_kernel_colored(
         wF = 0.5f * (wL + wR);
         pF = 0.5f * (pL + pR);
 
-        if (d_volume[right] <= 0.0f) {
+        if (!real_isfinite(d_volume[right]) || d_volume[right] <= 0.0f) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
@@ -223,7 +223,7 @@ __global__ void gg_gradient_kernel_colored(
         rhoF = rhoL; uF = uL; vF = vL; wF = wL; pF = pL;
     }
 
-    if (d_volume[left] <= 0.0f) {
+    if (!real_isfinite(d_volume[left]) || d_volume[left] <= 0.0f) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
@@ -504,17 +504,17 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
 
     init_minmax_kernel<<<cell_grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, nc, gamma, d_minmax, d_failed);
-    if (!cuda_check(cudaGetLastError(), "init_minmax_kernel", error)) { cudaFree(d_minmax); return false; }
+    if (!cuda_check(cudaGetLastError(), "init_minmax_kernel", error)) { cuda_free_safe(d_minmax); return false; }
 
     update_minmax_kernel<<<face_grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, nc, nf,
         mesh.face_data().left_cell, mesh.face_data().right_cell, mesh.face_data().boundary,
         gamma, d_minmax, d_failed);
-    if (!cuda_check(cudaGetLastError(), "update_minmax_kernel", error)) { cudaFree(d_minmax); return false; }
+    if (!cuda_check(cudaGetLastError(), "update_minmax_kernel", error)) { cuda_free_safe(d_minmax); return false; }
 
     int limiter_grid = (nc * 5 + block - 1) / block;
     init_float_one_kernel<<<limiter_grid, block>>>(mesh.limiters_device(), nc * 5);
-    if (!cuda_check(cudaGetLastError(), "init_float_one limiters", error)) { cudaFree(d_minmax); return false; }
+    if (!cuda_check(cudaGetLastError(), "init_float_one limiters", error)) { cuda_free_safe(d_minmax); return false; }
 
     bj_limiter_kernel<<<face_grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, nc, nf,
@@ -524,8 +524,8 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
         gamma,
         mesh.gradients_device(), d_minmax,
         mesh.limiters_device(), d_failed);
-    if (!cuda_check(cudaGetLastError(), "bj_limiter_kernel", error)) { cudaFree(d_minmax); return false; }
-    cudaFree(d_minmax);
+    if (!cuda_check(cudaGetLastError(), "bj_limiter_kernel", error)) { cuda_free_safe(d_minmax); return false; }
+    cuda_free_safe(d_minmax);
 
     if (d_failed) {
         int host_failed = 0;

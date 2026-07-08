@@ -452,7 +452,7 @@ bool compute_euler_residual_gpu(
     int* d_failed = nullptr;
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) return false;
     bool ok = compute_euler_residual_gpu(mesh, freestream, gamma, d_failed, error, reconstruction_order);
-    cudaFree(d_failed);
+    cuda_free_safe(d_failed);
     return ok;
 }
 
@@ -484,13 +484,13 @@ bool compute_euler_residual_gpu_timed(
     if (!read_kernel_failed_flag(d_failed, error)) goto fail;
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    cudaFree(d_failed);
+    cuda_free_safe(d_failed);
     return true;
 
 fail:
     if (start) cudaEventDestroy(start);
     if (stop) cudaEventDestroy(stop);
-    cudaFree(d_failed);
+    cuda_free_safe(d_failed);
     return false;
 }
 

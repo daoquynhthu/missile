@@ -120,13 +120,7 @@ ConstDeviceCellData DeviceMesh::cell_data() const {
     return cd;
 }
 
-template <typename T>
-static bool cuda_free_and_null(T*& ptr) {
-    if (!ptr) return true;
-    cudaError_t err = cudaFree(ptr);
-    ptr = nullptr;
-    return err == cudaSuccess;
-}
+
 
 static int greedy_color_faces(
     const std::vector<int>& h_left_cell,
@@ -168,31 +162,29 @@ static int greedy_color_faces(
 }
 
 void DeviceMesh::release() {
-#define FREE_AND_ASSERT(ptr) do { bool ok = cuda_free_and_null(ptr); assert(ok); } while(0)
-    FREE_AND_ASSERT(d_q_);
-    FREE_AND_ASSERT(d_residual_);
-    FREE_AND_ASSERT(d_nx_);
-    FREE_AND_ASSERT(d_ny_);
-    FREE_AND_ASSERT(d_nz_);
-    FREE_AND_ASSERT(d_area_);
-    FREE_AND_ASSERT(d_left_cell_);
-    FREE_AND_ASSERT(d_right_cell_);
-    FREE_AND_ASSERT(d_boundary_);
-    FREE_AND_ASSERT(d_volume_);
-    FREE_AND_ASSERT(d_h_min_);
-    FREE_AND_ASSERT(d_cx_);
-    FREE_AND_ASSERT(d_cy_);
-    FREE_AND_ASSERT(d_cz_);
-    FREE_AND_ASSERT(d_face_cx_);
-    FREE_AND_ASSERT(d_face_cy_);
-    FREE_AND_ASSERT(d_face_cz_);
-    FREE_AND_ASSERT(d_gradients_);
-    FREE_AND_ASSERT(d_limiters_);
-    FREE_AND_ASSERT(d_color_offsets_);
-    FREE_AND_ASSERT(d_halo_indices_);
-    FREE_AND_ASSERT(d_halo_send_buf_);
-    FREE_AND_ASSERT(d_halo_recv_buf_);
-#undef FREE_AND_ASSERT
+    cuda_free_safe(d_q_);
+    cuda_free_safe(d_residual_);
+    cuda_free_safe(d_nx_);
+    cuda_free_safe(d_ny_);
+    cuda_free_safe(d_nz_);
+    cuda_free_safe(d_area_);
+    cuda_free_safe(d_left_cell_);
+    cuda_free_safe(d_right_cell_);
+    cuda_free_safe(d_boundary_);
+    cuda_free_safe(d_volume_);
+    cuda_free_safe(d_h_min_);
+    cuda_free_safe(d_cx_);
+    cuda_free_safe(d_cy_);
+    cuda_free_safe(d_cz_);
+    cuda_free_safe(d_face_cx_);
+    cuda_free_safe(d_face_cy_);
+    cuda_free_safe(d_face_cz_);
+    cuda_free_safe(d_gradients_);
+    cuda_free_safe(d_limiters_);
+    cuda_free_safe(d_color_offsets_);
+    cuda_free_safe(d_halo_indices_);
+    cuda_free_safe(d_halo_send_buf_);
+    cuda_free_safe(d_halo_recv_buf_);
     cell_count_ = 0;
     face_count_ = 0;
     n_colors_ = 0;
@@ -431,9 +423,9 @@ bool DeviceMesh::download_gradients(std::vector<PrimitiveGradient>& gradients, s
 }
 
 bool DeviceMesh::allocate_halo(int n_halo_cells) {
-    cuda_free_and_null(d_halo_indices_);
-    cuda_free_and_null(d_halo_send_buf_);
-    cuda_free_and_null(d_halo_recv_buf_);
+    cuda_free_safe(d_halo_indices_);
+    cuda_free_safe(d_halo_send_buf_);
+    cuda_free_safe(d_halo_recv_buf_);
     n_halo_cells_ = 0;
     if (n_halo_cells <= 0) {
         return true;
