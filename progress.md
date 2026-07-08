@@ -211,3 +211,17 @@
 - 提交 `ebe6b08`。
 - Verification: `cmake --build build --config Release -j --clean-first` 通过；
   6 CFD 测试套件全部 PASS（仅 BW-1 预存）。
+
+2026-07-08
+- Phase 5 (GPU Viscous Navier-Stokes foundation) implemented.
+  - `include/aero_cfd/cfd_config.hpp`: 添加 `viscous/Re/prandtl/mu_ref/T_ref/sutherland_T/wall_temperature` 参数。
+  - `include/aero_cfd/device_mesh.hpp` + `src/aero_cfd/device_mesh.cu`: 添加 `d_mu_`/`d_lam_` SoA 缓冲区、`allocate_viscous()`、move/release 支持。
+  - `src/aero_cfd/gpu_viscous.cu` (NEW): `viscous_flux_kernel_atomic` — 从 `d_gradients_` (15分量 PrimitiveGradient) 即时计算 ViscousGradient (dT 通过商规则)，面梯度平均 + 正交修正，Sutherland mu/kappa，应力张量 tau_ij，粘性通量累加至残差。支持 Interior 和 NoSlipWall 面。
+  - `src/aero_cfd/gpu_timestep.cu`: `timestep_kernel` 增加粘性时间步长分支 `dt_visc = CFL * rho * h^2 * Re / mu`，取 `min(dt_inv, dt_visc)`。
+  - `src/aero_cfd/gpu_wall.cu`: `wall_force_kernel` 增加粘性剪应力 `tau_ij*n_j` 计算 (NoSlipWall + `viscous=true`)。
+  - `src/aero_cfd/gpu_solver.cu`: `solve_gpu_impl` 中无粘通量后插入 `compute_viscous_flux_gpu()`，时间步长/壁面力传递粘性参数。
+  - `include/aero_cfd/gpu_solver_internal.hpp`: 新增 `compute_viscous_flux_gpu` 声明 + `compute_timestep_gpu`/`compute_wall_forces_gpu` 粘性重载。
+  - `tests/cfd/test_cfd_gpu.cpp`: 3 个粘性测试 (VISC-1 viscous=false 回归, VISC-2 有限力, VISC-3 粘性≠无粘)。
+  - 设计决策: 粘性梯度不额外存储 (即时从 PrimitiveGradient 计算), 粘性通量为独立核函数 (可组合), 1/Re 因子显式包含在应力张量中。
+- Verification: `cmake --build build --config Release -j --clean-first` 通过；
+  `TestCfdGpu.exe` 28/29 PASS (仅 BW-1 预存)。
