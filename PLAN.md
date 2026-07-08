@@ -503,18 +503,18 @@ Files:
 
 Tasks:
 
-- [ ] `CfdForceResult.fidelity = "cfd-gpu"` or `"cfd-cpu"`
-- [ ] Supported-condition range check: `Mach ∈ [1.2, 30]`, `|alpha| ≤ 30°`, `|beta| ≤ 10°`
-- [ ] Fail with clear error for unsupported conditions (no silent fallback)
-- [ ] CSV fidelity source column: `cfd-gpu` vs `newtonian` vs `engineering`
-- [ ] Integration test: 3×3 Mach×alpha grid, all forces finite, symmetry holds
-- [ ] `use_fvm=true` no longer fails for supported conditions
+- [x] `CfdForceResult.fidelity = "cfd-gpu"` or `"cfd-cpu"`
+- [x] Supported-condition range check: `Mach ∈ [1.2, 30]`, `|alpha| ≤ 30°`, `|beta| ≤ 10°`
+- [x] Fail with clear error for unsupported conditions (no silent fallback)
+- [x] CSV fidelity source column: `cfd-gpu` vs `newtonian` vs `engineering`
+- [x] Integration test: 3×3 Mach×alpha grid, all forces finite, symmetry holds
+- [x] `use_fvm=true` no longer fails for supported conditions
 
 Gate:
 
-- `use_fvm=true` with supported conditions produces valid CSV with `fidelity=cfd-gpu`.
-- `use_fvm=true` with unsupported conditions produces clear error message.
-- CSV column `fidelity` appears and distinguishes GPU CFD from other sources.
+- [x] `use_fvm=true` with supported conditions produces valid CSV with `fidelity=cfd-gpu`.
+- [x] `use_fvm=true` with unsupported conditions produces clear error message.
+- [x] CSV column `fidelity` appears and distinguishes GPU CFD from other sources.
 
 ---
 
@@ -533,7 +533,7 @@ Files:
 
 Tasks:
 
-- [ ] Extend state from 5 to 6 variables (`rho*nu_tilde`)
+- [x] Extend state from 5 to 6 variables (`rho*nu_tilde`)
 - [ ] SA production term: `cb1 * Omega_tilde * nu_tilde`
 - [ ] SA destruction term: `cw1 * fw * (nu_tilde/d)^2`
 - [ ] SA diffusion: standard viscous operator

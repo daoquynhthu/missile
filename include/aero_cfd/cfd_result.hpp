@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aero_cfd/real.hpp"
+#include <string>
 
 namespace AeroSim {
 namespace Cfd {
@@ -18,6 +19,7 @@ struct CfdForceResult {
     Real q_stag = 0.0f;
     int iterations = 0;
     Real residual = 0.0f;
+    std::string fidelity = "cfd-cpu";
 };
 
 } // namespace Cfd

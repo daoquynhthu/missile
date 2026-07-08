@@ -263,7 +263,11 @@ private:
             std::string cell;
             std::vector<double> row;
             while (std::getline(ss, cell, ',')) {
-                row.push_back(std::stod(cell));
+                try {
+                    row.push_back(std::stod(cell));
+                } catch (...) {
+                    row.push_back(0.0);
+                }
             }
 
             if (row.size() < 13) continue;

@@ -128,6 +128,7 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
         q_star.rho_v = rho_star * (left.v + (s_m - vn_l) * ny);
         q_star.rho_w = rho_star * (left.w + (s_m - vn_l) * nz);
         q_star.rho_E = rho_star * e_star;
+        q_star.rho_nu_tilde = q_l.rho_nu_tilde * (s_l - vn_l) / (s_l - s_m);
 
         EulerFlux f = f_l;
         f.mass += s_l * (q_star.rho - q_l.rho);
@@ -135,6 +136,7 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
         f.mom_y += s_l * (q_star.rho_v - q_l.rho_v);
         f.mom_z += s_l * (q_star.rho_w - q_l.rho_w);
         f.energy += s_l * (q_star.rho_E - q_l.rho_E);
+        f.turbulence += s_l * (q_star.rho_nu_tilde - q_l.rho_nu_tilde);
         (void)p_star;
         return f;
     }
@@ -148,6 +150,7 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
     q_star.rho_v = rho_star * (right.v + (s_m - vn_r) * ny);
     q_star.rho_w = rho_star * (right.w + (s_m - vn_r) * nz);
     q_star.rho_E = rho_star * e_star;
+    q_star.rho_nu_tilde = q_r.rho_nu_tilde * (s_r - vn_r) / (s_r - s_m);
 
     EulerFlux f = f_r;
     f.mass += s_r * (q_star.rho - q_r.rho);
@@ -155,6 +158,7 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
     f.mom_y += s_r * (q_star.rho_v - q_r.rho_v);
     f.mom_z += s_r * (q_star.rho_w - q_r.rho_w);
     f.energy += s_r * (q_star.rho_E - q_r.rho_E);
+    f.turbulence += s_r * (q_star.rho_nu_tilde - q_r.rho_nu_tilde);
     return f;
 }
 
@@ -278,7 +282,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
             q_next[i] = add_scaled(q[i], residual[i], scale);
             l2 += state_delta_l2(q_next[i], q[i]);
         }
-        Real residual_l2 = std::sqrt(l2 / (5.0f * static_cast<Real>(q.size())));
+        Real residual_l2 = std::sqrt(l2 / (static_cast<Real>(CFD_NVAR) * static_cast<Real>(q.size())));
         summary.residual_history.push_back(residual_l2);
         q.swap(q_next);
 

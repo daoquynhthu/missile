@@ -745,3 +745,127 @@ Fix applied (2026-07-08): 移除非 `__CUDACC__` 路径的 atomic 包装，与 f
 | INFO | 2 | PH4-B-10 (CUDA_KERNEL_CHECK 未用, open), PH4-B-15 — FIXED |
 
 Total: 12 FIXED / 1 WONTFIX / 2 open (1 LOW + 1 INFO).
+
+---
+
+## Phase 6 审计 (2026-07-08)
+
+3 路并行子 Agent 审计结果汇总（CFD 表格集成 Phase 6）。
+
+### Category A: Correctness — 潜在运行时缺陷
+
+**PH6-A-1: Newtonian 批处理始终在 CFD 之前运行，浪费 GPU 时间** [MEDIUM]
+`src/aero_table_gen.cpp:62`
+
+`use_fvm=true` 时，`solver.compute_batch()` 始终在 line 62 执行 Newtonian 计算，随后 lines 110-129 的 CFD 结果将其覆盖。对于纯 CFD 场景，STL 加载（line 23）和 Newtonian 计算都是无意义的 GPU 开销。表规模较大时（500+ 条件），可跳过这些步骤。
+
+**PH6-A-2: `mesh_outer_scale <= 1.0f` 时 `generate_structured_cube_mesh` 返回空网格** [MEDIUM]
+`src/aero_table_gen.cpp:93-94`
+
+当 `cfg.mesh_outer_scale <= 1.0f` 时，`generate_structured_cube_mesh` 返回 0 节点/0 单元的空 `CfdMesh{}`。`compute_mesh_metrics` 会生成 `valid=false` 的质量报告，但代码从不检查该报告。`cfd_solver.load_mesh()` 对空网格的行为未定义（可能崩溃或返回 false，但错误消息不明确）。
+
+**PH6-A-3: CFD 求解器中途失败直接中止所有后续条件** [LOW]
+`src/aero_table_gen.cpp:121-124`
+
+任一条件的 CFD 求解失败（`summary.failed`）导致整个函数返回 false，剩余条件被丢弃。对于大表格，更健壮的做法是跳过失败行继续执行剩余条件。在当前同步表格生成场景下可接受。
+
+### Category B: Error Handling & Resource Safety
+
+**PH6-B-1: 测试失败残留下临时 CSV 文件** [HIGH]
+`tests/test_aero_table_gen.cpp:91,95,117` 等多处
+
+测试使用 `std::remove()` 清理临时 CSV 文件，但如果测试在写入 CSV 后调用 `FAIL()` 提前返回，清理代码被跳过。多次运行后构建目录积累残留文件。
+
+**PH6-B-2: 负 `mesh_subdivisions` 无验证** [LOW]
+`src/aero_table_gen.cpp:87-89`
+
+`mesh_subdivisions` 为 `int` 类型，负值被 `std::max(1.0, ...)` 静默饱和到下限。没有警告输出，用户可能误以为设置生效。
+
+**PH6-B-3: 空输入向量产生 0 行 CSV 并返回成功** [MEDIUM]
+`src/aero_table_gen.cpp:65-66`
+
+三个输入向量（mach/alpha/beta）全为空时，`conditions.empty()` 为 true，`use_cfd=false`，函数写入仅包含表头的 CSV 并返回 true。调用方无法区分"0 个条件"和"成功生成 100 行"。
+
+### Category C: Design Gaps
+
+**PH6-C-1: 立方体网格嵌入的是单位立方体，不是 STL 几何体** [HIGH]
+`src/aero_table_gen.cpp:93-94`
+
+结构化立方体网格包装的是单位立方体滑移壁面体（`mesh_metrics.cpp:225-227` 中 `|cx|<1 && |cy|<1 && |cz|<1` 的区域），不是 line 23 加载的实际 STL 几何体。CSV 的 `fidelity="cfd-gpu"` 列具有误导性——用户可能认为力系数对应的是 HGV 模型的高保真数据。`aero_solver.hpp` 和 `aero_table_gen.cpp` 的注释均未记录此设计限制。
+
+**PH6-C-2: `fvm_mach_min` 配置字段定义但从未使用** [MEDIUM]
+`include/aero_solver/aero_solver.hpp:106` vs `src/aero_table_gen.cpp:69`
+
+`AeroTableConfig::fvm_mach_min`（默认值 3.0f）存在，但实现代码硬编码 `MACH_MIN=1.2`。用户设置 `cfg.fvm_mach_min=5.0f` 无效。
+
+**PH6-C-3: Fidelity 列导致 DartAeroTable CSV 加载器崩溃** [HIGH]
+`include/rm_dart_aero_table.hpp:263-267`
+
+CSV 新增第 13 列 Fidelity。`DartAeroTable::load_csv_table` 调用 `std::stod` 解析所有列但无 `try/catch`。`stod("cfd-gpu")` 抛出 `std::invalid_argument` 异常传播出去，导致程序崩溃。`AerodynamicsModel::load_csv_table` 有 `try/catch` 但静默将 fidelity 置为 0.0（见 PH6-C-4）。
+
+**PH6-C-4: Fidelity 列在 AerodynamicsModel 加载器中静默丢失** [MEDIUM]
+`include/aerodynamics_model.hpp:119-124`
+
+`AerodynamicsModel::load_csv_table` 使用 `try/catch { v=0.0 }` 包装 `std::stod`，因此 `"cfd-gpu"` 静默变为 `row[12]=0.0`。加载成功但 fidelity 信息丢失——用户可能认为在使用 CFD 数据但实际上使用 Newtonian 数据。
+
+**PH6-C-5: CfdConfig 求解器参数未暴露到 AeroTableConfig** [LOW]
+`src/aero_table_gen.cpp:97-102`
+
+CFL(0.5), max_iter(1000), convergence_tol(1e-8), gamma(1.4) 使用硬编码默认值。表格生成用户若需更严格收敛或更快求解无法控制这些参数。建议将关键参数暴露到 `AeroTableConfig`。
+
+**PH6-C-6: 无法通过 generate_aero_table 生成粘性 CFD 表** [HIGH]
+`src/aero_table_gen.cpp:97-102`
+
+`CfdConfig::viscous` 从未设为 true，`AeroTableConfig` 中没有字段传递 `Re/prandtl/mu_ref/T_ref/sutherland_T/wall_temperature`。Phase 5 的 GPU 粘性 NS 求解器已实现，但表格生成 API 完全无法访问它。
+
+### Category D: Test Coverage
+
+**PH6-D-1: 无非零 beta 网格测试** [HIGH]
+所有 5 个测试均使用 `beta={0.0}`。多维表格（beta=-10,0,+10）从未测试。CY/Cl/Cn 对称性仅在 beta=0 时验证。
+
+**PH6-D-2: 边界越界值未测试** [MEDIUM]
+仅测试 `Mach=0.5`（远低于 1.2）。`alpha=31`、`Mach=31`、`beta=-11`（紧贴边界外）未测试——浮点比较可能导致边界判定错误。
+
+**PH6-D-3: 对称容差 1e-3 对 n=5 粗网格可能过紧** [HIGH]
+`tests/test_aero_table_gen.cpp:112`
+
+n=5 网格（~320 个四面体）的离散化不对称可达 O(0.01)。`|CY|<1e-3` 检查可能在非理想网格上产生假阳性失败。
+
+**PH6-D-4: Newtonian vs Euler 在 Mach=4 时 CX 差异 1% 阈值可能过紧** [HIGH]
+`tests/test_aero_table_gen.cpp:217-219`
+
+细长体在 Mach=4、alpha=0 时，Newtonian（激波-膨胀法）CX 可能与 Euler 匹配在 <1% 内。固定 1e-2 阈值有假阴性风险。建议比较 CL 或 L/D 以获得更稳健的区分。
+
+**PH6-D-5: 无测试计数器检测跳过测试** [MEDIUM]
+`tests/test_aero_table_gen.cpp:17`
+
+`TEST` 宏不递增计数器。如果某个测试函数被意外注释，`main()` 无法察觉。与 `test_cfd_gpu.cpp` 的 `test_count` 模式形成对比。
+
+### Category E: Minor/Convention
+
+**PH6-E-1: FAIL 宏缺少诊断值（约 50% 的消息）** [MEDIUM]
+多处 FAIL 调用打印静态度量字符串而不包含实际值：
+- `"fidelity mismatch"` — 没有预期/实际 fidelity 值
+- `"CY symmetry"` — 没有实际 CY 值
+- `"table gen failed"` — 没有参数上下文
+与 `test_cfd_gpu.cpp` 的惯例（总是包含 `%s`/`%g`/`%zu`）不一致。
+
+**PH6-E-2: FAIL 宏缺少 #include <cstdio>** [LOW]
+`tests/test_aero_table_gen.cpp:20`
+
+`snprintf` 依赖从 `<iostream>` 的传递包含。应显式包含 `<cstdio>`。
+
+**PH6-E-3: TEST 宏未包装 do{...}while(0)** [INFO]
+与 `test_cfd_gpu.cpp:29` 的约定不一致。不影响功能。
+
+### 汇总
+
+| 严重性 | 数量 | 项目 |
+|--------|------|------|
+| HIGH | 4 | PH6-C-1 (立方体≠STL), PH6-C-3 (DartAeroTable 崩溃), PH6-C-6 (无粘性表), PH6-D-1 (无非零 beta) |
+| MEDIUM | 7 | PH6-A-1 (Newtonian 浪费), PH6-A-2 (空网格), PH6-B-3 (空输入), PH6-C-2 (fvm_mach_min 未用), PH6-C-4 (fidelity 静默丢失), PH6-D-2 (边界测试), PH6-D-5 (无测试计数器) |
+| LOW | 3 | PH6-A-3 (中途失败), PH6-B-2 (负 subdivisions), PH6-E-2 (缺少 cstdio) |
+| INFO | 1 | PH6-E-3 (TEST 宏风格) |
+| 加急 | 2 | PH6-D-3 (对称容差), PH6-D-4 (差异阈值) — 这两个需要在 Phase 6 测试已通过的基础上确认是否真的过紧还是当前正好满足；加急标记的含义是：如果后续修改导致网格或物理变化，需要优先调整这两个阈值 |
+
+Total: 17 个新发现（4 HIGH, 7 MEDIUM, 3 LOW, 1 INFO, 2 加急）。

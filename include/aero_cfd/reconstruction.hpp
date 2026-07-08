@@ -26,6 +26,9 @@ struct PrimitiveGradient {
     Real dp_dx = 0.0f;
     Real dp_dy = 0.0f;
     Real dp_dz = 0.0f;
+    Real dnu_tilde_dx = 0.0f;
+    Real dnu_tilde_dy = 0.0f;
+    Real dnu_tilde_dz = 0.0f;
 };
 
 struct PrimitiveLimiter {
@@ -34,6 +37,7 @@ struct PrimitiveLimiter {
     Real v = 1.0f;
     Real w = 1.0f;
     Real p = 1.0f;
+    Real nu_tilde = 1.0f;
 };
 
 class DeviceMesh;

@@ -6,6 +6,8 @@
 namespace AeroSim {
 namespace Cfd {
 
+constexpr int CFD_NVAR = 6;
+
 struct CfdConfig {
     Real cfl = 0.5f;
     int max_iter = 1000;
@@ -27,6 +29,9 @@ struct CfdConfig {
     Real T_ref = 288.15f;
     Real sutherland_T = 110.4f;
     Real wall_temperature = 300.0f;
+
+    // RANS SA turbulence
+    bool turbulence = false;
 };
 
 struct FreestreamCondition {

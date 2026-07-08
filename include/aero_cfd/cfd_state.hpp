@@ -13,6 +13,7 @@ struct ConservativeState {
     Real rho_v = 0.0f;
     Real rho_w = 0.0f;
     Real rho_E = 0.0f;
+    Real rho_nu_tilde = 0.0f;
 };
 
 struct PrimitiveState {
@@ -21,6 +22,7 @@ struct PrimitiveState {
     Real v = 0.0f;
     Real w = 0.0f;
     Real p = 0.0f;
+    Real nu_tilde = 0.0f;
 };
 
 struct EulerFlux {
@@ -29,11 +31,12 @@ struct EulerFlux {
     Real mom_y = 0.0f;
     Real mom_z = 0.0f;
     Real energy = 0.0f;
+    Real turbulence = 0.0f;
 };
 
 inline bool is_valid_primitive(const PrimitiveState& w) {
     return std::isfinite(w.rho) && std::isfinite(w.u) && std::isfinite(w.v) &&
-           std::isfinite(w.w) && std::isfinite(w.p) &&
+           std::isfinite(w.w) && std::isfinite(w.p) && std::isfinite(w.nu_tilde) &&
            w.rho > 0.0f && w.p > 0.0f;
 }
 
@@ -45,6 +48,7 @@ inline ConservativeState primitive_to_conservative(const PrimitiveState& w, Real
     q.rho_v = w.rho * w.v;
     q.rho_w = w.rho * w.w;
     q.rho_E = w.p / (gamma - 1.0f) + w.rho * kinetic;
+    q.rho_nu_tilde = w.rho * w.nu_tilde;
     return q;
 }
 
@@ -57,6 +61,7 @@ inline bool conservative_to_primitive(const ConservativeState& q, Real gamma, Pr
     w.w = q.rho_w * inv_rho;
     Real kinetic = 0.5f * (w.u*w.u + w.v*w.v + w.w*w.w);
     w.p = (gamma - 1.0f) * (q.rho_E - q.rho * kinetic);
+    w.nu_tilde = q.rho_nu_tilde * inv_rho;
     return is_valid_primitive(w);
 }
 
@@ -75,6 +80,7 @@ inline EulerFlux physical_flux(const PrimitiveState& w, Real gamma, Real nx, Rea
     f.mom_y = w.rho * w.v * vn + w.p * ny;
     f.mom_z = w.rho * w.w * vn + w.p * nz;
     f.energy = (rho_E + w.p) * vn;
+    f.turbulence = w.rho * w.nu_tilde * vn;
     return f;
 }
 
@@ -85,6 +91,7 @@ inline EulerFlux slip_wall_flux(const PrimitiveState& w, Real nx, Real ny, Real 
     f.mom_y = w.p * ny;
     f.mom_z = w.p * nz;
     f.energy = 0.0f;
+    f.turbulence = 0.0f;
     return f;
 }
 

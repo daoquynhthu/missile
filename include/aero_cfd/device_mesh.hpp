@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aero_cfd/real.hpp"
+#include "aero_cfd/cfd_config.hpp"
 #include "aero_cfd/cfd_mesh.hpp"
 #include "aero_cfd/cfd_state.hpp"
 #include "aero_cfd/reconstruction.hpp"
@@ -56,8 +57,8 @@ struct ConstDeviceCellData {
 
 class DeviceMesh {
 public:
-    static constexpr int NVAR = 5;
-    static constexpr int NGRAD = 15;
+    static constexpr int NVAR = CFD_NVAR;
+    static constexpr int NGRAD = 18;
     static constexpr int kMaxColors = 64;
 
     DeviceMesh() = default;

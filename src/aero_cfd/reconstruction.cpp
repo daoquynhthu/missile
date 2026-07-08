@@ -15,6 +15,7 @@ PrimitiveState average_state(const PrimitiveState& a, const PrimitiveState& b) {
     out.v = 0.5f * (a.v + b.v);
     out.w = 0.5f * (a.w + b.w);
     out.p = 0.5f * (a.p + b.p);
+    out.nu_tilde = 0.5f * (a.nu_tilde + b.nu_tilde);
     return out;
 }
 
@@ -38,6 +39,9 @@ void add_face_contribution(PrimitiveGradient& g, const PrimitiveState& w, const 
     g.dp_dx += (w.p - center.p) * sx;
     g.dp_dy += (w.p - center.p) * sy;
     g.dp_dz += (w.p - center.p) * sz;
+    g.dnu_tilde_dx += (w.nu_tilde - center.nu_tilde) * sx;
+    g.dnu_tilde_dy += (w.nu_tilde - center.nu_tilde) * sy;
+    g.dnu_tilde_dz += (w.nu_tilde - center.nu_tilde) * sz;
 }
 
 Real positive_theta(Real center, Real reconstructed, Real floor_value) {
@@ -65,6 +69,9 @@ PrimitiveGradient scale_gradient(const PrimitiveGradient& g, Real theta) {
     out.dp_dx *= theta;
     out.dp_dy *= theta;
     out.dp_dz *= theta;
+    out.dnu_tilde_dx *= theta;
+    out.dnu_tilde_dy *= theta;
+    out.dnu_tilde_dz *= theta;
     return out;
 }
 
@@ -120,7 +127,8 @@ void assign_gradient_component(PrimitiveGradient& g, int component, const Real x
         case 1: g.du_dx = x[0]; g.du_dy = x[1]; g.du_dz = x[2]; break;
         case 2: g.dv_dx = x[0]; g.dv_dy = x[1]; g.dv_dz = x[2]; break;
         case 3: g.dw_dx = x[0]; g.dw_dy = x[1]; g.dw_dz = x[2]; break;
-        default: g.dp_dx = x[0]; g.dp_dy = x[1]; g.dp_dz = x[2]; break;
+        case 4: g.dp_dx = x[0]; g.dp_dy = x[1]; g.dp_dz = x[2]; break;
+        default: g.dnu_tilde_dx = x[0]; g.dnu_tilde_dy = x[1]; g.dnu_tilde_dz = x[2]; break;
     }
 }
 
@@ -130,7 +138,8 @@ Real primitive_component(const PrimitiveState& w, int component) {
         case 1: return w.u;
         case 2: return w.v;
         case 3: return w.w;
-        default: return w.p;
+        case 4: return w.p;
+        default: return w.nu_tilde;
     }
 }
 
@@ -154,11 +163,13 @@ void update_minmax(PrimitiveState& min_w, PrimitiveState& max_w, const Primitive
     min_w.v = std::min(min_w.v, w.v);
     min_w.w = std::min(min_w.w, w.w);
     min_w.p = std::min(min_w.p, w.p);
+    min_w.nu_tilde = std::min(min_w.nu_tilde, w.nu_tilde);
     max_w.rho = std::max(max_w.rho, w.rho);
     max_w.u = std::max(max_w.u, w.u);
     max_w.v = std::max(max_w.v, w.v);
     max_w.w = std::max(max_w.w, w.w);
     max_w.p = std::max(max_w.p, w.p);
+    max_w.nu_tilde = std::max(max_w.nu_tilde, w.nu_tilde);
 }
 
 void update_limiter(PrimitiveLimiter& limiter, const PrimitiveState& center, const PrimitiveState& reconstructed,
@@ -168,6 +179,7 @@ void update_limiter(PrimitiveLimiter& limiter, const PrimitiveState& center, con
     limiter.v = std::min(limiter.v, limiter_theta(center.v, reconstructed.v, min_w.v, max_w.v));
     limiter.w = std::min(limiter.w, limiter_theta(center.w, reconstructed.w, min_w.w, max_w.w));
     limiter.p = std::min(limiter.p, limiter_theta(center.p, reconstructed.p, min_w.p, max_w.p));
+    limiter.nu_tilde = std::min(limiter.nu_tilde, limiter_theta(center.nu_tilde, reconstructed.nu_tilde, min_w.nu_tilde, max_w.nu_tilde));
 }
 
 } // namespace
@@ -217,7 +229,7 @@ std::vector<PrimitiveGradient> compute_least_squares_gradients(
 
     struct CellSystem {
         Real a[3][3] = {};
-        Real b[5][3] = {};
+        Real b[6][3] = {};
     };
 
     std::vector<CellSystem> systems(q.size());
@@ -230,7 +242,7 @@ std::vector<PrimitiveGradient> compute_least_squares_gradients(
         Real dz = mesh.cells[right].cz - mesh.cells[left].cz;
         accumulate_least_squares_matrix(systems[left].a, dx, dy, dz);
         accumulate_least_squares_matrix(systems[right].a, -dx, -dy, -dz);
-        for (int component = 0; component < 5; ++component) {
+        for (int component = 0; component < 6; ++component) {
             Real dphi = primitive_component(primitive[right], component) - primitive_component(primitive[left], component);
             accumulate_least_squares_rhs(systems[left].b[component], dx, dy, dz, dphi);
             accumulate_least_squares_rhs(systems[right].b[component], -dx, -dy, -dz, -dphi);
@@ -239,7 +251,7 @@ std::vector<PrimitiveGradient> compute_least_squares_gradients(
 
     std::vector<PrimitiveGradient> gradients(q.size());
     for (std::size_t i = 0; i < q.size(); ++i) {
-        for (int component = 0; component < 5; ++component) {
+        for (int component = 0; component < 6; ++component) {
             Real a[3][3] = {
                 {systems[i].a[0][0], systems[i].a[0][1], systems[i].a[0][2]},
                 {systems[i].a[1][0], systems[i].a[1][1], systems[i].a[1][2]},
@@ -320,6 +332,9 @@ PrimitiveGradient apply_limiter(const PrimitiveGradient& gradient, const Primiti
     out.dp_dx *= limiter.p;
     out.dp_dy *= limiter.p;
     out.dp_dz *= limiter.p;
+    out.dnu_tilde_dx *= limiter.nu_tilde;
+    out.dnu_tilde_dy *= limiter.nu_tilde;
+    out.dnu_tilde_dz *= limiter.nu_tilde;
     return out;
 }
 
@@ -335,6 +350,7 @@ PrimitiveState reconstruct_primitive(
     out.v = center.v + gradient.dv_dx*dx + gradient.dv_dy*dy + gradient.dv_dz*dz;
     out.w = center.w + gradient.dw_dx*dx + gradient.dw_dy*dy + gradient.dw_dz*dz;
     out.p = center.p + gradient.dp_dx*dx + gradient.dp_dy*dy + gradient.dp_dz*dz;
+    out.nu_tilde = center.nu_tilde + gradient.dnu_tilde_dx*dx + gradient.dnu_tilde_dy*dy + gradient.dnu_tilde_dz*dz;
     return out;
 }
 

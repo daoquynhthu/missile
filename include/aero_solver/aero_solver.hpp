@@ -101,18 +101,35 @@ namespace Solver {
         float base_area = 0.1f;
         float nose_fineness = 3.0f;
 
-        // Reserved for the rebuilt CFD override. Currently disabled.
+        // When true, uses GPU CFD solver for conditions in
+        // Mach [1.2, 30], |alpha| <= 30, |beta| <= 10.
+        // NOTE: CFD uses a structured cube mesh embeding a unit-cube slip-wall
+        // body, NOT the loaded STL geometry. Forces correspond to the cube body,
+        // not the actual vehicle shape. See comment in generate_aero_table.
         bool   use_fvm = false;
-        float  fvm_mach_min = 3.0f;
         int    mesh_subdivisions = 5000;
         float  mesh_outer_scale = 10.0f;
+
+        // Viscous NS parameters (only used when use_fvm=true).
+        bool   viscous = false;
+        float  Re = 1e6f;
+        float  prandtl = 0.72f;
+        float  wall_temperature = 300.0f;
     };
 
     // Single-GPU-pass generation of complete aerodynamics CSV table.
     // Uses Newtonian panel (Mach >= 5) + engineering estimate (Mach < 5)
     // with smooth blending in Mach 4-6 transition.
-    // If cfg.use_fvm is true, this function returns false until the rebuilt
-    // CFD solver is connected.
+    //
+    // When cfg.use_fvm=true, replaces results with GPU CFD solver for
+    // in-range conditions (Mach [1.2,30], |alpha|<=30, |beta|<=10).
+    //
+    // LIMITATION: The CFD solver runs on a structured cube mesh with an
+    // embedded unit-cube slip-wall body, NOT the loaded STL geometry.
+    // The resulting force coefficients correspond to the cube body and
+    // are NOT representative of the actual vehicle shape. This is a
+    // pipeline demonstration — a conformal volume mesh generator is
+    // required for production use.
     bool generate_aero_table(
         const std::string& stl_path,
         const std::string& csv_path,
