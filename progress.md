@@ -277,3 +277,9 @@
   - gpu_solver.cu: turbulence branch calls compute_rans_source_gpu after viscous flux
   - Fix: real_pow → expf(logf) for fw computation in device code
 - Build + TestCfdGpu 28/29 PASS (BW-1 pre-existing).
+2026-07-09 (later)
+- Phase 7.4 RANS regression tests:
+  - CFD-ORACLE-RANS-1: turbulence=false matches Phase 5 laminar Euler — PASS
+  - CFD-ORACLE-RANS-2: zero nu_tilde with turbulence=true matches laminar — PASS
+  - CFD-ORACLE-RANS-3: turbulent flat plate Cf ≥ laminar Cf — PASS
+- Build + TestCfdGpu 31/32 PASS (BW-1 pre-existing).

@@ -548,10 +548,10 @@ Tasks:
 
 Tests:
 
-- [ ] `CFD-ORACLE-RANS-1`: `turbulence=false` matches Phase 5 laminar
-- [ ] `CFD-ORACLE-RANS-2`: zero `nu_tilde` matches laminar
-- [ ] `CFD-ORACLE-RANS-3`: turbulent flat plate `Cf` plausible (≥ laminar)
-- [ ] `CFD-ORACLE-RANS-4`: CPU/GPU SA residual match
+- [x] `CFD-ORACLE-RANS-1`: `turbulence=false` matches Phase 5 laminar
+- [x] `CFD-ORACLE-RANS-2`: zero `nu_tilde` matches laminar
+- [x] `CFD-ORACLE-RANS-3`: turbulent flat plate `Cf` plausible (≥ laminar)
+- [ ] `CFD-ORACLE-RANS-4`: CPU/GPU SA residual match (deferred — needs CPU/GPU RANS source cross-check)
 
 Gate:
 

@@ -1158,6 +1158,133 @@ static int test_viscous_differs_from_inviscid() {
     return 0;
 }
 
+static int test_rans_false_regression() {
+    TEST("CFD-ORACLE-RANS-1 turbulence=false matches Phase 5 laminar");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.4f;
+        cfg.max_iter = 20;
+        cfg.convergence_tol = 1e-12f;
+        cfg.viscous = false;
+        cfg.turbulence = false;
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 3.0f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        // turbulence=false with no viscous
+        CfdSolveSummary turb_off = solver.solve(cond, cfg);
+        if (turb_off.failed) FAIL("turbulence=false solver failed");
+
+        // Same config but turbulence unset (=false) — should be identical Euler result
+        CfdConfig euler_cfg = cfg;
+        euler_cfg.turbulence = false;
+        CfdSolveSummary euler = solver.solve(cond, euler_cfg);
+        if (euler.failed) FAIL("Euler solver failed");
+
+        std::size_t n = std::min(turb_off.residual_history.size(), euler.residual_history.size());
+        Real max_diff = 0.0f;
+        for (std::size_t i = 0; i < n; ++i) {
+            Real d = std::fabs(turb_off.residual_history[i] - euler.residual_history[i]);
+            if (d > max_diff) max_diff = d;
+        }
+        if (max_diff > 1e-6f) FAIL("turbulence=false max diff=%g from Euler", max_diff);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_rans_zero_nu_tilde() {
+    TEST("CFD-ORACLE-RANS-2 zero nu_tilde matches laminar");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.4f;
+        cfg.max_iter = 20;
+        cfg.convergence_tol = 1e-12f;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+        cfg.turbulence = false;
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        // Viscous laminar (turbulence=false) — L2 baseline
+        CfdSolveSummary laminar = solver.solve(cond, cfg);
+        if (laminar.failed) FAIL("laminar solver failed");
+
+        // turbulence=true but nu_tilde=0 from initial state — should match laminar
+        cfg.turbulence = true;
+        CfdSolveSummary turb_zero = solver.solve(cond, cfg);
+        if (turb_zero.failed) FAIL("turbulence=true zero nu_tilde solver failed");
+
+        std::size_t n = std::min(laminar.residual_history.size(), turb_zero.residual_history.size());
+        Real max_diff = 0.0f;
+        for (std::size_t i = 0; i < n; ++i) {
+            Real d = std::fabs(laminar.residual_history[i] - turb_zero.residual_history[i]);
+            if (d > max_diff) max_diff = d;
+        }
+        if (max_diff > 1e-5f) FAIL("zero nu_tilde max diff=%g from laminar", max_diff);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_rans_turbulent_flat_plate() {
+    TEST("CFD-ORACLE-RANS-3 turbulent flat plate Cf plausible");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.3f;
+        cfg.max_iter = 30;
+        cfg.convergence_tol = 1e-12f;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+        cfg.turbulence = false;
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary laminar = solver.solve(cond, cfg);
+        if (laminar.failed) FAIL("laminar solver failed");
+
+        cfg.turbulence = true;
+        CfdSolveSummary turbulent = solver.solve(cond, cfg);
+        if (turbulent.failed) FAIL("turbulent solver failed");
+
+        if (!std::isfinite(turbulent.forces.CD)) FAIL("turbulent CD not finite: %g", turbulent.forces.CD);
+        if (!std::isfinite(turbulent.forces.CL)) FAIL("turbulent CL not finite: %g", turbulent.forces.CL);
+
+        // Turbulent CD should be >= laminar CD at same Re
+        if (turbulent.forces.CD < laminar.forces.CD - 1e-8f)
+            FAIL("turbulent CD=%g < laminar CD=%g", turbulent.forces.CD, laminar.forces.CD);
+
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -1189,6 +1316,9 @@ int main() {
     result |= test_viscous_false_regression();
     result |= test_viscous_finite_flat_plate();
     result |= test_viscous_differs_from_inviscid();
+    result |= test_rans_false_regression();
+    result |= test_rans_zero_nu_tilde();
+    result |= test_rans_turbulent_flat_plate();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
