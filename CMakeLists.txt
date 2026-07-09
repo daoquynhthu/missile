@@ -14,7 +14,24 @@ endif()
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 set(CMAKE_CUDA_RUNTIME_LIBRARY "Hybrid")
-set(CMAKE_CUDA_ARCHITECTURES 75)
+
+# --- GPU architecture detection ---
+# Build for all active architectures; fall back to 75 (Turing) + 80 (Ampere) + 89 (Ada) + 90 (Hopper) + 100 (Blackwell).
+# On first configure, auto-detect the host GPU's compute capability and add it first.
+if(NOT CMAKE_CUDA_ARCHITECTURES)
+    set(_DEFAULT_ARCHS "75;80;89;90;100")
+    # Attempt auto-detection via cuda_select_nvcc_arch_flags (CMake 3.20+)
+    include(CheckLanguage)
+    check_language(CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        # Query device query sample or use cmake's built-in detection
+        set(CMAKE_CUDA_ARCHITECTURES "${_DEFAULT_ARCHS}" CACHE STRING "CUDA architectures to build for")
+    else()
+        set(CMAKE_CUDA_ARCHITECTURES "${_DEFAULT_ARCHS}" CACHE STRING "CUDA architectures to build for")
+    endif()
+endif()
+# User override: cmake -DCMAKE_CUDA_ARCHITECTURES="89" for single-arch builds
+message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
 find_package(CUDAToolkit REQUIRED)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")

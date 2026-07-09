@@ -487,6 +487,7 @@ Gate:
 - [ ] Flat plate `Cf_avg / Cf_blasius ∈ [0.5, 2.0]` at Re=10^5 (needs more iterations).
 - [ ] Wall heat flux sign convention: `Q_wall > 0` when wall is colder than fluid (needs Q_wall output).
 - [ ] CPU/GPU wall forces and Q_wall match within 1e-8 absolute (needs CPU viscous oracle in solver loop).
+- [ ] [V&V] MMS for laminar NS: observed order ≥ 1.8 (2nd-order) on smooth manufactured solution.
 
 ---
 
@@ -580,6 +581,7 @@ Gate:
 - [x] Negative `nu_tilde` handled without silent clamp.
 - [x] Turbulent flat plate Cf > laminar reference at same Re.
 - [x] SA results explicitly labeled as "RANS modeled, not transition-resolved" in downstream output (`turbulence_model="rans-sa"` in CSV).
+- [ ] [V&V] SA MMS: observed order ≥ 1.8 on smooth manufactured solution with non-zero nu_tilde.
 
 ---
 
@@ -903,10 +905,14 @@ Hardware considerations:
 
 Gate:
 
-- 2-GPU Euler residual matches serial GPU L2-norm component-wise within 1e-6.
-- 4-GPU strong scaling efficiency ≥ 70% on 500K tet mesh (NVLink-connected).
+- 2-GPU Euler residual matches serial GPU within 1e-6 (component-wise L2, hardware-agnostic).
 - Single-GPU mode (`n_ranks==1`): zero runtime overhead, all existing tests pass unchanged.
-- `exchange_halo_gpu` with NVLink peer access: measured latency ≤ 2μs for 6*NVAR floats.
+- `exchange_halo_gpu` round-trip of a known buffer gives bit-identical send/recv.
+
+Targets (NOT hard gates; track as performance metrics):
+- 4-GPU strong scaling efficiency ≥ 70% on 500K tet mesh (NVLink) or ≥ 50% (PCIe/InfiniBand).
+- `exchange_halo_gpu` latency ≤ 2μs for 6*NVAR floats on NVLink peers.
+- Weak scaling: per-GPU runtime within 20% of single-GPU baseline at constant 250K cells/GPU.
 
 ---
 
@@ -1031,11 +1037,49 @@ Gate:
 - FGMRES restart ≤ 30 iterations, total Krylov vectors ≤ 60.
 - No new NaN/Inf sources: all implicit operations guarded.
 
+### 11.4 Distributed FGMRES (multi-GPU implicit)
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/distributed_fgmres.hpp` | NEW | `class DistributedFgmres`: extends FgmresSolver with MPI halo exchange for Krylov vectors |
+| `src/aero/cfd/distributed_fgmres.cpp` | NEW | Override: `ddot` → local sum + `MPI_Allreduce(MPI_SUM)`; `matvec` → local JFV product + halo exchange for perturbation consistency |
+
+Gap analysis: Phase 10 implements multi-GPU halo exchange for explicit RK (no linear algebra). Phase 11.1-11.3 implement FGMRES+JFV+LU-SGS on single GPU only. For implicit on multiple GPUs, three components must be made distributed:
+
+1. **Distributed dot products**: `ddot_kernel` computes partial sum `local = Σ x_i·y_i` over owned cells; `MPI_Allreduce(MPI_SUM, &global, 1)` gives global dot product (used in Arnoldi MGS and convergence check).
+2. **Distributed matrix-vector product**: `compute_jfv_product` already only reads local `d_q` and writes local `d_result` — the JFV stencil is local (per-cell perturbation). The residual kernel inside JFV must use `exchange_halo_gpu` to get ghost cell data for boundary faces (already implemented in Phase 10.4).
+3. **Preconditioner**: LU-SGS is inherently sequential in sweeps. On multi-GPU, each rank applies LU-SGS locally to owned cells, then boundary faces with halo cells use the ghost's latest values. This is an additive Schwarz variant: `z_new = omega * z_local + (1-omega) * z_old` with overlap.
+
+Tasks:
+
+- [ ] `DistributedFgmres::ddot_global`: local partial sum → `MPI_Allreduce` → store to global
+- [ ] `DistributedFgmres::matvec_global`: call local JFV product → `exchange_halo_gpu` for ghost residual contributions → L2 check global
+- [ ] `DistributedFgmres::solve`: same Arnoldi loop as FgmresSolver but replace all dot products and norm checks with global variants
+- [ ] Distributed LU-SGS: each rank sweeps its owned cells; boundary cell updates use ghost values from previous sweep
+- [ ] Convergence check: global `L2_norm = sqrt(MPI_Allreduce(local_l2_sq))`
+- [ ] Single-GPU mode (`n_ranks==1`): `DistributedFgmres` delegates to base `FgmresSolver` (zero MPI overhead)
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-IMPLICIT-MPI-1` | 2-GPU implicit: converged CX matches single-GPU implicit | 1e-6 |
+| 2 | `CFD-IMPLICIT-MPI-2` | Distributed dot product: `ddot_global` matches serial on same data | 1e-15 |
+| 3 | `CFD-IMPLICIT-MPI-3` | Distributed JFV: `J*v` on 2 GPUs matches serial on identical mesh | 1e-6 |
+
+Gate:
+
+- 2-GPU implicit solution matches single-GPU implicit solution within 1e-6 for NACA 0012 Euler.
+- Single-GPU implicit mode (`n_ranks==1`): `DistributedFgmres` adds zero MPI overhead (no MPI calls).
+- Distributed dot products pass bit-identity test: partial sums = global sum.
+
 ---
 
-## Phase 12 — Adaptive Mesh Refinement (AMR)
+## Phase 12 — AMR: Euler-Focused Foundation
 
-Goal: automatically refine near shocks, boundary layers, and vortical regions; coarsen in smooth regions. Reduce cell count 5-10× for equivalent accuracy.
+Goal: automatically refine near shocks, boundary layers, and vortical regions; coarsen in smooth regions. Reduce cell count 5-10× for equivalent accuracy. This phase covers Euler (and laminar NS) AMR only; turbulence-aware AMR (y+ constraint, wake refinement) is deferred to Phase 14 after DDES/SST models are operational.
 
 ### 12.1 h-refinement operations
 
@@ -1228,10 +1272,64 @@ Gate:
 - SA-DDES in attached flow region reproduces SA-RANS (regression ≤ 1e-4).
 - `TurbulenceModel` enum migration path: existing `bool turbulence` code compiles and maps to correct enum.
 - All turbulence models produce finite, non-negative k and ω (or nu_tilde).
+- [V&V] SST MMS: observed order ≥ 1.8 on smooth manufactured solution with non-zero k and ω.
 
 ---
 
-## Phase 14 — Thermochemistry
+## Phase 14 — AMR: Turbulence-Aware Extension
+
+Goal: extend the Euler AMR foundation (Phase 12) with turbulence-specific refinement criteria: y+ constraint for wall-resolved LES/RANS, wake refinement behind bodies, shear-layer refinement for DDES. This phase depends on Phase 13 (DDES/SST) being complete.
+
+### 14.1 Turbulence-aware refinement sensors
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `src/aero/cfd/amr_sensor.cpp` | MODIFY | +y+ sensor per Phase 12.2, add `target_yplus` wall-distance refinement |
+| `src/aero/cfd/amr_sensor.cpp` | MODIFY | +vorticity-based sensor for wake and shear layers (Q-criterion refinement region) |
+| `include/aero/cfd/amr_sensor.hpp` | MODIFY | +`SensorType = { GRADIENT, CURVATURE, YPLUS, Q_CRITERION, TKE_RATIO }` |
+
+Tasks:
+
+- [ ] y+ sensor: tag wall-adjacent cells where `y_phys > y_target(y+_desired)` for refinement; refine until all wall cells satisfy `y+ ≤ target_y+`
+- [ ] Turbulence-intensity sensor: `k / (0.5 * U²) > threshold` — refine regions of high TKE (wake, mixing layer)
+- [ ] Shear-layer sensor (DDES): ratio of resolved to modeled TKE → refine where under-resolved
+- [ ] Refinement region: allow specifying a wake cone behind body for anisotropic refinement in streamwise direction
+
+### 14.2 Turbulence-aware AMR solver loop
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `src/aero/cfd/gpu_solver.cu` | MODIFY | Extend AMR loop (Phase 12.4): turbulence sensor runs every `amr_interval` alongside Euler sensor |
+| `src/aero/cfd/gpu_solver.cu` | MODIFY | After AMR cycle, re-initialize turbulence variables on new cells (k=1e-8, ω=1e4, nu_tilde=1e-8) |
+
+Tasks:
+
+- [ ] Multi-sensor fusion: `refine = sensor_euler || sensor_turbulence` (either flag triggers refinement)
+- [ ] After refinement, set new-cell turbulence variables to small positive values to avoid division by zero (`d_k = max(d_k, 1e-8)`, `d_omega = clamp(d_omega, 1e-4, 1e8)`)
+- [ ] Wall-distance recomputation: after mesh change, `compute_wall_distance` re-run on all cells (GPU kernel)
+- [ ] Regression: `turbulence_model=LAMINAR` on same mesh → AMR behavior identical to Phase 12
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-AMR-TURB-1` | Flat plate SST: y+ ≤ 1 after AMR adaptation starting from coarse mesh | N/A |
+| 2 | `CFD-AMR-TURB-2` | Circular cylinder Re=3900 (DDES): AMR refines wake region (cell count increase ≥ 2×) | 2× |
+| 3 | `CFD-AMR-TURB-3` | AMR + SST: forces match globally refined mesh within 2% | 2% |
+
+Gate:
+
+- Wall y+ after AMR ≤ target_y+ (default 1.0) on all wall-adjacent cells for SST cases.
+- Turbulence variables on newly created cells are positive and produce finite residual.
+- AMR + SST on flat plate matches globally refined mesh within 2% in Cf.
+
+---
+
+## Phase 15 — Thermochemistry
 
 Goal: from constant-γ perfect gas to finite-rate chemically reacting gas for hypersonic heat flux.
 
@@ -1280,12 +1378,12 @@ Tasks:
 - [ ] GPU kernel: per-cell compute Arrhenius rates → species production → atomicAdd to residual[5..9]
 - [ ] `ConservedState` dynamic: `NVAR` becomes configurable at runtime (gas model initialization sets global `cfg.nvar`)
 
-> **NVAR 迁移策略说明**：Phase 7-13 使用 `constexpr CFD_NVAR=6`（固定结构体 `ConservativeState` 有名称字段）。Phase 14 是第一个需要 NVAR=10 的阶段。迁移方案：
-> 1. Phase 14.0（前序任务）：将 `ConservativeState` 改为变长数组（如 `Real q_[MAX_NVAR]` 或 `std::array<Real, MAX_NVAR>`），保留前6个字段的名称访问器（向后兼容）。`PrimitiveState` 同理。
+> **NVAR 迁移策略说明**：Phase 7-13 使用 `constexpr CFD_NVAR=6`（固定结构体 `ConservativeState` 有名称字段）。Phase 15 是第一个需要 NVAR=10 的阶段。迁移方案：
+> 1. Phase 15.0（前序任务）：将 `ConservativeState` 改为变长数组（如 `Real q_[MAX_NVAR]` 或 `std::array<Real, MAX_NVAR>`），保留前6个字段的名称访问器（向后兼容）。`PrimitiveState` 同理。
 > 2. 所有 kernel 增加 `int nvar` 参数（默认值从 `DeviceMesh::NVAR` 取）。L2 归约 / 原子操作 / isfinite 检查全部使用 nvar 而非硬编码 6。
 > 3. `DeviceCellData` 的 `d_q` 分配大小变为 `nvar * n_cells * sizeof(Real)`，不再假定 6。
-> 4. 回归测试：Phase 14 中 chemistry 关闭时（`gas_model=PerfectGas`），NVAR=10 的 kernel 必须产生与 NVAR=6 时一致的解（仅前 5 个变量参与物理）。
-> 5. 临时策略：Phase 14.0 之前不允许激活 chemistry；Phase 14.0 实现后通过 feature gate 控制。
+> 4. 回归测试：Phase 15 中 chemistry 关闭时（`gas_model=PerfectGas`），NVAR=10 的 kernel 必须产生与 NVAR=6 时一致的解（仅前 5 个变量参与物理）。
+> 5. 临时策略：Phase 15.0 之前不允许激活 chemistry；Phase 15.0 实现后通过 feature gate 控制。
 
 ### 14.3 Two-temperature model (Park 89)
 
@@ -1342,7 +1440,7 @@ Gate:
 
 ---
 
-## Phase 15 — Transition Physics
+## Phase 16 — Transition Physics
 
 Goal: predict laminar-turbulent transition onset independently of SA model. Support natural, bypass, crossflow, and Mack-mode transition.
 
@@ -1420,7 +1518,7 @@ Gate:
 
 ---
 
-## Phase 16 — Multi-Physics Coupling
+## Phase 17 — Multi-Physics Coupling
 
 Goal: couple CFD with heat conduction (CHT), structural deformation (aeroelastic), and trajectory dynamics (6-DOF).
 
@@ -1479,7 +1577,7 @@ Tasks:
 - [ ] Fluid time-accurate mode: dual time stepping (inner pseudo-time convergence, outer physical time advance)
 - [ ] Per physical step: integrate wall forces → 6-DOF (quaternion rotation, body translation)
 - [ ] Mesh rigid motion: rotate/translate entire mesh (no deformation needed, just rigid transform of nodes)
-- [ ] Mesh deformation (if aeroelastic): use Phase 16.2 mesh deformation for elastic body displacement
+- [ ] Mesh deformation (if aeroelastic): use Phase 17.2 mesh deformation for elastic body displacement
 
 Tests:
 
@@ -1499,7 +1597,7 @@ Gate:
 
 ---
 
-## Phase 17 — High-Order Methods (DG/FR)
+## Phase 18 — High-Order Methods (DG/FR)
 
 Goal: achieve spectral accuracy for wave-dominated flows. Enable DNS-quality resolution on coarse meshes.
 
@@ -1509,43 +1607,62 @@ Goal: achieve spectral accuracy for wave-dominated flows. Enable DNS-quality res
 > - `config.method` 控制 `"fvm"` 或 `"dg"`，两者共享网格（节点坐标），但状态分配和求解器流程完全独立
 > - FVM 代码在 `method=fvm` 下零退化，DG 不修改任何现有的 FVM 文件
 
-### 17.1 Discontinuous Galerkin framework
+### 18.1 DG 2D scalar advection (entry-level verification)
+
+Goal: validate the DG infrastructure on the simplest problem before tackling 3D Euler. This minimizes debugging surface.
 
 Files:
 
 | File | Action | Content |
 |------|--------|---------|
-| `include/aero/cfd/dg_basis.hpp` | NEW | `class LagrangeBasis1D`: `l_i(x)` at Legendre-Gauss-Lobatto nodes for p=1/2/3/4; `class TensorBasis3D`: hex tensor product basis; `class DubinerBasis`: tetrahedral modal basis |
-| `src/aero/cfd/dg_volume.cu` | NEW | `dg_volume_kernel`: compute volume integral by quadrature (sum over integration points, flux divergence) |
-| `src/aero/cfd/dg_face.cu` | NEW | `dg_face_kernel`: compute face flux integral (Lax-Friedrichs/Riemann solver at each face quadrature point) |
-| `src/aero/cfd/dg_solver.cu` | NEW | DG solver orchestrator: allocate DOFs per element, run volume+face kernels, RK time integration |
+| `include/aero/cfd/dg_basis.hpp` | NEW | `class LagrangeBasis1D`: `l_i(x)` at Legendre-Gauss-Lobatto nodes for p=1/2/3/4; `class TensorBasis2D`: quad tensor product basis |
+| `include/aero/cfd/dg_solver.hpp` | NEW | `class DgSolver2D`: 2D scalar advection DG solver: `dg_volume_kernel`, `dg_face_kernel`, RK3 |
+| `src/aero/cfd/dg_scalar.cu` | NEW | `dg_scalar_volume_kernel` (advection of scalar u on 2D quad mesh); `dg_scalar_face_kernel` (upwind flux) |
+| `tests/cfd/test_dg_scalar.cpp` | NEW | 2D scalar advection: linear advection of a Gaussian hump, measure L2 error vs analytical solution |
 
 Tasks:
 
 - [ ] Lagrange 1D basis functions for LGL nodes (p+1 nodes per dimension)
-- [ ] Hex: 3D tensor product → (p+1)³ DOFs per element per variable
+- [ ] 2D tensor product: (p+1)² DOFs per element per scalar variable
 - [ ] LGL quadrature: exact for polynomials up to degree 2p-1
-- [ ] DG volume kernel: for each quadrature point, read state via basis interpolation → compute flux → compute divergence → accumulate to residual
-- [ ] DG face kernel: for each face quadrature point, read left/right state → numerical flux (Roe or Lax-Friedrichs) → accumulate to left/right elements
-- [ ] GPU: `dg_volume_kernel` uses shared memory for basis function values (small, precomputed)
+- [ ] `dg_scalar_volume_kernel`: for each quadrature point, read u via basis interpolation → compute advective flux `f = a*u` → divergence → accumulate to residual
+- [ ] `dg_scalar_face_kernel`: upwind flux `f* = 0.5*(a·n + |a·n|)*u_L + 0.5*(a·n - |a·n|)*u_R`
+- [ ] MMS on 2D scalar: `u_exact = sin(πx)cos(πy)`, source term = `a·∇u`, verify p+1 convergence
+- [ ] GPU: `dg_scalar_volume_kernel` uses shared memory for precomputed basis values
 
-### 17.2 Curved boundary representation
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-DG-SCALAR-1` | 2D linear advection: Gaussian hump p=3 preserves shape after 1 period | L2 < 1e-4 |
+| 2 | `CFD-DG-SCALAR-2` | 2D MMS: p=1→O(h²), p=2→O(h³), p=3→O(h⁴) | slope ±0.1 |
+
+### 18.2 DG Euler 3D + curved boundary
+
+Build on 18.1: extend from scalar advection to 3D Euler equations. Curved high-order boundaries added in parallel (essential for accurate DG on curved walls).
 
 Files:
 
 | File | Action | Content |
 |------|--------|---------|
+| `include/aero/cfd/dg_basis.hpp` | MODIFY | +`class TensorBasis3D`: hex tensor product (p+1)³; `class DubinerBasis`: tetrahedral modal basis |
+| `src/aero/cfd/dg_volume.cu` | NEW | `dg_euler_volume_kernel`: Euler flux divergence via quadrature (Roe or Lax-Friedrichs at each integration point) |
+| `src/aero/cfd/dg_face.cu` | NEW | `dg_euler_face_kernel`: numerical flux at face quadrature points, accumulate to left/right elements |
+| `src/aero/cfd/dg_solver.cu` | NEW | DG solver orchestrator: allocate DOFs per element, run volume+face kernels, RK time integration |
 | `include/aero/cfd/dg_curved.hpp` | NEW | `class CurvedGeometry`: high-order node positions (warped from linear mesh using CAD data or analytic deformation) |
 | `src/aero/cfd/dg_curved.cpp` | NEW | Compute isoparametric mapping Jacobian at each quadrature point for curved elements |
 
 Tasks:
 
+- [ ] Hex: 3D tensor product → (p+1)³ DOFs per element per variable
+- [ ] DG volume kernel: for each quadrature point, read state via basis interpolation → compute Euler flux → compute divergence → accumulate to residual
+- [ ] DG face kernel: for each face quadrature point, read left/right state → Roe/HLLC numerical flux → accumulate to left/right elements
 - [ ] Isoparametric mapping: boundary elements use p-order polynomial to represent curved wall
 - [ ] Jacobian: `dx/dξ` computed at each integration point, determinant for volume weighting
-- [ ] 2D test: circular cylinder with p=3 curved boundary vs linear boundary (pressure distribution should match potential flow more closely)
 - [ ] GPU: store curved Jacobians per element per quadrature point (precomputed on upload)
+- [ ] GPU: `dg_euler_volume_kernel` uses shared memory for precomputed basis values
 
-### 17.3 Shock capturing
+### 18.3 Shock capturing for DG
 
 Files:
 
@@ -1560,30 +1677,54 @@ Tasks:
 - [ ] Localized artificial viscosity: Laplacian term added to DG formulation, `ε` = element-dependent
 - [ ] `fvm_fallback` option: mark shocked elements as FVM cells, use Phase 8 FVM with Barth-Limiter, then combine via hybrid DG-FV method
 
+### 18.4 DG extension: viscous, turbulence, thermochemistry
+
+Goal: extend DG to handle NS viscous terms, RANS turbulence models, and reacting flows. Each extension follows the same pattern: add appropriate flux functions at quadrature points.
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `src/aero/cfd/dg_viscous.cu` | NEW | `dg_ns_volume_kernel`: add viscous flux divergence (BR2 or LDG method for second derivatives) |
+| `src/aero/cfd/dg_viscous.cu` | NEW | `dg_ns_face_kernel`: interior penalty or BR2 interface flux for viscous terms |
+| `src/aero/cfd/dg_source.cu` | NEW | `dg_source_kernel`: per-element source terms (RANS production, chemistry) at quadrature points |
+
+Tasks:
+
+- [ ] BR2 (Bassi-Rebay 2) method: lift operator for gradient computation, stabilization term for face jumps
+- [ ] Viscous DG: add Laplacian/div(grad) operator to volume and face kernels
+- [ ] RANS DG: couple with SA or SST source terms evaluated at each quadrature point
+- [ ] Thermochemistry DG: extend state to NVAR=10/11, add reaction source integration
+
 Tests:
 
 | # | Test | What | Tolerance |
 |---|------|------|-----------|
-| 1 | `CFD-DG-1` | Isentropic vortex advection: p=3 preserves vortex strength after 10 domain traversals | >99% |
+| 1 | `CFD-DG-1` | Isentropic vortex advection (3D): p=3 preserves vortex strength after 10 domain traversals | >99% |
 | 2 | `CFD-DG-2` | Taylor-Green vortex at Re=1600: enstrophy decay matches DNS (Brachet 1983) | 5% |
-| 3 | `CFD-DG-3` | MMS: p=1 O(h²), p=2 O(h³), p=3 O(h⁴) on smooth manufactured problem | slope ±0.1 |
+| 3 | `CFD-DG-3` | MMS (Euler): p=1→O(h²), p=2→O(h³), p=3→O(h⁴) on smooth manufactured problem | slope ±0.1 |
 | 4 | `CFD-DG-4` | Shock tube (Sod): DG p=2 with shock capturing, no overshoot > 0.5% | 0.5% |
 | 5 | `CFD-DG-5` | DG order=1 regression: matches FVM 1st-order (cell-averaged equivalence) | 1e-4 |
+| 6 | `CFD-DG-6` | Viscous DG: laminar flat plate Cf matches Blasius (p=3) | 2% |
 
 Gate:
 
-- MMS observed order = theoretical order ± 0.1 for p=1/2/3 on hex mesh.
+- MMS observed order = theoretical order ± 0.1 for p=1/2/3 on hex mesh (Euler).
+- 2D scalar advection: MMS convergence slope passes for p=1/2/3.
 - Isentropic vortex: p=3 dissipation per period < 1% (vorticity error).
 - Shock capturing produces no overshoot > 1% on Sod shock tube.
 - DG and FVM coexist: `method=dg` vs `method=fvm` switch produces expected accuracy difference.
+- Viscous DG: each new physics extension (viscous, RANS, chemistry) must pass MMS for that equation set.
 
 ---
 
-## Phase 18 — Verification & Validation Framework
+## Phase 19 — Verification & Validation Systematization
 
 Goal: every result has a quantifiable error bound. Formal V&V pipeline for production use.
 
-### 18.1 Method of Manufactured Solutions (MMS)
+> **V&V continuity**: MMS and GCI should not start from scratch in this phase. Every physics phase (Phase 5 Euler, Phase 7 RANS, Phase 13 DDES/SST, Phase 15 Thermochemistry, Phase 16 Transition) already includes MMS order verification as a gate condition (added retroactively during Phase 19 setup). This phase systematizes those individual MMS checks into a unified framework, adds GCI, builds the benchmark suite, and implements the error budget. If any earlier phase lacks MMS gates, fix retroactively before beginning Phase 19 execution.
+
+### 19.1 Method of Manufactured Solutions (MMS)
 
 Files:
 
@@ -1611,7 +1752,7 @@ Tasks:
 - [ ] GPU: MMS source term kernel appends S to residual (`d_residual += d_mms_source`)
 - [ ] Automated order verification script: `scripts/verify_order.py` — run 3 meshes, compute p, compare to theory
 
-### 18.2 Grid Convergence Index (GCI)
+### 19.2 Grid Convergence Index (GCI)
 
 Files:
 
@@ -1633,7 +1774,7 @@ Tasks:
 - [ ] Report format: table of QoI, fine/medium/coarse values, p, GCI, asymptotic range check
 - [ ] GPU acceleration: fine mesh may require multi-GPU (automatic dispatch to MPI mode when > single-GPU memory)
 
-### 18.3 Standard benchmark suite
+### 19.3 Standard benchmark suite
 
 Files:
 
@@ -1657,7 +1798,7 @@ Tasks:
 - [ ] Script: auto-detect solver capability from config, run matching benchmarks
 - [ ] Report: PASS/WARN/FAIL per benchmark with quantitative comparison
 
-### 18.4 Error budget framework
+### 19.4 Error budget framework
 
 Files:
 
@@ -1668,7 +1809,7 @@ Files:
 
 Tasks:
 
-- [ ] Discretization error: from GCI (Phase 18.2) or from h-refinement studies
+- [ ] Discretization error: from GCI (Phase 19.2) or from h-refinement studies
 - [ ] Iterative error: `residual_L2 * dt * characteristic_time` (estimate of unconverged contribution)
 - [ ] Model error: from benchmark comparisons for each turbulence/transition/chemistry model
 - [ ] Input uncertainty: finite-difference sensitivity to freestream Mach, alpha, wall temperature, Re
@@ -1684,26 +1825,26 @@ Gate:
 
 ---
 
-## Phase 19 — Production HPC Hardening
+## Phase 20 — Production HPC Hardening
 
 Goal: achieve production-level performance, reliability, and usability on national supercomputing infrastructure.
 
-### 19.1 Multi-architecture GPU build matrix
+### 20.1 Multi-architecture GPU build matrix
 
 Files:
 
 | File | Action | Content |
 |------|--------|---------|
-| `CMakeLists.txt` | MODIFY | `set(CMAKE_CUDA_ARCHITECTURES "80;89;90;100")` — build for Ampere, Ada, Hopper, Blackwell |
+| `CMakeLists.txt` | MODIFY | `set(CMAKE_CUDA_ARCHITECTURES "75;80;89;90;100" CACHE STRING "...")` — auto-detect (see Phase 0 CMake fix); include PTX for forward compatibility |
 
 Tasks:
 
 - [ ] CMake: auto-detect host GPU capability at build time, add as preferred arch + default fallbacks
 - [ ] JIT cubin: include PTX for `compute_80` and `compute_90` so new GPUs can JIT-compile
-- [ ] CI: build and test on A100 (sm_80), H100 (sm_90), and consumer Ada (sm_89)
+- [ ] CI: build and test on at least one GPU per supported architecture family (e.g., A100 for sm_80, H100 for sm_90, RTX 4090 for sm_89)
 - [ ] `cudaDeviceGetAttribute` on startup to verify compiled arch matches running GPU
 
-### 19.2 GPU memory pool
+### 20.2 GPU memory pool
 
 Files:
 
@@ -1720,7 +1861,7 @@ Tasks:
 - [ ] AMR-aware: mesh reallocation uses pool (avoids repeated cudaFree/cudaMalloc cycle)
 - [ ] Multi-GPU: separate pool per device (allocated after `cudaSetDevice`)
 
-### 19.3 CUDA Graph accelerated iteration loop
+### 20.3 CUDA Graph accelerated iteration loop
 
 Files:
 
@@ -1736,7 +1877,7 @@ Tasks:
 - [ ] `cudaGraphExecUpdate` for incremental updates (faster than full recapture)
 - [ ] Fallback: if graph capture fails (e.g., memory operations), use original kernel launch loop
 
-### 19.4 Mixed precision
+### 20.4 Mixed precision
 
 Files:
 
@@ -1753,7 +1894,7 @@ Tasks:
 - [ ] `real_atomic_add`: always FP32 CUDA atomic; for FP64 accumulation, use separate `double* d_l2_fp64` buffer
 - [ ] Verification: mixed precision result differs from FP64 result by < 1e-8 relative
 
-### 19.5 Parallel I/O with HDF5
+### 20.5 Parallel I/O with HDF5
 
 Files:
 
@@ -1770,7 +1911,7 @@ Tasks:
 - [ ] VTK output: existing `write_vtk` extended to handle non-tet elements (VTK POLYDATA for quad faces)
 - [ ] CGNS output (optional): `#ifdef WITH_CGNS` path for CGNS native format write
 
-### 19.6 Performance optimization (nsight-guided)
+### 20.6 Performance optimization (nsight-guided)
 
 Files:
 
@@ -1779,7 +1920,7 @@ Files:
 | `tools/roofline.py` | NEW | Script: run solver on standard mesh, collect nsight-compute metrics, compare to roofline model |
 
 Performance targets (from nsight-compute profiling):
-- Memory bandwidth utilization ≥ 60% of theoretical (H100 HBM3: 3.35 TB/s, target ≥ 2.0 TB/s)
+- Memory bandwidth utilization ≥ 60% of theoretical (roofline model, relative to GPU peak — e.g., H100 HBM3 3.35 TB/s → target ≥ 2.0 TB/s)
 - Kernel launch overhead ≤ 5% of iteration time (via CUDA Graph)
 - Occupancy for each kernel ≥ 50% (using CUDA occupancy API to tune block size)
 - `real_atomic_add` contention reduced via coloring (already done) or privatization buffers
@@ -1806,18 +1947,20 @@ Tests:
 
 Gate:
 
-- Iteration wall-time on 1M tet mesh (Euler, order=2) ≤ 5ms on H100 (CUDA Graph replay).
+- Iteration wall-time with CUDA Graph replay ≤ 3× the theoretical minimum (computed as bytes-touched / peak-BW of target GPU).
 - Memory pool passes 1000-cycle stress test without fragmentation-induced cudaMalloc.
 - Mixed precision: difference from full-FP64 ≤ 1e-8 for integrated forces.
 - All existing tests pass in mixed precision mode.
 
+Reference target (not hard gate): on H100, 1M-tet Euler order=2 iteration ≤ 5ms with CUDA Graph.
+
 ---
 
-## Phase 20 — Cross-Platform & Future Hardware
+## Phase 21 — Cross-Platform & Future Hardware
 
 Goal: ensure solver is not locked to NVIDIA GPU ecosystem. Port to AMD, Intel, and domestic Chinese accelerators.
 
-### 20.1 AMD ROCm/HIP port
+### 21.1 AMD ROCm/HIP port
 
 Files:
 
@@ -1842,7 +1985,7 @@ Tasks:
 - [ ] Build on AMD MI250/MI300X: `cmake -DCMAKE_CXX_COMPILER=hipcc ..`
 - [ ] Test suite: all tests compile and pass on AMD
 
-### 20.2 Intel SYCL/DPC++ port
+### 21.2 Intel SYCL/DPC++ port
 
 Files:
 
@@ -1857,7 +2000,7 @@ Tasks:
 - [ ] Build on Intel Data Center GPU Max 1550 (Ponte Vecchio)
 - [ ] Performance: compare SYCL vs native CUDA on same NVIDIA hardware
 
-### 20.3 Domestic accelerator adaptation layer
+### 21.3 Domestic accelerator adaptation layer
 
 Files:
 
