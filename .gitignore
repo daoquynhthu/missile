@@ -6,3 +6,23 @@ build/
 
 data/
 output/
+
+# IDE / editor config
+.trae/
+.idea/
+*.swp
+*.swo
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Test artifacts
+Testing/Temporary/
+
+# Build artifacts
+cmake-build-*/
+
+# OS files
+.DS_Store
+Thumbs.db
