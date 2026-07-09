@@ -49,16 +49,19 @@ __device__ void d_slip_wall_flux(Real p, Real nx, Real ny, Real nz,
 }
 
 __device__ void d_farfield_ghost_state(Real left_rho, Real left_u, Real left_v, Real left_w, Real left_p,
-    Real inf_rho, Real inf_p, Real inf_u, Real inf_v, Real inf_w, Real inf_a,
+    Real left_nu_tilde,
+    Real inf_rho, Real inf_p, Real inf_u, Real inf_v, Real inf_w, Real inf_nu_tilde, Real inf_a,
     Real nx, Real ny, Real nz,
-    Real& ghost_rho, Real& ghost_p, Real& ghost_u, Real& ghost_v, Real& ghost_w) {
+    Real& ghost_rho, Real& ghost_p, Real& ghost_u, Real& ghost_v, Real& ghost_w, Real& ghost_nu_tilde) {
     Real vn_inf = inf_u*nx + inf_v*ny + inf_w*nz;
     if (vn_inf >= inf_a) {
         ghost_rho = left_rho; ghost_p = left_p;
         ghost_u = left_u; ghost_v = left_v; ghost_w = left_w;
+        ghost_nu_tilde = left_nu_tilde;
     } else {
         ghost_rho = inf_rho; ghost_p = inf_p;
         ghost_u = inf_u; ghost_v = inf_v; ghost_w = inf_w;
+        ghost_nu_tilde = inf_nu_tilde;
     }
 }
 
@@ -165,7 +168,7 @@ __global__ void euler_residual_kernel_atomic(
     int face_count, int nvar, int n_cells,
     Real gamma,
     Real inf_rho, Real inf_p,
-    Real inf_u, Real inf_v, Real inf_w, Real inf_a,
+    Real inf_u, Real inf_v, Real inf_w, Real inf_a, Real inf_nu_tilde,
     Real* d_residual,
     int* d_failed,
     const Real* d_gradients,
@@ -224,11 +227,11 @@ __global__ void euler_residual_kernel_atomic(
     } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy, turbulence);
     } else {
-        Real ghrho, ghp, ghu, ghv, ghw;
-        // Farfield nu_tilde: use freestream value (0 by default, passed via inf state in the future)
-        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, inf_rho, inf_p, inf_u, inf_v, inf_w, inf_a,
-            nx, ny, nz, ghrho, ghp, ghu, ghv, ghw);
-        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, ghrho, ghu, ghv, ghw, ghp, 0.0f, gamma, nx, ny, nz,
+        Real ghrho, ghp, ghu, ghv, ghw, ghnu;
+        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, nu_tildeL,
+            inf_rho, inf_p, inf_u, inf_v, inf_w, inf_nu_tilde, inf_a,
+            nx, ny, nz, ghrho, ghp, ghu, ghv, ghw, ghnu);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, ghrho, ghu, ghv, ghw, ghp, ghnu, gamma, nx, ny, nz,
             mass, mom_x, mom_y, mom_z, energy, turbulence);
     }
 
@@ -268,7 +271,7 @@ __global__ void euler_residual_kernel_colored(
     int face_start, int face_end, int nvar, int n_cells,
     Real gamma,
     Real inf_rho, Real inf_p,
-    Real inf_u, Real inf_v, Real inf_w, Real inf_a,
+    Real inf_u, Real inf_v, Real inf_w, Real inf_a, Real inf_nu_tilde,
     Real* d_residual,
     int* d_failed,
     const Real* d_gradients,
@@ -327,10 +330,11 @@ __global__ void euler_residual_kernel_colored(
     } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy, turbulence);
     } else {
-        Real ghrho, ghp, ghu, ghv, ghw;
-        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, inf_rho, inf_p, inf_u, inf_v, inf_w, inf_a,
-            nx, ny, nz, ghrho, ghp, ghu, ghv, ghw);
-        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, ghrho, ghu, ghv, ghw, ghp, 0.0f, gamma, nx, ny, nz,
+        Real ghrho, ghp, ghu, ghv, ghw, ghnu;
+        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, nu_tildeL,
+            inf_rho, inf_p, inf_u, inf_v, inf_w, inf_nu_tilde, inf_a,
+            nx, ny, nz, ghrho, ghp, ghu, ghv, ghw, ghnu);
+        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, ghrho, ghu, ghv, ghw, ghp, ghnu, gamma, nx, ny, nz,
             mass, mom_x, mom_y, mom_z, energy, turbulence);
     }
 
@@ -403,7 +407,7 @@ bool launch_euler_residual_kernel(
                 start, end, DeviceMesh::NVAR, nc,
                 gamma,
                 freestream.rho, freestream.p,
-                freestream.u, freestream.v, freestream.w, a_inf,
+                freestream.u, freestream.v, freestream.w, a_inf, freestream.nu_tilde,
                 mesh.residual_device(),
                 d_failed,
                 second_order ? mesh.gradients_device() : nullptr,
@@ -420,7 +424,7 @@ bool launch_euler_residual_kernel(
             nf, DeviceMesh::NVAR, nc,
             gamma,
             freestream.rho, freestream.p,
-            freestream.u, freestream.v, freestream.w, a_inf,
+            freestream.u, freestream.v, freestream.w, a_inf, freestream.nu_tilde,
             mesh.residual_device(),
             d_failed,
             second_order ? mesh.gradients_device() : nullptr,

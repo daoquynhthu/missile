@@ -15,17 +15,6 @@ __device__ Real d_sa_vorticity(const PrimitiveGradient& g) {
     return real_sqrt(vx*vx + vy*vy + vz*vz);
 }
 
-__device__ Real d_sa_omega_tilde(Real vort, Real nu_tilde, Real d, Real karman) {
-    Real inv_nu = 1.0f / (1.0f / 1e6f);
-    Real chi = nu_tilde * inv_nu;
-    Real chi3 = chi*chi*chi;
-    constexpr Real cv1 = 7.1f;
-    Real cv13 = cv1*cv1*cv1;
-    Real fv1 = chi3 / (chi3 + cv13);
-    Real inv_kd2 = 1.0f / (karman * karman * d * d);
-    return vort + nu_tilde * fv1 * inv_kd2;
-}
-
 __global__ void rans_source_kernel(
     Real* d_q,
     const Real* d_gradients,
@@ -66,39 +55,17 @@ __global__ void rans_source_kernel(
         return;
     }
 
-    Real speed = real_sqrt(u*u + v*v + w*w);
-    Real Re_cell = Re * rho * speed * wall_distance / (1.0f + 1e-30f);
-    Real mu = 1.0f / Re_cell;
-
-    Real chi = (mu > 0.0f) ? (nu_tilde / mu) : 0.0f;
-    Real chi3 = chi*chi*chi;
-    constexpr Real cv1 = 7.1f;
-    Real cv13 = cv1*cv1*cv1;
-    Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
-
-    Real vort = d_sa_vorticity(*g);
     constexpr Real karman = 0.41f;
-
-    Real chi_fv1_nu = nu_tilde * fv1;
-    Real inv_kd2 = 1.0f / (karman * karman * wall_distance * wall_distance + 1e-30f);
-    Real omega_tilde = vort + chi_fv1_nu * inv_kd2;
-
     constexpr Real cb1 = 0.1355f;
     constexpr Real cb2 = 0.622f;
     constexpr Real sigma = 2.0f / 3.0f;
     constexpr Real cw2 = 0.3f;
     constexpr Real cw3 = 2.0f;
+    constexpr Real cv1 = 7.1f;
 
-    Real production = cb1 * omega_tilde * nu_tilde;
-
-    Real r = nu_tilde / (omega_tilde * karman * karman * wall_distance * wall_distance + 1e-30f);
-    Real r6 = r*r*r*r*r*r;
-    Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
-    Real fw_g = r + cw2 * (r6 - r);
-    Real denom_fw = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3*cw3*cw3*cw3*cw3*cw3;
-    Real root_arg = (1.0f + cw3*cw3*cw3*cw3*cw3*cw3) / (denom_fw + 1e-30f);
-    Real fw = fw_g * expf(logf(root_arg) / 6.0f);
-    Real destruction = cw1 * fw * (nu_tilde / wall_distance) * (nu_tilde / wall_distance);
+    Real speed = real_sqrt(u*u + v*v + w*w);
+    Real Re_cell = Re * rho * speed * wall_distance / (1.0f + 1e-30f);
+    Real mu = 1.0f / Re_cell;
 
     Real grad_nu2 = g->dnu_tilde_dx * g->dnu_tilde_dx
                  + g->dnu_tilde_dy * g->dnu_tilde_dy
@@ -106,14 +73,43 @@ __global__ void rans_source_kernel(
                  + 1e-30f;
     Real diffusion = (cb2 / sigma) * grad_nu2;
 
-    Real source = rho * (production - destruction + diffusion);
+    Real source;
+    if (nu_tilde >= 0.0f) {
+        Real chi = (mu > 0.0f) ? (nu_tilde / mu) : 0.0f;
+        Real chi3 = chi*chi*chi;
+        Real cv13 = cv1*cv1*cv1;
+        Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
 
-    if (!real_isfinite(source)) {
+        Real vort = d_sa_vorticity(*g);
+        Real chi_fv1_nu = nu_tilde * fv1;
+        Real inv_kd2 = 1.0f / (karman * karman * wall_distance * wall_distance + 1e-30f);
+        Real omega_tilde = vort + chi_fv1_nu * inv_kd2;
+
+        Real production = cb1 * omega_tilde * nu_tilde;
+
+        Real r = nu_tilde / (omega_tilde * karman * karman * wall_distance * wall_distance + 1e-30f);
+        Real r6 = r*r*r*r*r*r;
+        Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
+        Real fw_g = r + cw2 * (r6 - r);
+        Real denom_fw = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3*cw3*cw3*cw3*cw3*cw3;
+        Real root_arg = (1.0f + cw3*cw3*cw3*cw3*cw3*cw3) / (denom_fw + 1e-30f);
+        Real fw = fw_g * expf(logf(root_arg) / 6.0f);
+        Real destruction = cw1 * fw * (nu_tilde / wall_distance) * (nu_tilde / wall_distance);
+
+        source = production - destruction + diffusion;
+    } else {
+        Real cn1 = 2.0f;
+        source = diffusion + cn1 * cb1 * (1.0f - cw3) * nu_tilde / (wall_distance * wall_distance + 1e-30f);
+    }
+
+    Real vol_source = rho * source;
+
+    if (!real_isfinite(vol_source)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
 
-    d_q[idx * nvar + 5] += source;
+    d_q[idx * nvar + 5] += vol_source;
 }
 
 } // namespace

@@ -538,10 +538,13 @@ Tasks:
 - [x] Phase 7.2a: CPU SA oracle (rans.hpp + rans.cpp) — production, destruction, diffusion source terms
 - [x] Phase 7.2b: GPU SA kernel (gpu_rans.cu) — rans_source_kernel, compute_rans_source_gpu
 - [x] Phase 7.2c: GPU solver integration — turbulence branch in solve_gpu()
-- [ ] SA wall BC: `nu_tilde = 0`
-- [ ] SA farfield BC: specified `nu_tilde / mu` ratio
-- [ ] Source-term point-implicit treatment for stability
-- [ ] Negative `nu_tilde` handling per SA standard (not clamped)
+- [x] Phase 7.3a: update_and_l2_kernel — reads/writes rho_nu_tilde (index 5), includes in L2 norm
+- [x] Phase 7.3b: d_farfield_ghost_state now takes/propagates nu_tilde; kernels pass freestream.nu_tilde
+- [x] Phase 7.3c: Negative nu_tilde handling per SA-neg standard (cn1=2 branch when chi < 0)
+- [ ] SA wall BC: `nu_tilde = 0` (naturally enforced by SA destruction as d→0; no explicit BC change needed)
+- [ ] SA farfield BC: specified `nu_tilde / mu` ratio (freestream.nu_tilde passthrough done; ratio variant deferred)
+- [ ] Source-term point-implicit treatment for stability (deferred — explicit still works at low CFL)
+- [ ] SA diffusion: viscous operator with mu_tilde = rho * nu_tilde * fv1 / sigma (deferred — only gradient-based diffusion currently)
 
 Tests:
 

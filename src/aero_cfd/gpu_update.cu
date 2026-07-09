@@ -30,11 +30,12 @@ __global__ void update_and_l2_kernel(
 
     Real min_dt = *d_min_dt;
 
-    Real old_rho = d_q[idx * nvar + 0];
+Real old_rho = d_q[idx * nvar + 0];
     Real old_rhou = d_q[idx * nvar + 1];
     Real old_rhov = d_q[idx * nvar + 2];
     Real old_rhow = d_q[idx * nvar + 3];
     Real old_rhoE = d_q[idx * nvar + 4];
+    Real old_rhont = d_q[idx * nvar + 5];
 
     Real scale = min_dt / d_volume[idx];
 
@@ -43,6 +44,7 @@ __global__ void update_and_l2_kernel(
     Real new_rhov = old_rhov + scale * d_residual[idx * nvar + 2];
     Real new_rhow = old_rhow + scale * d_residual[idx * nvar + 3];
     Real new_rhoE = old_rhoE + scale * d_residual[idx * nvar + 4];
+    Real new_rhont = old_rhont + scale * d_residual[idx * nvar + 5];
 
     if (!real_isfinite(new_rho) || new_rho <= 0.0f) {
         int old = atomicCAS(d_failed, 0, 1);
@@ -80,7 +82,8 @@ __global__ void update_and_l2_kernel(
     Real d2 = new_rhov - old_rhov;
     Real d3 = new_rhow - old_rhow;
     Real d4 = new_rhoE - old_rhoE;
-    Real cell_l2 = dr*dr + d1*d1 + d2*d2 + d3*d3 + d4*d4;
+    Real d5 = new_rhont - old_rhont;
+    Real cell_l2 = dr*dr + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5;
     real_atomic_add(d_l2_sum, cell_l2);
 
     d_q[idx * nvar + 0] = new_rho;
@@ -88,6 +91,7 @@ __global__ void update_and_l2_kernel(
     d_q[idx * nvar + 2] = new_rhov;
     d_q[idx * nvar + 3] = new_rhow;
     d_q[idx * nvar + 4] = new_rhoE;
+    d_q[idx * nvar + 5] = new_rhont;
 }
 
 } // namespace
