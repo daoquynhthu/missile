@@ -1,4 +1,4 @@
-#include "gravity_model.hpp"
+#include "sim/gravity/gravity_model.hpp"
 #include <iostream>
 #include <Eigen/Dense>
 

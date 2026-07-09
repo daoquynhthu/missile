@@ -2,8 +2,8 @@
 #include <cassert>
 #include <vector>
 #include <cmath>
-#include "propulsion_model.hpp"
-#include "missile_config.hpp"
+#include "sim/propulsion/propulsion_model.hpp"
+#include "config/missile_config.hpp"
 
 using namespace AeroSim;
 

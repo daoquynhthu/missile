@@ -4,9 +4,9 @@
 #include <cmath>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-#include "gnc/guidance.hpp"
-#include "missile_config.hpp"
-#include "coordinate_transform.hpp"
+#include "sim/control/guidance.hpp"
+#include "config/missile_config.hpp"
+#include "sim/coord/coordinate_transform.hpp"
 
 using namespace AeroSim;
 

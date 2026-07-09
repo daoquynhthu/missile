@@ -1,8 +1,8 @@
-#include "aero_solver/aero_solver.hpp"
-#include "aero_cfd/cfd_solver.hpp"
-#include "aero_cfd/cfd_mesh.hpp"
-#include "aero_cfd/cfd_config.hpp"
-#include "aero_cfd/cfd_result.hpp"
+#include "aero/panel/aero_solver.hpp"
+#include "aero/cfd/cfd_solver.hpp"
+#include "aero/cfd/cfd_mesh.hpp"
+#include "aero/cfd/cfd_config.hpp"
+#include "aero/cfd/cfd_result.hpp"
 
 #include <iostream>
 #include <fstream>

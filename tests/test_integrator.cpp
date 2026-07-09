@@ -2,7 +2,7 @@
 #include <cmath>
 #include <vector>
 #include <cassert>
-#include "dynamics_6dof.hpp"
+#include "sim/dynamics/dynamics_6dof.hpp"
 
 using namespace AeroSim;
 

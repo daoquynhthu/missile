@@ -1,5 +1,5 @@
-#include "aero_cfd/viscous.hpp"
-#include "aero_cfd/real.hpp"
+#include "aero/cfd/viscous.hpp"
+#include "aero/cfd/real.hpp"
 
 #include <cmath>
 #include <cstdio>

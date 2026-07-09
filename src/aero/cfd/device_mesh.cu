@@ -1,0 +1,474 @@
+#include "aero/cfd/device_mesh.hpp"
+#include "aero/cfd/real.hpp"
+#include "aero/cfd/cuda_utils.hpp"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cuda_runtime.h>
+#include <utility>
+namespace AeroSim {
+namespace Cfd {
+
+DeviceMesh::~DeviceMesh() {
+    release();
+}
+
+DeviceMesh::DeviceMesh(DeviceMesh&& other) noexcept {
+    *this = std::move(other);
+}
+
+DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
+    if (this == &other) return *this;
+    release();
+    cell_count_ = other.cell_count_;
+    face_count_ = other.face_count_;
+    d_q_ = other.d_q_;
+    d_residual_ = other.d_residual_;
+    d_nx_ = other.d_nx_;
+    d_ny_ = other.d_ny_;
+    d_nz_ = other.d_nz_;
+    d_area_ = other.d_area_;
+    d_left_cell_ = other.d_left_cell_;
+    d_right_cell_ = other.d_right_cell_;
+    d_boundary_ = other.d_boundary_;
+    d_volume_ = other.d_volume_;
+    d_h_min_ = other.d_h_min_;
+    d_wall_distance_ = other.d_wall_distance_;
+    d_cx_ = other.d_cx_;
+    d_cy_ = other.d_cy_;
+    d_cz_ = other.d_cz_;
+    d_face_cx_ = other.d_face_cx_;
+    d_face_cy_ = other.d_face_cy_;
+    d_face_cz_ = other.d_face_cz_;
+    d_gradients_ = other.d_gradients_;
+    d_limiters_ = other.d_limiters_;
+    d_mu_ = other.d_mu_;
+    d_lam_ = other.d_lam_;
+    other.cell_count_ = 0;
+    other.face_count_ = 0;
+    other.d_q_ = nullptr;
+    other.d_residual_ = nullptr;
+    other.d_nx_ = other.d_ny_ = other.d_nz_ = nullptr;
+    other.d_area_ = nullptr;
+    other.d_left_cell_ = other.d_right_cell_ = nullptr;
+    other.d_boundary_ = nullptr;
+    other.d_volume_ = other.d_h_min_ = other.d_wall_distance_ = nullptr;
+    other.d_cx_ = other.d_cy_ = other.d_cz_ = nullptr;
+    other.d_face_cx_ = other.d_face_cy_ = other.d_face_cz_ = nullptr;
+    other.d_gradients_ = nullptr;
+    other.d_limiters_ = nullptr;
+    other.d_mu_ = nullptr;
+    other.d_lam_ = nullptr;
+    d_halo_indices_ = other.d_halo_indices_;
+    d_halo_send_buf_ = other.d_halo_send_buf_;
+    d_halo_recv_buf_ = other.d_halo_recv_buf_;
+    n_halo_cells_ = other.n_halo_cells_;
+    other.d_halo_indices_ = nullptr;
+    other.d_halo_send_buf_ = nullptr;
+    other.d_halo_recv_buf_ = nullptr;
+    other.n_halo_cells_ = 0;
+    n_colors_ = other.n_colors_;
+    d_color_offsets_ = other.d_color_offsets_;
+    host_color_offsets_ = std::move(other.host_color_offsets_);
+    other.n_colors_ = 0;
+    other.d_color_offsets_ = nullptr;
+    return *this;
+}
+
+DeviceFaceData DeviceMesh::face_data() {
+    DeviceFaceData fd;
+    fd.nx = d_nx_;
+    fd.ny = d_ny_;
+    fd.nz = d_nz_;
+    fd.area = d_area_;
+    fd.left_cell = d_left_cell_;
+    fd.right_cell = d_right_cell_;
+    fd.boundary = d_boundary_;
+    fd.cx = d_face_cx_;
+    fd.cy = d_face_cy_;
+    fd.cz = d_face_cz_;
+    return fd;
+}
+
+ConstDeviceFaceData DeviceMesh::face_data() const {
+    ConstDeviceFaceData fd;
+    fd.nx = d_nx_;
+    fd.ny = d_ny_;
+    fd.nz = d_nz_;
+    fd.area = d_area_;
+    fd.left_cell = d_left_cell_;
+    fd.right_cell = d_right_cell_;
+    fd.boundary = d_boundary_;
+    fd.cx = d_face_cx_;
+    fd.cy = d_face_cy_;
+    fd.cz = d_face_cz_;
+    return fd;
+}
+
+DeviceCellData DeviceMesh::cell_data() {
+    DeviceCellData cd;
+    cd.volume = d_volume_;
+    cd.h_min = d_h_min_;
+    cd.wall_distance = d_wall_distance_;
+    cd.cx = d_cx_;
+    cd.cy = d_cy_;
+    cd.cz = d_cz_;
+    return cd;
+}
+
+ConstDeviceCellData DeviceMesh::cell_data() const {
+    ConstDeviceCellData cd;
+    cd.volume = d_volume_;
+    cd.h_min = d_h_min_;
+    cd.wall_distance = d_wall_distance_;
+    cd.cx = d_cx_;
+    cd.cy = d_cy_;
+    cd.cz = d_cz_;
+    return cd;
+}
+
+
+
+static int greedy_color_faces(
+    const std::vector<int>& h_left_cell,
+    const std::vector<int>& h_right_cell,
+    std::size_t n_faces,
+    int max_colors,
+    std::vector<int>& color_of_face)
+{
+    int max_cell = 0;
+    for (std::size_t f = 0; f < n_faces; ++f) {
+        if (h_left_cell[f] > max_cell) max_cell = h_left_cell[f];
+        if (h_right_cell[f] >= 0 && h_right_cell[f] > max_cell) max_cell = h_right_cell[f];
+    }
+    std::size_t n_cells = static_cast<std::size_t>(max_cell + 1);
+
+    std::vector<std::uint64_t> cell_used(n_cells, 0);
+    color_of_face.assign(n_faces, -1);
+    int n_colors_used = 0;
+
+    for (std::size_t f = 0; f < n_faces; ++f) {
+        int l = h_left_cell[f];
+        int r = h_right_cell[f];
+
+        std::uint64_t used = cell_used[static_cast<std::size_t>(l)];
+        if (r >= 0) used |= cell_used[static_cast<std::size_t>(r)];
+
+        int color = 0;
+        while (color < max_colors && (used & (static_cast<std::uint64_t>(1) << color))) ++color;
+
+        if (color >= max_colors) return 0;
+
+        color_of_face[f] = color;
+        cell_used[static_cast<std::size_t>(l)] |= (static_cast<std::uint64_t>(1) << color);
+        if (r >= 0) cell_used[static_cast<std::size_t>(r)] |= (static_cast<std::uint64_t>(1) << color);
+
+        if (color + 1 > n_colors_used) n_colors_used = color + 1;
+    }
+    return n_colors_used;
+}
+
+void DeviceMesh::release() {
+    cuda_free_safe(d_q_);
+    cuda_free_safe(d_residual_);
+    cuda_free_safe(d_nx_);
+    cuda_free_safe(d_ny_);
+    cuda_free_safe(d_nz_);
+    cuda_free_safe(d_area_);
+    cuda_free_safe(d_left_cell_);
+    cuda_free_safe(d_right_cell_);
+    cuda_free_safe(d_boundary_);
+    cuda_free_safe(d_volume_);
+    cuda_free_safe(d_h_min_);
+    cuda_free_safe(d_wall_distance_);
+    cuda_free_safe(d_cx_);
+    cuda_free_safe(d_cy_);
+    cuda_free_safe(d_cz_);
+    cuda_free_safe(d_face_cx_);
+    cuda_free_safe(d_face_cy_);
+    cuda_free_safe(d_face_cz_);
+    cuda_free_safe(d_gradients_);
+    cuda_free_safe(d_limiters_);
+    cuda_free_safe(d_mu_);
+    cuda_free_safe(d_lam_);
+    cuda_free_safe(d_color_offsets_);
+    cuda_free_safe(d_halo_indices_);
+    cuda_free_safe(d_halo_send_buf_);
+    cuda_free_safe(d_halo_recv_buf_);
+    cell_count_ = 0;
+    face_count_ = 0;
+    n_colors_ = 0;
+    n_halo_cells_ = 0;
+    host_color_offsets_.clear();
+}
+
+bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_coloring) {
+    release();
+    cell_count_ = mesh.cells.size();
+    face_count_ = mesh.faces.size();
+    if (cell_count_ == 0 || face_count_ == 0) {
+        if (error) *error = "mesh is empty";
+        release();
+        return false;
+    }
+
+    auto alloc = [&](auto*& ptr, std::size_t bytes, const char* name) -> bool {
+        if (!cuda_check(cudaMalloc(&ptr, bytes), name, error)) { release(); return false; }
+        return true;
+    };
+
+    auto copy = [&](auto* dst, const auto* src, std::size_t bytes, const char* name) -> bool {
+        if (!cuda_check(cudaMemcpy(dst, src, bytes, cudaMemcpyHostToDevice), name, error)) { release(); return false; }
+        return true;
+    };
+
+    std::size_t nf = face_count_;
+    std::size_t nc = cell_count_;
+
+    if (!alloc(d_nx_, nf * sizeof(Real), "cudaMalloc face nx")) return false;
+    if (!alloc(d_ny_, nf * sizeof(Real), "cudaMalloc face ny")) return false;
+    if (!alloc(d_nz_, nf * sizeof(Real), "cudaMalloc face nz")) return false;
+    if (!alloc(d_area_, nf * sizeof(Real), "cudaMalloc face area")) return false;
+    if (!alloc(d_left_cell_, nf * sizeof(int), "cudaMalloc face left_cell")) return false;
+    if (!alloc(d_right_cell_, nf * sizeof(int), "cudaMalloc face right_cell")) return false;
+    if (!alloc(d_boundary_, nf * sizeof(int), "cudaMalloc face boundary")) return false;
+
+    std::vector<int> temp_boundary(nf);
+    for (std::size_t i = 0; i < nf; ++i) {
+        temp_boundary[i] = static_cast<int>(mesh.faces[i].boundary);
+    }
+
+    if (!alloc(d_face_cx_, nf * sizeof(Real), "cudaMalloc face cx")) return false;
+    if (!alloc(d_face_cy_, nf * sizeof(Real), "cudaMalloc face cy")) return false;
+    if (!alloc(d_face_cz_, nf * sizeof(Real), "cudaMalloc face cz")) return false;
+
+    if (!alloc(d_volume_, nc * sizeof(Real), "cudaMalloc cell volume")) return false;
+    if (!alloc(d_h_min_, nc * sizeof(Real), "cudaMalloc cell h_min")) return false;
+    if (!alloc(d_wall_distance_, nc * sizeof(Real), "cudaMalloc cell wall_distance")) return false;
+    if (!alloc(d_cx_, nc * sizeof(Real), "cudaMalloc cell cx")) return false;
+    if (!alloc(d_cy_, nc * sizeof(Real), "cudaMalloc cell cy")) return false;
+    if (!alloc(d_cz_, nc * sizeof(Real), "cudaMalloc cell cz")) return false;
+
+    if (!alloc(d_q_, nc * NVAR * sizeof(Real), "cudaMalloc state")) return false;
+    if (!alloc(d_residual_, nc * NVAR * sizeof(Real), "cudaMalloc residual")) return false;
+    if (!alloc(d_gradients_, nc * DeviceMesh::NGRAD * sizeof(Real), "cudaMalloc gradients")) return false;
+    if (!alloc(d_limiters_, nc * sizeof(PrimitiveLimiter), "cudaMalloc limiters")) return false;
+    if (!cuda_check(cudaMemset(d_gradients_, 0, nc * DeviceMesh::NGRAD * sizeof(Real)), "cudaMemset gradients", error)) {
+        release();
+        return false;
+    }
+
+    std::vector<Real> h_nx(nf), h_ny(nf), h_nz(nf), h_area(nf), h_face_cx(nf), h_face_cy(nf), h_face_cz(nf);
+    std::vector<int> h_left_cell(nf), h_right_cell(nf);
+    for (std::size_t i = 0; i < nf; ++i) {
+        const auto& f = mesh.faces[i];
+        h_nx[i] = f.nx; h_ny[i] = f.ny; h_nz[i] = f.nz;
+        h_area[i] = f.area;
+        h_left_cell[i] = f.left_cell; h_right_cell[i] = f.right_cell;
+        h_face_cx[i] = f.cx; h_face_cy[i] = f.cy; h_face_cz[i] = f.cz;
+    }
+    if (!skip_coloring && nf > 0) {
+        std::vector<int> color_of_face;
+        int nc_used = greedy_color_faces(h_left_cell, h_right_cell, nf, kMaxColors, color_of_face);
+        if (nc_used > 0) {
+            n_colors_ = nc_used;
+            host_color_offsets_.assign(n_colors_ + 1, 0);
+            for (std::size_t f = 0; f < nf; ++f) {
+                int c = color_of_face[f];
+                host_color_offsets_[static_cast<std::size_t>(c) + 1]++;
+            }
+            for (int c = 1; c <= n_colors_; ++c)
+                host_color_offsets_[c] += host_color_offsets_[c - 1];
+
+            std::vector<int> insert_pos = host_color_offsets_;
+            std::vector<int> dest(nf);
+            for (std::size_t f = 0; f < nf; ++f) {
+                int c = color_of_face[f];
+                dest[f] = insert_pos[c]++;
+            }
+
+            auto reorder = [&](auto& vec) {
+                auto copy = vec;
+                for (std::size_t f = 0; f < nf; ++f)
+                    vec[static_cast<std::size_t>(dest[f])] = copy[f];
+            };
+            reorder(h_nx); reorder(h_ny); reorder(h_nz);
+            reorder(h_area);
+            reorder(h_left_cell); reorder(h_right_cell);
+            reorder(temp_boundary);
+            reorder(h_face_cx); reorder(h_face_cy); reorder(h_face_cz);
+        }
+    }
+
+    if (!copy(d_nx_, h_nx.data(), nf * sizeof(Real), "cudaMemcpy nx")) return false;
+    if (!copy(d_ny_, h_ny.data(), nf * sizeof(Real), "cudaMemcpy ny")) return false;
+    if (!copy(d_nz_, h_nz.data(), nf * sizeof(Real), "cudaMemcpy nz")) return false;
+    if (!copy(d_area_, h_area.data(), nf * sizeof(Real), "cudaMemcpy area")) return false;
+    if (!copy(d_left_cell_, h_left_cell.data(), nf * sizeof(int), "cudaMemcpy left_cell")) return false;
+    if (!copy(d_right_cell_, h_right_cell.data(), nf * sizeof(int), "cudaMemcpy right_cell")) return false;
+    if (!copy(d_boundary_, temp_boundary.data(), nf * sizeof(int), "cudaMemcpy boundary")) return false;
+    if (!copy(d_face_cx_, h_face_cx.data(), nf * sizeof(Real), "cudaMemcpy face cx")) return false;
+    if (!copy(d_face_cy_, h_face_cy.data(), nf * sizeof(Real), "cudaMemcpy face cy")) return false;
+    if (!copy(d_face_cz_, h_face_cz.data(), nf * sizeof(Real), "cudaMemcpy face cz")) return false;
+
+    std::vector<Real> h_volume(nc), h_h_min(nc), h_wall_distance(nc), h_cx(nc), h_cy(nc), h_cz(nc);
+    for (std::size_t i = 0; i < nc; ++i) {
+        const auto& c = mesh.cells[i];
+        h_volume[i] = c.volume; h_h_min[i] = c.h_min; h_wall_distance[i] = c.wall_distance;
+        h_cx[i] = c.cx; h_cy[i] = c.cy; h_cz[i] = c.cz;
+    }
+    if (!copy(d_volume_, h_volume.data(), nc * sizeof(Real), "cudaMemcpy volume")) return false;
+    if (!copy(d_h_min_, h_h_min.data(), nc * sizeof(Real), "cudaMemcpy h_min")) return false;
+    if (!copy(d_wall_distance_, h_wall_distance.data(), nc * sizeof(Real), "cudaMemcpy wall_distance")) return false;
+    if (!copy(d_cx_, h_cx.data(), nc * sizeof(Real), "cudaMemcpy cx")) return false;
+    if (!copy(d_cy_, h_cy.data(), nc * sizeof(Real), "cudaMemcpy cy")) return false;
+    if (!copy(d_cz_, h_cz.data(), nc * sizeof(Real), "cudaMemcpy cz")) return false;
+
+    if (!cuda_check(cudaMemset(d_residual_, 0, nc * NVAR * sizeof(Real)), "cudaMemset residual", error)) {
+        release();
+        return false;
+    }
+
+    if (n_colors_ > 0) {
+        if (!alloc(d_color_offsets_, static_cast<std::size_t>(n_colors_ + 1) * sizeof(int), "cudaMalloc color_offsets")) return false;
+        if (!copy(d_color_offsets_, host_color_offsets_.data(), static_cast<std::size_t>(n_colors_ + 1) * sizeof(int), "cudaMemcpy color_offsets")) return false;
+    }
+
+    return true;
+}
+
+bool DeviceMesh::upload_state(const std::vector<ConservativeState>& q, std::string* error) {
+    if (cell_count_ == 0 || static_cast<int>(q.size()) != cell_count_) {
+        if (error) *error = "state size mismatch";
+        return false;
+    }
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    std::vector<Real> flat(nc * NVAR);
+    for (std::size_t i = 0; i < nc; ++i) {
+        flat[i * NVAR + 0] = q[i].rho;
+        flat[i * NVAR + 1] = q[i].rho_u;
+        flat[i * NVAR + 2] = q[i].rho_v;
+        flat[i * NVAR + 3] = q[i].rho_w;
+        flat[i * NVAR + 4] = q[i].rho_E;
+        flat[i * NVAR + 5] = q[i].rho_nu_tilde;
+    }
+    return cuda_check(cudaMemcpy(d_q_, flat.data(), nc * NVAR * sizeof(Real), cudaMemcpyHostToDevice), "cudaMemcpy upload_state", error);
+}
+
+bool DeviceMesh::upload_gradients(const std::vector<PrimitiveGradient>& gradients, std::string* error) {
+    if (cell_count_ == 0 || static_cast<int>(gradients.size()) != cell_count_) {
+        if (error) *error = "gradient size mismatch";
+        return false;
+    }
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    if (!d_gradients_) {
+        if (!cuda_check(cudaMalloc(&d_gradients_, nc * DeviceMesh::NGRAD * sizeof(Real)), "cudaMalloc gradients", error)) return false;
+    }
+    return cuda_check(cudaMemcpy(d_gradients_, gradients.data(), nc * sizeof(PrimitiveGradient), cudaMemcpyHostToDevice), "cudaMemcpy upload_gradients", error);
+}
+
+bool DeviceMesh::upload_limiters(const std::vector<PrimitiveLimiter>& limiters, std::string* error) {
+    if (cell_count_ == 0 || static_cast<int>(limiters.size()) != cell_count_) {
+        if (error) *error = "limiter size mismatch";
+        return false;
+    }
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    if (!d_limiters_) {
+        if (!cuda_check(cudaMalloc(&d_limiters_, nc * sizeof(PrimitiveLimiter)), "cudaMalloc limiters", error)) return false;
+    }
+    return cuda_check(cudaMemcpy(d_limiters_, limiters.data(), nc * sizeof(PrimitiveLimiter), cudaMemcpyHostToDevice), "cudaMemcpy upload_limiters", error);
+}
+
+bool DeviceMesh::clear_residual(std::string* error) {
+    if (!d_residual_ || cell_count_ == 0) {
+        if (error) *error = "residual buffer not allocated";
+        return false;
+    }
+    return cuda_check(cudaMemset(d_residual_, 0, static_cast<std::size_t>(cell_count_) * NVAR * sizeof(Real)), "cudaMemset clear_residual", error);
+}
+
+bool DeviceMesh::download_state(std::vector<ConservativeState>& q, std::string* error) const {
+    if (!d_q_ || cell_count_ == 0) {
+        if (error) *error = "state buffer not allocated";
+        return false;
+    }
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    std::vector<Real> flat(nc * NVAR);
+    if (!cuda_check(cudaMemcpy(flat.data(), d_q_, nc * NVAR * sizeof(Real), cudaMemcpyDeviceToHost), "cudaMemcpy download_state", error)) return false;
+    q.resize(nc);
+    for (std::size_t i = 0; i < nc; ++i) {
+        q[i].rho = flat[i * NVAR + 0];
+        q[i].rho_u = flat[i * NVAR + 1];
+        q[i].rho_v = flat[i * NVAR + 2];
+        q[i].rho_w = flat[i * NVAR + 3];
+        q[i].rho_E = flat[i * NVAR + 4];
+    }
+    return true;
+}
+
+bool DeviceMesh::download_residual(std::vector<EulerFlux>& residual, std::string* error) const {
+    if (!d_residual_ || cell_count_ == 0) {
+        if (error) *error = "residual buffer not allocated";
+        return false;
+    }
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    std::vector<Real> flat(nc * NVAR);
+    if (!cuda_check(cudaMemcpy(flat.data(), d_residual_, nc * NVAR * sizeof(Real), cudaMemcpyDeviceToHost), "cudaMemcpy download_residual", error)) return false;
+    residual.resize(nc);
+    for (std::size_t i = 0; i < nc; ++i) {
+        residual[i].mass = flat[i * NVAR + 0];
+        residual[i].mom_x = flat[i * NVAR + 1];
+        residual[i].mom_y = flat[i * NVAR + 2];
+        residual[i].mom_z = flat[i * NVAR + 3];
+        residual[i].energy = flat[i * NVAR + 4];
+    }
+    return true;
+}
+
+bool DeviceMesh::download_gradients(std::vector<PrimitiveGradient>& gradients, std::string* error) const {
+    if (!d_gradients_ || cell_count_ == 0) {
+        if (error) *error = "gradient buffer not allocated";
+        return false;
+    }
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    gradients.resize(nc);
+    return cuda_check(cudaMemcpy(gradients.data(), d_gradients_, nc * sizeof(PrimitiveGradient), cudaMemcpyDeviceToHost), "cudaMemcpy download_gradients", error);
+}
+
+bool DeviceMesh::allocate_viscous() {
+    if (cell_count_ == 0) return false;
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    if (!cuda_check(cudaMalloc(&d_mu_, nc * sizeof(Real)), "cudaMalloc d_mu_", nullptr)) return false;
+    if (!cuda_check(cudaMalloc(&d_lam_, nc * sizeof(Real)), "cudaMalloc d_lam_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_mu_, 0, nc * sizeof(Real)), "cudaMemset d_mu_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_lam_, 0, nc * sizeof(Real)), "cudaMemset d_lam_", nullptr)) return false;
+    return true;
+}
+
+bool DeviceMesh::allocate_halo(int n_halo_cells) {
+    cuda_free_safe(d_halo_indices_);
+    cuda_free_safe(d_halo_send_buf_);
+    cuda_free_safe(d_halo_recv_buf_);
+    n_halo_cells_ = 0;
+    if (n_halo_cells <= 0) {
+        return true;
+    }
+    n_halo_cells_ = n_halo_cells;
+    if (!cuda_check(cudaMalloc(&d_halo_indices_, n_halo_cells_ * sizeof(int)), "cudaMalloc halo_indices", nullptr)) {
+        n_halo_cells_ = 0;
+        return false;
+    }
+    if (!cuda_check(cudaMalloc(&d_halo_send_buf_, n_halo_cells_ * NVAR * sizeof(Real)), "cudaMalloc halo_send_buf", nullptr)) {
+        release();
+        return false;
+    }
+    if (!cuda_check(cudaMalloc(&d_halo_recv_buf_, n_halo_cells_ * NVAR * sizeof(Real)), "cudaMalloc halo_recv_buf", nullptr)) {
+        release();
+        return false;
+    }
+    return true;
+}
+
+} // namespace Cfd
+} // namespace AeroSim
+

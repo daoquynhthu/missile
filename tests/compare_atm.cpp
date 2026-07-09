@@ -2,8 +2,8 @@
 #include <iomanip>
 #include <vector>
 #include <cmath>
-#include "atmosphere_model.hpp"
-#include "constants.hpp"
+#include "sim/atmosphere/atmosphere_model.hpp"
+#include "infra/math/constants.hpp"
 
 using namespace AeroSim;
 

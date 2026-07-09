@@ -1,8 +1,8 @@
 #include <iostream>
 #include <cmath>
 #include <cstdlib>
-#include "aero_solver/aero_skin_friction.hpp"
-#include "aero_solver/aero_solver.hpp"
+#include "aero/engineering/aero_skin_friction.hpp"
+#include "aero/panel/aero_solver.hpp"
 
 using namespace AeroSim::Solver;
 

@@ -31,6 +31,10 @@ find_package(CUDAToolkit REQUIRED)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 
 # Find Eigen3 or Fetch it
+set(BUILD_TESTING OFF CACHE BOOL "Disable testing for Eigen" FORCE)
+set(EIGEN_BUILD_TESTING OFF CACHE BOOL "Disable Eigen test suite" FORCE)
+# Disable Fortran compiler detection before Eigen processes its blas/ subdirectory
+set(CMAKE_Fortran_COMPILER "FALSE" CACHE INTERNAL "Fortran compiler (disabled, not needed)" FORCE)
 include(FetchContent)
 FetchContent_Declare(
     eigen
@@ -38,22 +42,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(eigen)
 
-# Define source files for the core library
-file(GLOB_RECURSE LIB_SOURCES 
-    "src/*.cpp" 
-    "src/*.c" 
-    "src/*.cu" 
-    "src/aero_solver/*.cu"
-)
+# Collect all library sources
+file(GLOB_RECURSE LIB_SOURCES "src/*.cpp" "src/*.c" "src/*.cu")
 
-# Remove main.cpp and tests from library sources
-list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/main.cpp")
-list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/rm_dart_sim.cpp")
-list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/rm_dart_mc.cu")
-list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/shape_optimizer.cpp")
-list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/aero_calc_tool.cpp")
-list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/rm_dart_debug.cu")
-list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/aero_solver/aero_solver_c_api.cu")
+# Remove the C API source from library (it's a separate SHARED target)
+list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/src/aero/panel/aero_solver_c_api.cu")
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_SOURCE_DIR}/tests/test_gravity.cu")
 
 # Core library (static)
@@ -62,27 +55,39 @@ add_library(missile_lib STATIC ${LIB_SOURCES})
 # Include directories
 target_include_directories(missile_lib PUBLIC 
     include 
-    include/aero_solver
-    ${eigen_SOURCE_DIR} # Add Eigen source dir
+    ${eigen_SOURCE_DIR}
 )
 
-# NRLMSISE-00 Fortran compilation via gfortran (VS generator does not support Fortran natively)
+# Enable RDC for the library (required for cross-file __device__ calls)
+set_target_properties(missile_lib PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+)
+
+# NRLMSISE-00 Fortran compilation via gfortran
+# MinGW gfortran → DLL → .def → MSVC lib.exe → COFF .lib for MSVC linker
 find_program(GFORTRAN gfortran)
-if(GFORTRAN)
+if(GFORTRAN AND CMAKE_AR)
+    set(NRLMSISE00_DEF "${CMAKE_BINARY_DIR}/nrlmsise00.def")
     set(NRLMSISE00_LIB "${CMAKE_BINARY_DIR}/nrlmsise00.lib")
-    add_custom_command(OUTPUT "${NRLMSISE00_LIB}"
-        COMMAND ${GFORTRAN} -shared -o "${CMAKE_BINARY_DIR}/nrlmsise00.dll"
+    set(NRLMSISE00_DLL "${CMAKE_BINARY_DIR}/nrlmsise00.dll")
+    add_custom_command(OUTPUT "${NRLMSISE00_DLL}" "${NRLMSISE00_DEF}"
+        COMMAND ${GFORTRAN} -shared -o "${NRLMSISE00_DLL}"
             "${CMAKE_SOURCE_DIR}/src/sim/atmosphere/nrlmsise00.f"
-            -Wl,--out-implib,"${NRLMSISE00_LIB}"
+            -Wl,--output-def,"${NRLMSISE00_DEF}"
             -static -std=legacy -Wno-unused-variable
         DEPENDS "${CMAKE_SOURCE_DIR}/src/sim/atmosphere/nrlmsise00.f"
         COMMENT "Compiling NRLMSISE-00 (Fortran)..."
     )
-    add_custom_target(nrlmsise00 DEPENDS "${NRLMSISE00_LIB}")
+    add_custom_command(OUTPUT "${NRLMSISE00_LIB}"
+        COMMAND ${CMAKE_AR} /def:"${NRLMSISE00_DEF}" /out:"${NRLMSISE00_LIB}" /machine:x64
+        DEPENDS "${NRLMSISE00_DEF}"
+        COMMENT "Generating MSVC-compatible NRLMSISE-00 import library..."
+    )
+    add_custom_target(nrlmsise00 DEPENDS "${NRLMSISE00_LIB}" "${NRLMSISE00_DLL}")
     add_dependencies(missile_lib nrlmsise00)
     target_link_libraries(missile_lib PUBLIC "${NRLMSISE00_LIB}")
 else()
-    message(WARNING "gfortran not found — NRLMSISE-00 disabled. Atmosphere::calculate() will fall back to USSA76 on host.")
+    message(WARNING "gfortran or lib.exe not found — NRLMSISE-00 disabled. Atmosphere::calculate() will fall back to USSA76 on host.")
 endif()
 
 # Helper: copy nrlmsise00.dll to target output directory
@@ -111,11 +116,11 @@ if(MSVC)
 endif()
 
 # C API DLL for Python ctypes
-add_library(aero_solver_c SHARED src/aero_solver/aero_solver_c_api.cu)
+add_library(aero_solver_c SHARED src/aero/panel/aero_solver_c_api.cu)
 target_compile_definitions(aero_solver_c PRIVATE AERO_SOLVER_EXPORTS)
 target_link_libraries(aero_solver_c PRIVATE missile_lib)
 target_include_directories(aero_solver_c PRIVATE
-    include include/aero_solver ${eigen_SOURCE_DIR}
+    include ${eigen_SOURCE_DIR}
 )
 set_target_properties(aero_solver_c PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -124,35 +129,40 @@ set_target_properties(aero_solver_c PROPERTIES
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 # Main Executable
-add_executable(AeroSim src/main.cpp)
-set_source_files_properties(src/main.cpp PROPERTIES LANGUAGE CUDA)
+add_executable(AeroSim app/sim_main/main.cpp)
 target_link_libraries(AeroSim PRIVATE missile_lib)
 set_target_properties(AeroSim PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(AeroSim PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 # AeroCalc Tool (For fast aerodynamic evaluation)
-add_executable(AeroCalc src/aero_calc_tool.cpp)
-set_source_files_properties(src/aero_calc_tool.cpp PROPERTIES LANGUAGE CUDA)
+add_executable(AeroCalc app/aero_calc/main.cpp)
 target_link_libraries(AeroCalc PRIVATE missile_lib)
 set_target_properties(AeroCalc PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(AeroCalc PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 # Shape Optimizer (C++ based for speed)
-add_executable(ShapeOptimizer src/shape_optimizer.cpp)
-set_source_files_properties(src/shape_optimizer.cpp PROPERTIES LANGUAGE CUDA)
+add_executable(ShapeOptimizer app/shape_optimizer/main.cpp)
 target_link_libraries(ShapeOptimizer PRIVATE missile_lib)
 set_target_properties(ShapeOptimizer PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(ShapeOptimizer PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
+# Aero Table Generator
+add_executable(AeroTableGen app/aero_table_gen/main.cpp)
+target_link_libraries(AeroTableGen PRIVATE missile_lib)
+set_target_properties(AeroTableGen PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(AeroTableGen PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+set_target_properties(AeroTableGen PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 # RM Dart Simulation
-add_executable(RMDartSim src/rm_dart_sim.cpp)
-set_source_files_properties(src/rm_dart_sim.cpp PROPERTIES LANGUAGE CUDA)
+add_executable(RMDartSim examples/dart/sim.cpp)
+target_include_directories(RMDartSim PRIVATE examples/dart)
 target_link_libraries(RMDartSim PRIVATE missile_lib)
 set_target_properties(RMDartSim PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(RMDartSim PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 # RM Dart GPU Monte Carlo
-add_executable(RMDartMC src/rm_dart_mc.cu)
+add_executable(RMDartMC examples/dart/rm_dart_mc.cu)
+target_include_directories(RMDartMC PRIVATE examples/dart)
 target_link_libraries(RMDartMC PRIVATE missile_lib)
 set_target_properties(RMDartMC PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(RMDartMC PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
@@ -164,8 +174,7 @@ set_target_properties(AeroSim PROPERTIES
 )
 
 # 8. RMDartDebug
-add_executable(RMDartDebug src/rm_dart_debug.cu)
-set_source_files_properties(src/rm_dart_debug.cu PROPERTIES LANGUAGE CUDA)
+add_executable(RMDartDebug examples/dart/rm_dart_debug.cu)
 target_link_libraries(RMDartDebug PRIVATE missile_lib)
 set_target_properties(RMDartDebug PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(RMDartDebug PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
@@ -189,11 +198,7 @@ target_link_libraries(TestPropulsion PRIVATE missile_lib)
 set_target_properties(TestPropulsion PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(TestPropulsion PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 set_target_properties(TestPropulsion PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-add_custom_command(TARGET TestPropulsion POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_FILE:missile_lib>
-    $<TARGET_FILE_DIR:TestPropulsion>
-)
+
 add_test(NAME PropulsionTest COMMAND TestPropulsion)
 
 # 2. Aerodynamics Test

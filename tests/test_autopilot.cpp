@@ -3,8 +3,8 @@
 #include <cmath>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-#include "gnc/autopilot.hpp"
-#include "missile_config.hpp"
+#include "sim/control/autopilot.hpp"
+#include "config/missile_config.hpp"
 
 using namespace AeroSim;
 

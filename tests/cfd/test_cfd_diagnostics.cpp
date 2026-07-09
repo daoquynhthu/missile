@@ -1,5 +1,5 @@
-#include "aero_cfd/real.hpp"
-#include "aero_cfd/cfd_solver.hpp"
+#include "aero/cfd/real.hpp"
+#include "aero/cfd/cfd_solver.hpp"
 
 #include <cmath>
 #include <cstdio>

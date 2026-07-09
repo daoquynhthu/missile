@@ -2,15 +2,15 @@
 #include <vector>
 #include <cmath>
 #include <Eigen/Dense>
-#include "dynamics_6dof.hpp"
-#include "propulsion_model.hpp"
-#include "aerodynamics_model.hpp"
-#include "gnc/guidance.hpp"
-#include "gnc/autopilot.hpp"
-#include "gravity_model.hpp"
-#include "atmosphere_model.hpp"
-#include "missile_config.hpp"
-// #include "utils/integrator.hpp" // Removed
+#include "sim/dynamics/dynamics_6dof.hpp"
+#include "sim/propulsion/propulsion_model.hpp"
+#include "aero/aerodynamics_model.hpp"
+#include "sim/control/guidance.hpp"
+#include "sim/control/autopilot.hpp"
+#include "sim/gravity/gravity_model.hpp"
+#include "sim/atmosphere/atmosphere_model.hpp"
+#include "config/missile_config.hpp"
+// #include "infra/util/integrator.hpp" // Removed
 
 using namespace AeroSim;
 
