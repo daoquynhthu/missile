@@ -10,6 +10,7 @@
 #include "aero_cfd/device_mesh.hpp"
 #include "aero_cfd/gpu_solver.hpp"
 #include "aero_cfd/gpu_solver_internal.hpp"
+#include "aero_cfd/rans.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1289,6 +1290,76 @@ static int test_rans_zero_nu_tilde() {
     return 0;
 }
 
+static int test_rans_cpu_gpu_source_match() {
+    TEST("CFD-ORACLE-RANS-4 CPU/GPU SA residual match on cube mesh");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        w.nu_tilde = 3.0f;
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        std::vector<PrimitiveGradient> grads = compute_green_gauss_gradients(mesh, q, 1.4f);
+        if (grads.size() != mesh.cells.size()) FAIL("gradients failed");
+
+        std::vector<PrimitiveLimiter> limiters = compute_barth_jespersen_limiters(mesh, q, grads, 1.4f);
+        if (limiters.size() != mesh.cells.size()) FAIL("limiters failed");
+
+        std::vector<PrimitiveGradient> limited(grads.size());
+        for (std::size_t i = 0; i < grads.size(); ++i)
+            limited[i] = apply_limiter(grads[i], limiters[i]);
+
+        std::vector<Real> cpu_delta(q.size(), 0.0f);
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            PrimitiveState wc;
+            conservative_to_primitive(q[i], 1.4f, wc);
+            Real wall_d = mesh.cells[i].h_min;
+            Real mu = 1.0f;
+            RansSource rs = compute_rans_source(wc, limited[i], wall_d, mu, q[i].rho, 1e5f);
+            cpu_delta[i] = rs.total_source;
+        }
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+
+        Real gamma = 1.4f;
+        if (!compute_gradients_gpu(d_mesh, gamma, &error)) FAIL("GPU gradients: %s", error.c_str());
+        if (!compute_limiters_gpu(d_mesh, gamma, &error)) FAIL("GPU limiters: %s", error.c_str());
+        if (!apply_limiter_gpu(d_mesh, true, &error)) FAIL("GPU limit apply: %s", error.c_str());
+
+        int* d_failed;
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "memset d_failed", &error)) FAIL("%s", error.c_str());
+
+        if (!compute_rans_source_gpu(d_mesh, gamma, 1e5f, d_failed, &error))
+            FAIL("GPU RANS source: %s", error.c_str());
+
+        std::vector<Real> gpu_q(mesh.cells.size() * 6);
+        if (!cuda_check(cudaMemcpy(gpu_q.data(), d_mesh.state_device(), mesh.cells.size() * 6 * sizeof(Real), cudaMemcpyDeviceToHost), "download state", &error))
+            FAIL("%s", error.c_str());
+
+        cudaFree(d_failed);
+
+        Real max_diff = 0.0f;
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            Real cpu_nu_new = q[i].rho_nu_tilde + cpu_delta[i];
+            Real gpu_nu_new = gpu_q[i * 6 + 5];
+            Real d = std::fabs(gpu_nu_new - cpu_nu_new);
+            Real base = 1.0f + std::max(std::fabs(gpu_nu_new), std::fabs(cpu_nu_new));
+            if (d / base > max_diff) max_diff = d / base;
+        }
+
+        if (max_diff > 1e-4f)
+            FAIL("CPU/GPU SA source max rel diff=%g", max_diff);
+
+        PASS;
+    }
+    return 0;
+}
+
 static int test_rans_turbulent_flat_plate() {
     TEST("CFD-ORACLE-RANS-3 turbulent flat plate Cf plausible");
     {
@@ -1365,6 +1436,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_rans_false_regression();
     result |= test_rans_zero_nu_tilde();
     result |= test_rans_turbulent_flat_plate();
+    result |= test_rans_cpu_gpu_source_match();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

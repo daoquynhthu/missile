@@ -289,3 +289,7 @@
   - Added `CFD-ORACLE-RECON-5` test: CPU order-2 residual matches GPU order-2 on 9^3 cube mesh (max diff < 1e-5)
   - No solver loop integration — CPU order-2 is a standalone oracle function, not a solver path
 - Build + TestCfdGpu 32/33 PASS (BW-1 pre-existing).
+2026-07-09 (session 3)
+- RANS-4 CPU/GPU SA residual cross-check:
+  - Test launches GPU gradient+limiter+rans_source, computes same SA source on CPU, compares rho_nu_tilde delta — rel diff < 1e-4
+- Build + TestCfdGpu 33/34 PASS (BW-1 pre-existing).
