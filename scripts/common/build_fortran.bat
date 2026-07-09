@@ -1,1 +1,0 @@
-"C:\Users\Lenovo\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT.LLVM_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\gfortran.exe" -shared -o e:\missile\src\nrlmsise00.dll e:\missile\src\nrlmsise00.f -Wl,--out-implib,e:\missile\src\nrlmsise00.lib -static -std=legacy -Wno-unused-variable
