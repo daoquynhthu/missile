@@ -20,6 +20,13 @@ bool compute_euler_residual_cpu(
     Real gamma,
     std::vector<EulerFlux>& residual);
 
+bool compute_euler_residual_cpu_order2(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    const PrimitiveState& freestream,
+    Real gamma,
+    std::vector<EulerFlux>& residual);
+
 bool launch_euler_residual_kernel(
     DeviceMesh& mesh,
     const PrimitiveState& freestream,

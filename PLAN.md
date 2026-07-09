@@ -553,6 +553,11 @@ Tests:
 - [x] `CFD-ORACLE-RANS-3`: turbulent flat plate `Cf` plausible (≥ laminar)
 - [ ] `CFD-ORACLE-RANS-4`: CPU/GPU SA residual match (deferred — needs CPU/GPU RANS source cross-check)
 
+CPU order-2 residual:
+
+- [x] `compute_euler_residual_cpu_order2` — Green-Gauss gradients + Barth-Jespersen limiters + face reconstruction + turbulence transport
+- [x] `CFD-ORACLE-RECON-5`: CPU order-2 residual matches GPU order-2 on cube mesh (max diff < 1e-5)
+
 Gate:
 
 - `turbulence=false` returns Phase 5 result (regression).

@@ -283,3 +283,9 @@
   - CFD-ORACLE-RANS-2: zero nu_tilde with turbulence=true matches laminar — PASS
   - CFD-ORACLE-RANS-3: turbulent flat plate Cf ≥ laminar Cf — PASS
 - Build + TestCfdGpu 31/32 PASS (BW-1 pre-existing).
+2026-07-09 (session 2)
+- CPU order-2 residual upgrade:
+  - Added `compute_euler_residual_cpu_order2` in cfd_residual.cpp — Green-Gauss gradients + Barth-Jespersen limiters + face reconstruction + turbulence transport (all 6 components)
+  - Added `CFD-ORACLE-RECON-5` test: CPU order-2 residual matches GPU order-2 on 9^3 cube mesh (max diff < 1e-5)
+  - No solver loop integration — CPU order-2 is a standalone oracle function, not a solver path
+- Build + TestCfdGpu 32/33 PASS (BW-1 pre-existing).

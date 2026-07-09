@@ -880,6 +880,51 @@ static int test_recon_order2_converged_forces() {
     return 0;
 }
 
+static int test_cpu_order2_residual_matches_gpu() {
+    TEST("CFD-ORACLE-RECON-5 CPU order-2 residual matches GPU order-2 on cube mesh");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(2.0f, 3.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        std::vector<EulerFlux> cpu_res(mesh.cells.size());
+        if (!compute_euler_residual_cpu_order2(mesh, q, w, 1.4f, cpu_res))
+            FAIL("CPU order-2 residual failed");
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (!compute_euler_residual_gpu(d_mesh, w, 1.4f, &error, 2))
+            FAIL("GPU order-2 residual failed: %s", error.c_str());
+
+        std::size_t nc = mesh.cells.size();
+        Real* gpu_res = new Real[nc * 6];
+        if (!cuda_check(cudaMemcpy(gpu_res, d_mesh.residual_device(), nc * 6 * sizeof(Real), cudaMemcpyDeviceToHost), "download gpu res", &error)) FAIL("%s", error.c_str());
+
+        Real max_diff = 0.0f;
+        for (std::size_t i = 0; i < nc; ++i) {
+            Real d_mass = std::fabs(cpu_res[i].mass - gpu_res[i * 6 + 0]);
+            Real d_mx = std::fabs(cpu_res[i].mom_x - gpu_res[i * 6 + 1]);
+            Real d_my = std::fabs(cpu_res[i].mom_y - gpu_res[i * 6 + 2]);
+            Real d_mz = std::fabs(cpu_res[i].mom_z - gpu_res[i * 6 + 3]);
+            Real d_en = std::fabs(cpu_res[i].energy - gpu_res[i * 6 + 4]);
+            Real d_turb = std::fabs(cpu_res[i].turbulence - gpu_res[i * 6 + 5]);
+            Real d = std::max({d_mass, d_mx, d_my, d_mz, d_en, d_turb});
+            if (d > max_diff) max_diff = d;
+        }
+
+        delete[] gpu_res;
+
+        if (max_diff > 1e-5f)
+            FAIL("max CPU/GPU order-2 residual diff=%g", max_diff);
+
+        PASS;
+    }
+    return 0;
+}
+
 static int test_color_count() {
     TEST("CFD-COLOR-1 face coloring produces valid color count");
     {
@@ -1304,7 +1349,8 @@ int main() {
     result |= test_recon_constant_state_zero_gradients();
     result |= test_recon_gradient_match();
     result |= test_recon_first_order_regression();
-    result |= test_recon_order2_converged_forces();
+result |= test_recon_order2_converged_forces();
+    result |= test_cpu_order2_residual_matches_gpu();
     result |= test_oracle_mesh_counts();
     result |= test_oracle_bandwidth();
     result |= test_diag_state_bounds_gpu_cpu_match();
