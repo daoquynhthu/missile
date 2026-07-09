@@ -234,7 +234,6 @@ __global__ void viscous_flux_kernel_atomic(
     constexpr Real sigma_sa = 2.0f / 3.0f;
     constexpr Real cv1 = 7.1f;
     constexpr Real cv13 = cv1 * cv1 * cv1;
-    constexpr Real karman = 0.41f;
 
     Real nu_tilde_L = d_q[left * nvar + 5] / rho_L;
     if (!real_isfinite(nu_tilde_L)) return;

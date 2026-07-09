@@ -31,7 +31,6 @@ __host__ __device__ void compute_gravity_single_point(const Vec3& r_ecef, double
     }
 
     // Constants
-    double rho = R / r;
     double u = z / r; // sin(phi)
 
     // Implementation of the "Pines" algorithm (singular-free at poles)
@@ -307,7 +306,7 @@ bool aerosp::GravityModel::load_coefficients(const std::string& filepath) {
         for (char &c : line) if (c == 'd' || c == 'D') c = 'e';
         
         std::stringstream ss(line);
-        std::string type; int n, m; double c, s, dc, ds;
+        std::string type; int n, m; double c, s;
         if (ss >> type >> n >> m >> c >> s) {
             if (n <= m_loaded_max_degree && m <= n) {
                 int index = n * (n + 1) / 2 + m;
