@@ -4,12 +4,15 @@ import subprocess
 import os
 import sys
 import random
+from pathlib import Path
 from generate_cone_waverider import generate_cone_waverider
 
-# Configuration
-AERO_CALC_EXE = r"e:\missile\build\bin\Release\AeroCalc.exe"
-STL_PATH = "e:/missile/temp_opt_shape.stl"
-BEST_STL_PATH = "e:/missile/hgv_model_optimized.stl"
+# Configuration (paths relative to repository root)
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _SCRIPT_DIR.parent.parent
+AERO_CALC_EXE = str(_PROJECT_ROOT / "build" / "bin" / "Release" / "AeroCalc.exe")
+STL_PATH = str(_PROJECT_ROOT / "temp_opt_shape.stl")
+BEST_STL_PATH = str(_PROJECT_ROOT / "hgv_model_optimized.stl")
 
 # Design Point for Optimization
 # Mach 15, Alpha 10 deg, Beta 0

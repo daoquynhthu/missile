@@ -2,8 +2,10 @@ import subprocess
 import os
 import csv
 import math
+from pathlib import Path
 
-EXE_PATH = r"e:\missile\build\bin\Release\AeroSim.exe"
+_SCRIPT_DIR = Path(__file__).resolve().parent
+EXE_PATH = str(_SCRIPT_DIR.parent.parent / "build" / "bin" / "Release" / "AeroSim.exe")
 CSV_PATH = "simulation_data.csv"
 
 def run_debug():
