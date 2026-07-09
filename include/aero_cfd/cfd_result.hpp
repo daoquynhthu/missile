@@ -20,7 +20,10 @@ struct CfdForceResult {
     int iterations = 0;
     Real residual = 0.0f;
     std::string fidelity = "cfd-cpu";
+    std::string turbulence_model = "laminar";
 };
+
+
 
 } // namespace Cfd
 } // namespace AeroSim

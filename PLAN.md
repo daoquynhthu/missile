@@ -541,10 +541,10 @@ Tasks:
 - [x] Phase 7.3a: update_and_l2_kernel — reads/writes rho_nu_tilde (index 5), includes in L2 norm
 - [x] Phase 7.3b: d_farfield_ghost_state now takes/propagates nu_tilde; kernels pass freestream.nu_tilde
 - [x] Phase 7.3c: Negative nu_tilde handling per SA-neg standard (cn1=2 branch when chi < 0)
-- [ ] SA wall BC: `nu_tilde = 0` (naturally enforced by SA destruction as d→0; no explicit BC change needed)
-- [ ] SA farfield BC: specified `nu_tilde / mu` ratio (freestream.nu_tilde passthrough done; ratio variant deferred)
-- [ ] Source-term point-implicit treatment for stability (deferred — explicit still works at low CFL)
-- [ ] SA diffusion: viscous operator with mu_tilde = rho * nu_tilde * fv1 / sigma (deferred — only gradient-based diffusion currently)
+- [x] SA wall BC: `nu_tilde = 0` — naturally enforced by SA destruction as d→0; no explicit BC change needed
+- [ ] SA farfield BC: specified `nu_tilde / mu` ratio — moved to Phase 8
+- [ ] Source-term point-implicit treatment — moved to Phase 8
+- [ ] SA diffusion: viscous operator with mu_tilde = rho * nu_tilde * fv1 / sigma — moved to Phase 8
 
 Tests:
 
@@ -560,16 +560,22 @@ CPU order-2 residual:
 
 Gate:
 
-- `turbulence=false` returns Phase 5 result (regression).
-- SA results explicitly labeled as "RANS modeled, not transition-resolved".
-- Negative `nu_tilde` handled without silent clamp.
-- Turbulent flat plate Cf > laminar reference at same Re.
+- [x] `turbulence=false` returns Phase 5 result (regression).
+- [x] Negative `nu_tilde` handled without silent clamp.
+- [x] Turbulent flat plate Cf > laminar reference at same Re.
+- [ ] SA results explicitly labeled as "RANS modeled, not transition-resolved" in downstream output.
 
 ---
 
 ## Phase 8 — High-Order And DNS-Grade Verification
 
 See `AERO_ACCURACY_UPGRADE.md` Stage HO/DNS for design.
+
+Phase 7 deferred items (SA completeness):
+
+- [ ] SA farfield BC: specified `nu_tilde / mu` ratio (currently passthrough of freestream.nu_tilde, need ratio variant)
+- [ ] Source-term point-implicit treatment for RANS stability at higher CFL
+- [ ] SA diffusion: viscous operator with mu_tilde = rho * nu_tilde * fv1 / sigma in viscous_flux_kernel
 
 Tasks placeholder:
 
@@ -581,7 +587,7 @@ Tasks placeholder:
 - [ ] Isentropic vortex benchmark
 - [ ] Taylor-Green vortex benchmark
 - [ ] Shock/vortex interaction benchmark
-- [ ] DNS resolution metrics: near-wall spacing, spectral content, time-step convergence
+- [ ] DNS resolution metrics: near-wall spacing, spectral content, time step convergence
 
 Gate:
 

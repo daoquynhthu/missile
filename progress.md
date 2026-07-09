@@ -293,3 +293,13 @@
 - RANS-4 CPU/GPU SA residual cross-check:
   - Test launches GPU gradient+limiter+rans_source, computes same SA source on CPU, compares rho_nu_tilde delta — rel diff < 1e-4
 - Build + TestCfdGpu 33/34 PASS (BW-1 pre-existing).
+2026-07-09 (session 4)
+- Phase 7 gate closure:
+  - CfdForceResult: added `turbulence_model` field ("rans-sa" / "laminar"), set in both GPU and CPU solver paths
+  - SA wall BC confirmed: destruction term naturally enforces nu_tilde=0 as d→0 (no code change needed)
+  - Deferred Phase 7 tasks explicitly moved to Phase 8 (PLAN.md updated):
+    - SA farfield BC nu_tilde/mu ratio
+    - Source-term point-implicit treatment
+    - SA diffusion viscous operator (mu_tilde = rho*nu_tilde*fv1/sigma)
+  - Phase 7 gate: all 4 conditions now met (turbulence=false regression, negative nu_tilde handling, Cf plausible, SA labeled)
+- Build + TestCfdGpu 33/34 PASS (BW-1 pre-existing). Phase 7 complete.

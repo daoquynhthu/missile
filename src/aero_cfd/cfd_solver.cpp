@@ -303,9 +303,11 @@ CfdSolveSummary CfdSolver::solve_from_state(
         }
     }
 
-    integrate_wall_forces(mesh_, q, condition, config, summary.forces);
+integrate_wall_forces(mesh_, q, condition, config, summary.forces);
     summary.forces.iterations = static_cast<int>(summary.residual_history.size());
     summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
+    summary.forces.turbulence_model = config.turbulence ? "rans-sa" : "laminar";
+    summary.forces.fidelity = "cfd-cpu";
     return summary;
 }
 
