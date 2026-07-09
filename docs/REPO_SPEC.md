@@ -65,7 +65,7 @@ flowsim/
 │   └── shape_optimizer/       # 外形优化工具
 ├── examples/                   # 场景示例/验证案例
 │   ├── hgv/                   # HGV 高超声速弹道
-│   └── dart/                  # 低速竞技弹丸验证 (原 RM Dart)
+│   └── dart/                  # 低速竞技弹丸验证 (Dart heritage)
 ├── data/                       # 输入数据
 │   ├── examples/hgv/
 │   └── examples/dart/

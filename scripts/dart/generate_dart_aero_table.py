@@ -102,7 +102,7 @@ def calculate_dart_aero(mach, alpha_deg, beta_deg):
     }
 
 def main(output_path):
-    print(f"Generating Subsonic Aero Table for RM Dart...")
+    print(f"Generating Subsonic Aero Table for Dart...")
     
     with open(output_path, 'w', newline='') as csvfile:
         fieldnames = ['Mach', 'Alpha', 'Beta', 'CX', 'CY', 'CZ', 'CL', 'CD', 'Cl', 'Cm', 'Cn', 'Cmq', 'Cnr']

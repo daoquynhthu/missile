@@ -545,7 +545,7 @@ int main(int argc, char* argv[]) {
     dart_cfg.nav_ratio = params.nav_ratio;
     dart_cfg.ctrl_gain = params.control_gain;
 
-    std::cout << "--- aerosp: RoboMaster Dart GPU Monte Carlo ---" << std::endl;
+    std::cout << "--- aerosp: Dart GPU Monte Carlo ---" << std::endl;
     std::cout << "Location: (" << dart_cfg.launch_lat << ", " << dart_cfg.launch_lon << ")" << std::endl;
     std::cout << "Env: Gravity=" << dart_cfg.gravity_mag << " m/s2, Density=" << dart_cfg.atm_density << " kg/m3" << std::endl;
     std::cout << "Params: v0=" << params.v0_mean << ", pitch=" << params.pitch_mean_deg 

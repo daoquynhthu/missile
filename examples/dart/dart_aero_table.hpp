@@ -34,7 +34,7 @@ struct DartAeroTableGPU {
 };
 
 /**
- * @brief High-Fidelity Aerodynamic Table for RM Dart
+ * @brief High-Fidelity Aerodynamic Table for Dart
  * Loads coefficients from a CSV file and performs 2D interpolation (Mach, Alpha).
  */
 class DartAeroTable {

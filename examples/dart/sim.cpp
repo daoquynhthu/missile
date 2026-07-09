@@ -21,13 +21,13 @@ using namespace aerosp::dart;
 using namespace aerosp::sim::control;
 
 /**
- * @brief High-Fidelity Simulation for RM Dart
+ * @brief High-Fidelity Simulation for Dart
  * Uses the same 6-DOF dynamics, RK4 integrator, and environmental models
  * as the ballistic missile simulation, but with subsonic aerodynamic coefficients
  * from a lookup table (LUT) and closed-loop vision guidance.
  */
 int main(int argc, char* argv[]) {
-    std::cout << "--- aerosp: RoboMaster Dart High-Fidelity Simulator ---" << std::endl;
+    std::cout << "--- aerosp: Dart High-Fidelity Simulator ---" << std::endl;
 
     // 1. Initial Configuration
     DartConfig config;
@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
         silent = true; // Assume batch mode if output path provided
     }
 
-    if (!silent) std::cout << "--- aerosp: RoboMaster Dart High-Fidelity Simulator ---" << std::endl;
+    if (!silent) std::cout << "--- aerosp: Dart High-Fidelity Simulator ---" << std::endl;
 
     // 2. Initialize State
     State6DOF state;

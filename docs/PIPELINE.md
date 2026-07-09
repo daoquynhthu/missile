@@ -9,9 +9,9 @@
 ```
 STL 几何文件:
   data/missile/hgv_model_optimized.stl   ← HGV 气动外形
-  data/dart/rm_dart_model.stl             ← RM 飞镖 v3
-  data/dart/rm_dart_v4_square_capsule.stl ← RM 飞镖 v4
-  data/dart/rm_dart_v5_full_square.stl    ← RM 飞镖 v5
+  data/dart/rm_dart_model.stl             ← Dart v3
+  data/dart/rm_dart_v4_square_capsule.stl ← Dart v4
+  data/dart/rm_dart_v5_full_square.stl    ← Dart v5
 
 气动系数表:
   aerodynamics_table.csv            ← HGV: AeroCalc.exe 从 STL 生成 (239条, 17 Mach × 14 Alpha)

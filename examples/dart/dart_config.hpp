@@ -11,7 +11,7 @@ namespace aerosp {
 namespace dart {
 
 /**
- * @brief RoboMaster Dart 2022 Physical Parameters
+ * @brief Dart 2022 Physical Parameters
  */
 struct DartConfig {
     double mass = 0.22;

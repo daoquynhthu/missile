@@ -42,7 +42,7 @@ High-fidelity ballistic simulation engine. C++17/CUDA, zero third-party CFD depe
 │   ├── aero_table_gen/    # Aero table generator
 │   └── shape_optimizer/   # Shape optimization tool
 ├── examples/              # Validation cases
-│   └── dart/              # Low-speed dart validation (RM Dart heritage)
+│   └── dart/              # Low-speed dart validation (Dart heritage)
 ├── data/                  # Input data (STL, tables, configs)
 ├── scripts/               # Python utilities
 └── tests/                 # Test suite (custom TEST/FAIL/PASS, CTest)
