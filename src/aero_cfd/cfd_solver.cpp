@@ -182,6 +182,12 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
         }
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     w_inf.nu_tilde = condition.nu_tilde;
+    if (condition.nu_tilde_ratio > 0.0f && config.viscous) {
+        Real T_inf = w_inf.p / w_inf.rho;
+        Real t_ratio = T_inf / config.T_ref;
+        Real mu_inf = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
+        w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
+    }
         ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
         std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
         if (!d_mesh.upload_state(q)) {
@@ -208,6 +214,12 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     w_inf.nu_tilde = condition.nu_tilde;
+    if (condition.nu_tilde_ratio > 0.0f && config.viscous) {
+        Real T_inf = w_inf.p / w_inf.rho;
+        Real t_ratio = T_inf / config.T_ref;
+        Real mu_inf = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
+        w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
+    }
     ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
     std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
     return solve_from_state(condition, config, q);

@@ -39,6 +39,7 @@ struct FreestreamCondition {
     Real alpha_deg = 0.0f;
     Real beta_deg = 0.0f;
     Real nu_tilde = 0.0f;
+    Real nu_tilde_ratio = 0.1f;  // nu_tilde_inf / nu_inf, 0 = disabled
 };
 
 } // namespace Cfd

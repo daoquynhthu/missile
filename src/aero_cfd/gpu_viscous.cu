@@ -38,7 +38,8 @@ __global__ void viscous_flux_kernel_atomic(
     Real* d_residual,
     int face_count, int n_cells,
     Real prandtl, Real mu_ref, Real T_ref, Real sutherland_T,
-    Real inv_Re, Real wall_T,
+    Real inv_Re, Real Re, Real wall_T,
+    int turbulence,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
@@ -225,13 +226,98 @@ __global__ void viscous_flux_kernel_atomic(
         real_atomic_add(&d_residual[right * nvar + 3], -visc_mom_z);
         real_atomic_add(&d_residual[right * nvar + 4], -visc_energy);
     }
+
+    if (!turbulence) return;
+
+    // SA conservative diffusion: (1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))
+    constexpr Real sigma_sa = 2.0f / 3.0f;
+    constexpr Real cv1 = 7.1f;
+    constexpr Real cv13 = cv1 * cv1 * cv1;
+    constexpr Real karman = 0.41f;
+
+    Real nu_tilde_L = d_q[left * nvar + 5] / rho_L;
+    if (!real_isfinite(nu_tilde_L)) return;
+    Real dnu_dx_L = d_gradients[gL + 15];
+    Real dnu_dy_L = d_gradients[gL + 16];
+    Real dnu_dz_L = d_gradients[gL + 17];
+
+    Real grad_dnu_dx, grad_dnu_dy, grad_dnu_dz;
+    Real face_nu_tilde, face_rho;
+
+    if (right >= 0 && bnd == static_cast<int>(BoundaryKind::Interior)) {
+        Real rho_R, u_R, v_R, w_R, p_R;
+        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R);
+        if (!real_isfinite(rho_R) || rho_R <= 0.0f || !real_isfinite(p_R) || p_R <= 0.0f) return;
+        Real nu_tilde_R = d_q[right * nvar + 5] / rho_R;
+        if (!real_isfinite(nu_tilde_R)) return;
+
+        int gR = right * DeviceMesh::NGRAD;
+        Real dnu_dx_R = d_gradients[gR + 15];
+        Real dnu_dy_R = d_gradients[gR + 16];
+        Real dnu_dz_R = d_gradients[gR + 17];
+
+        grad_dnu_dx = 0.5f * (dnu_dx_L + dnu_dx_R);
+        grad_dnu_dy = 0.5f * (dnu_dy_L + dnu_dy_R);
+        grad_dnu_dz = 0.5f * (dnu_dz_L + dnu_dz_R);
+
+        Real dr_x = d_cell_cx[right] - d_cell_cx[left];
+        Real dr_y = d_cell_cy[right] - d_cell_cy[left];
+        Real dr_z = d_cell_cz[right] - d_cell_cz[left];
+        Real d2 = dr_x*dr_x + dr_y*dr_y + dr_z*dr_z;
+        if (d2 > 1e-30f) {
+            Real inv_d2 = 1.0f / d2;
+            Real proj_dnu = grad_dnu_dx*dr_x + grad_dnu_dy*dr_y + grad_dnu_dz*dr_z;
+            Real dnu_corr = ((nu_tilde_R - nu_tilde_L) - proj_dnu) * inv_d2;
+            grad_dnu_dx += dnu_corr * dr_x;
+            grad_dnu_dy += dnu_corr * dr_y;
+            grad_dnu_dz += dnu_corr * dr_z;
+        }
+
+        face_nu_tilde = 0.5f * (nu_tilde_L + nu_tilde_R);
+        face_rho = 0.5f * (rho_L + rho_R);
+    } else {
+        grad_dnu_dx = dnu_dx_L;
+        grad_dnu_dy = dnu_dy_L;
+        grad_dnu_dz = dnu_dz_L;
+
+        Real dr_x = d_face_cx[idx] - d_cell_cx[left];
+        Real dr_y = d_face_cy[idx] - d_cell_cy[left];
+        Real dr_z = d_face_cz[idx] - d_cell_cz[left];
+        Real d2 = dr_x*dr_x + dr_y*dr_y + dr_z*dr_z;
+        if (d2 > 1e-30f) {
+            Real inv_d2 = 1.0f / d2;
+            Real proj_dnu = grad_dnu_dx*dr_x + grad_dnu_dy*dr_y + grad_dnu_dz*dr_z;
+            Real dnu_corr = ((0.0f - nu_tilde_L) - proj_dnu) * inv_d2;
+            grad_dnu_dx += dnu_corr * dr_x;
+            grad_dnu_dy += dnu_corr * dr_y;
+            grad_dnu_dz += dnu_corr * dr_z;
+        }
+
+        face_nu_tilde = 0.5f * nu_tilde_L;
+        face_rho = rho_L;
+    }
+
+    Real dnu_dn = grad_dnu_dx*nx + grad_dnu_dy*ny + grad_dnu_dz*nz;
+
+    Real chi_face = Re * face_rho * face_nu_tilde / (mu_face + 1e-30f) + 1e-30f;
+    Real chi3 = chi_face * chi_face * chi_face;
+    Real fv1_face = chi3 / (chi3 + cv13 + 1e-30f);
+    Real mu_tilde = face_rho * face_nu_tilde * fv1_face / sigma_sa;
+    Real mu_total = mu_face * inv_Re + mu_tilde;
+    Real visc_nu = mu_total * dnu_dn * area;
+
+    real_atomic_add(&d_residual[left * nvar + 5], visc_nu);
+    if (right >= 0 && bnd == static_cast<int>(BoundaryKind::Interior)) {
+        real_atomic_add(&d_residual[right * nvar + 5], -visc_nu);
+    }
 }
 
 } // namespace
 
 bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
-    Real mu_ref, Real T_ref, Real sutherland_T, int* d_failed) {
-    Real inv_Re = 1.0f / 1e6f;
+    Real mu_ref, Real T_ref, Real sutherland_T, Real Re, int turbulence,
+    int* d_failed) {
+    Real inv_Re = 1.0f / (Re > 0.0f ? Re : 1e6f);
     Real wall_T = 300.0f;
 
     int block = 128;
@@ -253,7 +339,8 @@ bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
         mesh.residual_device(),
         nf, nc,
         prandtl, mu_ref, T_ref, sutherland_T,
-        inv_Re, wall_T,
+        inv_Re, Re, wall_T,
+        turbulence,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "viscous_flux kernel launch")) return false;
     return true;

@@ -33,10 +33,14 @@ bool compute_failure_snapshot_gpu(DeviceMesh& mesh, Real gamma,
     int* d_failure_cell, Real* d_failure_state);
 
 bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
-    Real mu_ref, Real T_ref, Real sutherland_T, int* d_failed);
+    Real mu_ref, Real T_ref, Real sutherland_T, Real Re, int turbulence,
+    int* d_failed);
 
 bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
     int* d_failed, std::string* error = nullptr);
+
+bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
+    const Real* d_min_dt, std::string* error = nullptr);
 
 } // namespace Cfd
 } // namespace AeroSim

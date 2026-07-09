@@ -64,6 +64,12 @@ static CfdSolveSummary solve_gpu_impl(
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     w_inf.nu_tilde = condition.nu_tilde;
+    if (condition.nu_tilde_ratio > 0.0f && config.viscous) {
+        Real T_inf = w_inf.p / w_inf.rho;
+        Real t_ratio = T_inf / config.T_ref;
+        Real mu_inf = config.mu_ref * t_ratio * real_sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
+        w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
+    }
     int nvar_ncells = DeviceMesh::NVAR * static_cast<int>(d_mesh.cell_count());
 
 #ifdef MPI_ENABLED
@@ -104,7 +110,8 @@ static CfdSolveSummary solve_gpu_impl(
 
 if (config.viscous) {
             if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
-                    config.mu_ref, config.T_ref, config.sutherland_T, d_failed)) {
+                    config.mu_ref, config.T_ref, config.sutherland_T,
+                    config.Re, config.turbulence ? 1 : 0, d_failed)) {
                 if (error) *error = "viscous flux kernel failed";
                 goto fail;
             }
@@ -113,6 +120,10 @@ if (config.viscous) {
         if (config.turbulence) {
             if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re, d_failed, error)) {
                 if (error && error->empty()) *error = "RANS source kernel failed";
+                goto fail;
+            }
+            if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error)) {
+                if (error && error->empty()) *error = "RANS implicit kernel failed";
                 goto fail;
             }
         }

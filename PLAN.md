@@ -586,9 +586,9 @@ See `AERO_ACCURACY_UPGRADE.md` Stage HO/DNS for design.
 
 Phase 7 deferred items (SA completeness):
 
-- [ ] SA farfield BC: specified `nu_tilde / mu` ratio (currently passthrough of freestream.nu_tilde, need ratio variant)
-- [ ] Source-term point-implicit treatment for RANS stability at higher CFL
-- [ ] SA diffusion: viscous operator with mu_tilde = rho * nu_tilde * fv1 / sigma in viscous_flux_kernel
+- [x] SA farfield BC: specified `nu_tilde / mu` ratio — `FreestreamCondition.nu_tilde_ratio` parameter, auto-computed from Sutherland mu_inf
+- [x] Source-term point-implicit treatment for RANS stability — `apply_rans_implicit_gpu` kernel
+- [x] SA diffusion: viscous operator with mu_tilde = rho * nu_tilde * fv1 / sigma in `viscous_flux_kernel_atomic`
 
 Tasks placeholder:
 

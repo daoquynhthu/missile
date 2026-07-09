@@ -331,3 +331,9 @@
 - PH7-I-1: BW-1 converted from FAIL to WARNING (ratio<0.5 prints [WARN] but test PASS).
 - ISSUES.md: All 9 HIGH closed, 6 MEDIUM closed (1 deferred: PH7-E-1 SA diffusion to Phase 8), 6 LOW closed.
 - Verification: TestCfdGpu 35/35 PASS. TestCfdEuler 8/8, TestCfdViscous 11/11, TestCfdMesh 5/5, TestCfdReconstruction 7/7 all PASS.
+2026-07-09 (session 8 — Phase 8 Track A: SA completeness)
+- Task 1: SA farfield BC nu_tilde/mu ratio — added FreestreamCondition.nu_tilde_ratio (=0.1 default). Auto-computes nu_tilde_inf = ratio * mu_inf / rho_inf from Sutherland viscosity in both gpu_solver.cu and cfd_solver.cpp.
+- Task 2: Point-implicit source treatment — added apply_rans_implicit_kernel in gpu_rans.cu. Approximates destruction eigenvalue d_dest = 2*cw1*nu/d^2, applies implicit scaling before update. Allows higher CFL for RANS.
+- Task 3: SA conservative diffusion (PH7-E-1) — added SA diffusion flux (mu/Re + rho*nu_tilde*fv1/sigma) * grad(nu_tilde) * n * area to viscous_flux_kernel_atomic. Fixed hardcoded inv_Re (was 1/1e6, now uses config.Re).
+- Task 4: Turbulent validation — RANS-3 improved: Re=2e6, 200 iterations, nu_tilde_ratio=0.1 freestream seed, sanity check (turb CD >= lam CD with margin).
+- All 35/35 TestCfdGpu tests PASS. All CPU test suites PASS.

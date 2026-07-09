@@ -945,14 +945,10 @@ L2 残差范数对 5 个分量求和（缺少 `rho_nu_tilde`）但除以 `CFD_NV
 
 ### Category E: 保守扩散项缺失
 
-**PH7-E-1: SA 完整扩散 `(1/σ)·∇·[(ν + ν̃·fv1)∇ν̃]` 未实现** [MEDIUM]
-`src/aero_cfd/gpu_rans.cu:70-74`, `src/aero_cfd/rans.cpp:67-70`
+**PH7-E-1: SA 完整扩散 `(1/σ)·∇·[(ν + ν̃·fv1)∇ν̃]` 未实现** [FIXED 2026-07-09]
+`src/aero_cfd/gpu_viscous.cu:295-340`
 
-SA PDE 需要两项扩散：
-- `(1/σ)·∇·[(ν + ν̃·fv1)∇ν̃]` — 保守通量散度（粘性算子）
-- `(cb2/σ)·|∇ν̃|²` — 梯度平方项（已实现）
-
-当前仅实现了第二项。保守部分通常在粘性通量求解器中离散化（类似 NS 应力张量），但 `viscous_flux_kernel` (`gpu_viscous.cu`) 未包含 `nu_tilde` 的扩散输运。此缺失意味着完整的 SA 扩散模型未被求解。已移至 Phase 8 任务列表。
+已修复：`viscous_flux_kernel_atomic` 新增 SA 保守扩散通量 `(mu/Re + rho*nu_tilde*fv1/sigma) * grad(nu_tilde) · n * area`，使用正交修正的面平均梯度。壁面 `nu_tilde=0` 边界条件已处理。
 
 ### Category F: GPU Source In-Place 修改状态的设计风险
 
@@ -1018,5 +1014,5 @@ BW-1 已改为 WARNING：当 `ratio < 0.5` 时打印 `[WARN]` 消息但测试仍
 | 严重性 | 数量 | 项目 |
 |--------|------|------|
 | HIGH | 0 | 全部 9 项 FIXED |
-| MEDIUM | 7 (8 fixed) | 全部 FIXED 除 PH7-E-1 (SA 扩散，移至 Phase 8) |
+| MEDIUM | 0 | 全部 8 项 FIXED（含 PH7-E-1 SA 扩散） |
 | LOW | 0 | 全部 6 项 FIXED |
