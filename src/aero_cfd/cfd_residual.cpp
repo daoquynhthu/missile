@@ -35,6 +35,7 @@ bool compute_euler_residual_cpu(
         residual[face.left_cell].mom_y -= flux.mom_y * area;
         residual[face.left_cell].mom_z -= flux.mom_z * area;
         residual[face.left_cell].energy -= flux.energy * area;
+        residual[face.left_cell].turbulence -= flux.turbulence * area;
 
         if (face.boundary == BoundaryKind::Interior) {
             residual[face.right_cell].mass += flux.mass * area;
@@ -42,6 +43,7 @@ bool compute_euler_residual_cpu(
             residual[face.right_cell].mom_y += flux.mom_y * area;
             residual[face.right_cell].mom_z += flux.mom_z * area;
             residual[face.right_cell].energy += flux.energy * area;
+            residual[face.right_cell].turbulence += flux.turbulence * area;
         }
     }
 

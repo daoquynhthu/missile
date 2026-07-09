@@ -63,6 +63,7 @@ static CfdSolveSummary solve_gpu_impl(
     bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
+    w_inf.nu_tilde = condition.nu_tilde;
     int nvar_ncells = DeviceMesh::NVAR * static_cast<int>(d_mesh.cell_count());
 
 #ifdef MPI_ENABLED

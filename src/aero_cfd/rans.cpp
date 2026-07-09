@@ -16,10 +16,13 @@ Real sa_vorticity(const PrimitiveGradient& grad) {
     return std::sqrt(vort_x*vort_x + vort_y*vort_y + vort_z*vort_z);
 }
 
-Real sa_omega_tilde(Real vorticity, Real nu_tilde, Real wall_distance, Real karman) {
-    Real chi = nu_tilde / (1.0f / 1e6f);
-    Real fv1 = chi*chi*chi / (chi*chi*chi + karman*karman*karman);
-    Real inv_kd2 = 1.0f / (karman * karman * wall_distance * wall_distance);
+Real sa_omega_tilde(Real vorticity, Real nu_tilde, Real wall_distance, Real karman, Real rho, Real Re) {
+    constexpr Real cv1 = 7.1f;
+    Real chi = rho * Re * nu_tilde + 1e-30f;
+    Real chi3 = chi*chi*chi;
+    Real cv13 = cv1*cv1*cv1;
+    Real fv1 = chi3 / (chi3 + cv13);
+    Real inv_kd2 = 1.0f / (karman * karman * wall_distance * wall_distance + 1e-30f);
     return vorticity + nu_tilde * fv1 * inv_kd2;
 }
 
@@ -33,49 +36,63 @@ RansSource compute_rans_source(
     RansSource s;
 
     if (wall_distance <= 0.0f || !std::isfinite(wall_distance)) {
-        s.total_source = 0.0f;
-        return s;
+        wall_distance = 1e30f;
     }
 
-    Real nu = mu / rho;
-
-    Real chi = w.nu_tilde / nu;
-    Real chi3 = chi*chi*chi;
     constexpr Real cv1 = 7.1f;
-    Real cv13 = cv1*cv1*cv1;
-    Real fv1 = chi3 / (chi3 + cv13);
-
-    Real vort = sa_vorticity(grad);
-    Real omega_tilde = sa_omega_tilde(vort, w.nu_tilde, wall_distance, 0.41f);
-
     constexpr Real cb1 = 0.1355f;
     constexpr Real cb2 = 0.622f;
     constexpr Real sigma = 2.0f / 3.0f;
     constexpr Real cw2 = 0.3f;
     constexpr Real cw3 = 2.0f;
     constexpr Real karman = 0.41f;
+    constexpr Real ct3 = 1.2f;
+    constexpr Real ct4 = 0.5f;
 
-    Real production = cb1 * omega_tilde * w.nu_tilde;
-
-    Real r = w.nu_tilde / (omega_tilde * karman * karman * wall_distance * wall_distance + 1e-30f);
-    Real r6 = r*r*r*r*r*r;
-    Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
-    Real g = r + cw2 * (r6 - r);
-    Real fw = g * std::pow((1.0f + cw3*cw3*cw3*cw3*cw3*cw3) / (g*g*g*g*g*g + cw3*cw3*cw3*cw3*cw3*cw3), 1.0f / 6.0f);
-    Real destruction = cw1 * fw * (w.nu_tilde / wall_distance) * (w.nu_tilde / wall_distance);
+    Real chi = rho * Re * w.nu_tilde + 1e-30f;
+    Real vort = sa_vorticity(grad);
 
     Real grad_nu2 = grad.dnu_tilde_dx * grad.dnu_tilde_dx
                  + grad.dnu_tilde_dy * grad.dnu_tilde_dy
                  + grad.dnu_tilde_dz * grad.dnu_tilde_dz;
     Real diffusion = (cb2 / sigma) * grad_nu2;
 
-    Real source = production - destruction + diffusion;
-    Real vol_source = rho * source;
+    Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
 
-    s.production = production;
-    s.destruction = destruction;
+    Real source;
+    if (chi >= 0.0f) {
+        Real chi3 = chi*chi*chi;
+        Real cv13 = cv1*cv1*cv1;
+Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
+
+        Real fv2 = 1.0f - chi / (1.0f + chi * fv1 + 1e-30f);
+        Real inv_kd2 = 1.0f / (karman * karman * wall_distance * wall_distance + 1e-30f);
+        Real omega_tilde = vort + w.nu_tilde * fv2 * inv_kd2;
+
+        Real production = cb1 * omega_tilde * w.nu_tilde;
+
+        Real r = w.nu_tilde / (omega_tilde * karman * karman * wall_distance * wall_distance + 1e-30f);
+        Real r6 = r*r*r*r*r*r;
+        Real fw_g = r + cw2 * (r6 - r);
+        Real fw_num = 1.0f + cw3*cw3*cw3*cw3*cw3*cw3;
+        Real fw_den = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3*cw3*cw3*cw3*cw3*cw3 + 1e-30f;
+        Real fw = fw_g * std::pow(fw_num / fw_den, 1.0f / 6.0f);
+        Real destruction = cw1 * fw * (w.nu_tilde / wall_distance) * (w.nu_tilde / wall_distance);
+
+        source = production - destruction + diffusion;
+        s.production = production;
+        s.destruction = destruction;
+    } else {
+        Real ft2 = ct3 * std::exp(-ct4 * chi * chi);
+        source = cb1 * (1.0f - ft2) * vort * w.nu_tilde
+               - cw1 * (w.nu_tilde / wall_distance) * (w.nu_tilde / wall_distance)
+               + diffusion;
+        s.production = cb1 * (1.0f - ft2) * vort * w.nu_tilde;
+        s.destruction = cw1 * (w.nu_tilde / wall_distance) * (w.nu_tilde / wall_distance);
+    }
+
     s.diffusion = diffusion;
-    s.total_source = vol_source;
+    s.total_source = rho * source;
 
     return s;
 }
@@ -92,7 +109,7 @@ std::vector<RansSource> compute_rans_sources(
         if (!conservative_to_primitive(q[i], gamma, w)) continue;
         Real mu = 1.0f;
         sources[i] = compute_rans_source(
-            w, gradients[i], mesh.cells[i].h_min, mu, q[i].rho, Re);
+            w, gradients[i], mesh.cells[i].wall_distance, mu, q[i].rho, Re);
     }
     return sources;
 }

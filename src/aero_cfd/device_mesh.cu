@@ -33,6 +33,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     d_boundary_ = other.d_boundary_;
     d_volume_ = other.d_volume_;
     d_h_min_ = other.d_h_min_;
+    d_wall_distance_ = other.d_wall_distance_;
     d_cx_ = other.d_cx_;
     d_cy_ = other.d_cy_;
     d_cz_ = other.d_cz_;
@@ -51,7 +52,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_area_ = nullptr;
     other.d_left_cell_ = other.d_right_cell_ = nullptr;
     other.d_boundary_ = nullptr;
-    other.d_volume_ = other.d_h_min_ = nullptr;
+    other.d_volume_ = other.d_h_min_ = other.d_wall_distance_ = nullptr;
     other.d_cx_ = other.d_cy_ = other.d_cz_ = nullptr;
     other.d_face_cx_ = other.d_face_cy_ = other.d_face_cz_ = nullptr;
     other.d_gradients_ = nullptr;
@@ -108,6 +109,7 @@ DeviceCellData DeviceMesh::cell_data() {
     DeviceCellData cd;
     cd.volume = d_volume_;
     cd.h_min = d_h_min_;
+    cd.wall_distance = d_wall_distance_;
     cd.cx = d_cx_;
     cd.cy = d_cy_;
     cd.cz = d_cz_;
@@ -118,6 +120,7 @@ ConstDeviceCellData DeviceMesh::cell_data() const {
     ConstDeviceCellData cd;
     cd.volume = d_volume_;
     cd.h_min = d_h_min_;
+    cd.wall_distance = d_wall_distance_;
     cd.cx = d_cx_;
     cd.cy = d_cy_;
     cd.cz = d_cz_;
@@ -177,6 +180,7 @@ void DeviceMesh::release() {
     cuda_free_safe(d_boundary_);
     cuda_free_safe(d_volume_);
     cuda_free_safe(d_h_min_);
+    cuda_free_safe(d_wall_distance_);
     cuda_free_safe(d_cx_);
     cuda_free_safe(d_cy_);
     cuda_free_safe(d_cz_);
@@ -240,6 +244,7 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
 
     if (!alloc(d_volume_, nc * sizeof(Real), "cudaMalloc cell volume")) return false;
     if (!alloc(d_h_min_, nc * sizeof(Real), "cudaMalloc cell h_min")) return false;
+    if (!alloc(d_wall_distance_, nc * sizeof(Real), "cudaMalloc cell wall_distance")) return false;
     if (!alloc(d_cx_, nc * sizeof(Real), "cudaMalloc cell cx")) return false;
     if (!alloc(d_cy_, nc * sizeof(Real), "cudaMalloc cell cy")) return false;
     if (!alloc(d_cz_, nc * sizeof(Real), "cudaMalloc cell cz")) return false;
@@ -306,14 +311,15 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
     if (!copy(d_face_cy_, h_face_cy.data(), nf * sizeof(Real), "cudaMemcpy face cy")) return false;
     if (!copy(d_face_cz_, h_face_cz.data(), nf * sizeof(Real), "cudaMemcpy face cz")) return false;
 
-    std::vector<Real> h_volume(nc), h_h_min(nc), h_cx(nc), h_cy(nc), h_cz(nc);
+    std::vector<Real> h_volume(nc), h_h_min(nc), h_wall_distance(nc), h_cx(nc), h_cy(nc), h_cz(nc);
     for (std::size_t i = 0; i < nc; ++i) {
         const auto& c = mesh.cells[i];
-        h_volume[i] = c.volume; h_h_min[i] = c.h_min;
+        h_volume[i] = c.volume; h_h_min[i] = c.h_min; h_wall_distance[i] = c.wall_distance;
         h_cx[i] = c.cx; h_cy[i] = c.cy; h_cz[i] = c.cz;
     }
     if (!copy(d_volume_, h_volume.data(), nc * sizeof(Real), "cudaMemcpy volume")) return false;
     if (!copy(d_h_min_, h_h_min.data(), nc * sizeof(Real), "cudaMemcpy h_min")) return false;
+    if (!copy(d_wall_distance_, h_wall_distance.data(), nc * sizeof(Real), "cudaMemcpy wall_distance")) return false;
     if (!copy(d_cx_, h_cx.data(), nc * sizeof(Real), "cudaMemcpy cx")) return false;
     if (!copy(d_cy_, h_cy.data(), nc * sizeof(Real), "cudaMemcpy cy")) return false;
     if (!copy(d_cz_, h_cz.data(), nc * sizeof(Real), "cudaMemcpy cz")) return false;

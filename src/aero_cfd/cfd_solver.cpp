@@ -1,5 +1,7 @@
 #include "aero_cfd/cfd_solver.hpp"
 #include "aero_cfd/cfd_residual.hpp"
+#include "aero_cfd/rans.hpp"
+#include "aero_cfd/reconstruction.hpp"
 #include "aero_cfd/gpu_solver.hpp"
 
 #include <algorithm>
@@ -17,6 +19,7 @@ ConservativeState add_scaled(ConservativeState q, EulerFlux f, Real scale) {
     q.rho_v += scale * f.mom_y;
     q.rho_w += scale * f.mom_z;
     q.rho_E += scale * f.energy;
+    q.rho_nu_tilde += scale * f.turbulence;
     return q;
 }
 
@@ -26,7 +29,8 @@ Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
     Real d2 = a.rho_v - b.rho_v;
     Real d3 = a.rho_w - b.rho_w;
     Real d4 = a.rho_E - b.rho_E;
-    return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4;
+    Real d5 = a.rho_nu_tilde - b.rho_nu_tilde;
+    return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5;
 }
 
 void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
@@ -176,7 +180,8 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
             s.failed = true;
             return s;
         }
-        PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
+    PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
+    w_inf.nu_tilde = condition.nu_tilde;
         ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
         std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
         if (!d_mesh.upload_state(q)) {
@@ -202,6 +207,7 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
     }
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
+    w_inf.nu_tilde = condition.nu_tilde;
     ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
     std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
     return solve_from_state(condition, config, q);
@@ -274,6 +280,45 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 summary.diagnostics.failure.iteration = iter;
             }
             return summary;
+        }
+
+        if (config.turbulence) {
+            std::vector<PrimitiveGradient> grads = compute_green_gauss_gradients(mesh_, q, config.gamma);
+            if (grads.size() != mesh_.cells.size()) {
+                summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure.reason = "gradient computation failed for RANS source";
+                    summary.diagnostics.failure.valid = true;
+                    summary.diagnostics.failure.iteration = iter;
+                }
+                return summary;
+            }
+            std::vector<PrimitiveLimiter> limiters = compute_barth_jespersen_limiters(mesh_, q, grads, config.gamma);
+            if (limiters.size() != mesh_.cells.size()) {
+                summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure.reason = "limiter computation failed for RANS source";
+                    summary.diagnostics.failure.valid = true;
+                    summary.diagnostics.failure.iteration = iter;
+                }
+                return summary;
+            }
+            std::vector<PrimitiveGradient> limited(grads.size());
+            for (std::size_t i = 0; i < grads.size(); ++i)
+                limited[i] = apply_limiter(grads[i], limiters[i]);
+
+            std::vector<RansSource> sources = compute_rans_sources(mesh_, q, limited, config.gamma, config.Re);
+            if (sources.size() != mesh_.cells.size()) {
+                summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure.reason = "RANS source computation failed";
+                    summary.diagnostics.failure.valid = true;
+                    summary.diagnostics.failure.iteration = iter;
+                }
+                return summary;
+            }
+            for (std::size_t i = 0; i < q.size(); ++i)
+                residual[i].turbulence += sources[i].total_source * mesh_.cells[i].volume;
         }
 
         Real l2 = 0.0f;

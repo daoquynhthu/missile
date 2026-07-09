@@ -38,6 +38,7 @@ struct FreestreamCondition {
     Real mach = 2.0f;
     Real alpha_deg = 0.0f;
     Real beta_deg = 0.0f;
+    Real nu_tilde = 0.0f;
 };
 
 } // namespace Cfd

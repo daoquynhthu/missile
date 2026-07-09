@@ -17,9 +17,10 @@ __device__ Real d_sa_vorticity(const PrimitiveGradient& g) {
 
 __global__ void rans_source_kernel(
     Real* d_q,
+    Real* d_residual,
     const Real* d_gradients,
     const Real* d_volume,
-    const Real* d_h_min,
+    const Real* d_wall_distance,
     int n_cells, int nvar,
     Real gamma, Real Re,
     int* d_failed) {
@@ -42,7 +43,7 @@ __global__ void rans_source_kernel(
         return;
     }
 
-    Real wall_distance = d_h_min[idx];
+    Real wall_distance = d_wall_distance[idx];
     if (wall_distance <= 0.0f || !real_isfinite(wall_distance)) {
         wall_distance = 1e30f;
     }
@@ -62,10 +63,8 @@ __global__ void rans_source_kernel(
     constexpr Real cw2 = 0.3f;
     constexpr Real cw3 = 2.0f;
     constexpr Real cv1 = 7.1f;
-
-    Real speed = real_sqrt(u*u + v*v + w*w);
-    Real Re_cell = Re * rho * speed * wall_distance / (1.0f + 1e-30f);
-    Real mu = 1.0f / Re_cell;
+    constexpr Real ct3 = 1.2f;
+    constexpr Real ct4 = 0.5f;
 
     Real grad_nu2 = g->dnu_tilde_dx * g->dnu_tilde_dx
                  + g->dnu_tilde_dy * g->dnu_tilde_dy
@@ -73,17 +72,19 @@ __global__ void rans_source_kernel(
                  + 1e-30f;
     Real diffusion = (cb2 / sigma) * grad_nu2;
 
+    Real chi = Re * rho * nu_tilde + 1e-30f;
+
     Real source;
-    if (nu_tilde >= 0.0f) {
-        Real chi = (mu > 0.0f) ? (nu_tilde / mu) : 0.0f;
+    if (chi >= 0.0f) {
         Real chi3 = chi*chi*chi;
         Real cv13 = cv1*cv1*cv1;
         Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
 
         Real vort = d_sa_vorticity(*g);
-        Real chi_fv1_nu = nu_tilde * fv1;
+        Real fv2 = 1.0f - chi / (1.0f + chi * fv1 + 1e-30f);
+        Real chi_fv2_nu = nu_tilde * fv2;
         Real inv_kd2 = 1.0f / (karman * karman * wall_distance * wall_distance + 1e-30f);
-        Real omega_tilde = vort + chi_fv1_nu * inv_kd2;
+        Real omega_tilde = vort + chi_fv2_nu * inv_kd2;
 
         Real production = cb1 * omega_tilde * nu_tilde;
 
@@ -91,15 +92,19 @@ __global__ void rans_source_kernel(
         Real r6 = r*r*r*r*r*r;
         Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
         Real fw_g = r + cw2 * (r6 - r);
-        Real denom_fw = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3*cw3*cw3*cw3*cw3*cw3;
-        Real root_arg = (1.0f + cw3*cw3*cw3*cw3*cw3*cw3) / (denom_fw + 1e-30f);
-        Real fw = fw_g * expf(logf(root_arg) / 6.0f);
+        Real fw_num = 1.0f + cw3*cw3*cw3*cw3*cw3*cw3;
+        Real fw_den = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3*cw3*cw3*cw3*cw3*cw3 + 1e-30f;
+        Real fw = fw_g * powf(fw_num / fw_den, 1.0f / 6.0f);
         Real destruction = cw1 * fw * (nu_tilde / wall_distance) * (nu_tilde / wall_distance);
 
         source = production - destruction + diffusion;
     } else {
-        Real cn1 = 2.0f;
-        source = diffusion + cn1 * cb1 * (1.0f - cw3) * nu_tilde / (wall_distance * wall_distance + 1e-30f);
+        Real ft2 = ct3 * expf(-ct4 * chi * chi);
+        Real vort = d_sa_vorticity(*g);
+        Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
+        source = cb1 * (1.0f - ft2) * vort * nu_tilde
+               - cw1 * (nu_tilde / wall_distance) * (nu_tilde / wall_distance)
+               + diffusion;
     }
 
     Real vol_source = rho * source;
@@ -109,7 +114,7 @@ __global__ void rans_source_kernel(
         return;
     }
 
-    d_q[idx * nvar + 5] += vol_source;
+    d_residual[idx * nvar + 5] += vol_source;
 }
 
 } // namespace
@@ -128,8 +133,9 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, int* d_faile
 
     rans_source_kernel<<<grid, block>>>(
         mesh.state_device(),
+        mesh.residual_device(),
         mesh.gradients_device(),
-        cd.volume, cd.h_min,
+        cd.volume, cd.wall_distance,
         nc, DeviceMesh::NVAR, gamma, Re,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "rans_source_kernel launch")) return false;

@@ -42,6 +42,7 @@ struct ConstDeviceFaceData {
 struct DeviceCellData {
     Real* volume = nullptr;
     Real* h_min = nullptr;
+    Real* wall_distance = nullptr;
     Real* cx = nullptr;
     Real* cy = nullptr;
     Real* cz = nullptr;
@@ -50,6 +51,7 @@ struct DeviceCellData {
 struct ConstDeviceCellData {
     const Real* volume = nullptr;
     const Real* h_min = nullptr;
+    const Real* wall_distance = nullptr;
     const Real* cx = nullptr;
     const Real* cy = nullptr;
     const Real* cz = nullptr;
@@ -128,6 +130,7 @@ private:
 
     Real* d_volume_ = nullptr;
     Real* d_h_min_ = nullptr;
+    Real* d_wall_distance_ = nullptr;
     Real* d_cx_ = nullptr;
     Real* d_cy_ = nullptr;
     Real* d_cz_ = nullptr;

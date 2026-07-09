@@ -546,12 +546,25 @@ Tasks:
 - [ ] Source-term point-implicit treatment — moved to Phase 8
 - [ ] SA diffusion: viscous operator with mu_tilde = rho * nu_tilde * fv1 / sigma — moved to Phase 8
 
+Phase 7 audit fixes (2026-07-09):
+
+- [x] PH7-B-1: GPU rans_source_kernel chi = Re·rho·nu_tilde (remove non-physical mu)
+- [x] PH7-A-1: GPU SA-neg branch uses ct3/ct4 standard formula
+- [x] PH7-C-1/2: CPU sa_omega_tilde uses correct cv1=7.1, chi from Re·rho·nu_tilde
+- [x] PH7-C-4: CPU solve_from_state calls compute_rans_sources when turbulence=true
+- [x] PH7-C-5: CPU add_scaled updates rho_nu_tilde from turbulence flux
+- [x] PH7-C-6: CPU order-1 residual accumulates turbulence flux
+- [x] PH7-C-7: CPU state_delta_l2 includes rho_nu_tilde term
+- [x] PH7-G-6: CSV output writes TurbulenceModel column
+- [x] PH7-G-1: RANS-1 compares GPU turbulence=false against CPU Euler (true Phase 5 regression)
+- [x] PH7-C-3: CPU SA-neg branch (ct3/ct4 ft2 damping, covered by PH7-A-1 rewrite)
+
 Tests:
 
 - [x] `CFD-ORACLE-RANS-1`: `turbulence=false` matches Phase 5 laminar
 - [x] `CFD-ORACLE-RANS-2`: zero `nu_tilde` matches laminar
 - [x] `CFD-ORACLE-RANS-3`: turbulent flat plate `Cf` plausible (≥ laminar)
-- [x] `CFD-ORACLE-RANS-4`: CPU/GPU SA residual match on cube mesh (max rel diff < 1e-4, 33/34 PASS)
+- [x] `CFD-ORACLE-RANS-4`: CPU/GPU SA residual match on cube mesh (max rel diff < 1e-7, 33/34 PASS)
 
 CPU order-2 residual:
 

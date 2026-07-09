@@ -166,8 +166,8 @@ bool generate_aero_table(
     }
 
     if (use_cfd) {
-        // CFD CSV: 13 columns with Fidelity indicator
-        csv << "Mach,Alpha,Beta,CX,CY,CZ,CL,CD,L_D,Cl,Cm,Cn,Fidelity\n";
+        // CFD CSV: 14 columns with Fidelity + Turbulence model
+        csv << "Mach,Alpha,Beta,CX,CY,CZ,CL,CD,L_D,Cl,Cm,Cn,Fidelity,TurbulenceModel\n";
         for (size_t i = 0; i < conditions.size(); ++i) {
             auto& c = conditions[i];
             auto& r = cfd_results[i];
@@ -176,7 +176,8 @@ bool generate_aero_table(
                 << r.CX << "," << r.CY << "," << r.CZ << ","
                 << r.CL << "," << r.CD << "," << ld << ","
                 << r.Cl << "," << r.Cm << "," << r.Cn << ","
-                << r.fidelity << "\n";
+                << r.fidelity << ","
+                << r.turbulence_model << "\n";
         }
     } else {
         // Newtonian CSV: 12 columns (backward compatible)
