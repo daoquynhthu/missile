@@ -4,8 +4,9 @@
 #include <string>
 #include <cuda_runtime.h>
 
-namespace AeroSim {
-namespace Solver {
+namespace aerosp {
+namespace aero {
+namespace panel {
 
     struct Triangle {
         float3 v0, v1, v2;
@@ -138,5 +139,6 @@ namespace Solver {
         const std::vector<double>& beta_grid,
         const AeroTableConfig& cfg);
 
+}
 }
 }

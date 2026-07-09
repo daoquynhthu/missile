@@ -5,8 +5,9 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <limits>
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -168,8 +169,9 @@ bool compute_failure_snapshot_gpu(DeviceMesh& mesh, Real gamma,
     return true;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 
 

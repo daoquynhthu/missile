@@ -3,8 +3,9 @@
 #include "aero/cfd/real.hpp"
 #include <string>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 struct CfdForceResult {
     Real CX = 0.0f;
@@ -25,6 +26,7 @@ struct CfdForceResult {
 
 
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 

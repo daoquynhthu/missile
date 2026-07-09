@@ -407,7 +407,7 @@ Step 4: 更新 PLAN.md + progress.md + ISSUES.md
 
 ## 相关文档
 
-- `PLAN.md` — 主执行计划
-- `AERO_ACCURACY_UPGRADE.md` — 只读架构设计
-- `ISSUES.md` — PH2-E-2, PH4-A-4, PH4-A-6
+- `docs/PLAN.md` — 主执行计划
+- `docs/AERO_ACCURACY_UPGRADE.md` — 只读架构设计
+- `docs/ISSUES.md` — PH2-E-2, PH4-A-4, PH4-A-6
 - `progress.md` — 进度日志

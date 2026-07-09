@@ -6,8 +6,9 @@
 
 #include <vector>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 struct ViscousGradient {
     Real du_dx = 0.0f;
@@ -77,7 +78,8 @@ WallFlux compute_wall_flux(
     Real q_ref,
     Real heat_ref);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 

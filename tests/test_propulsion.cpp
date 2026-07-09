@@ -5,13 +5,13 @@
 #include "sim/propulsion/propulsion_model.hpp"
 #include "config/missile_config.hpp"
 
-using namespace AeroSim;
+using namespace aerosp;
 
 void test_solid_motor_burn() {
     std::cout << "[Test] Starting Solid Motor Burn Test..." << std::endl;
 
     // 1. Load Config
-    auto config = MissileDesign::load_hgv1_config();
+    auto config = config::load_hgv1_config();
     SolidMotor motor(config.propulsion);
 
     // 2. Setup Simulation

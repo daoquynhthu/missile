@@ -5,7 +5,7 @@
 #include <cuda_runtime.h>
 #include "infra/common.hpp"
 
-namespace AeroSim {
+namespace aerosp {
 
 /**
  * @brief 6-DOF state vector
@@ -299,4 +299,4 @@ public:
     }
 };
 
-} // namespace AeroSim
+} // namespace aerosp

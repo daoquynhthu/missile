@@ -5,8 +5,9 @@
 
 #include <string>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt);
 bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt,
@@ -42,5 +43,6 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
 bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
     const Real* d_min_dt, std::string* error = nullptr);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

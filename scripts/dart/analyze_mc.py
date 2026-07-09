@@ -6,7 +6,7 @@ import os
 def analyze_results(csv_path):
     df = pd.read_csv(csv_path)
     
-    # Target NED (from rm_dart_mc.cu)
+    # Target NED (from dart_mc.cu)
     target_x = 25.233 * np.cos(7.3 * np.pi / 180.0)
     target_y = 25.233 * np.sin(7.3 * np.pi / 180.0)
     target_z = 1.5
@@ -47,7 +47,7 @@ def analyze_results(csv_path):
 
 if __name__ == "__main__":
     # Check if we are running from root or scripts/dart/
-    csv_path = "output/logs/rm_dart_mc_results.csv"
+    csv_path = "output/logs/dart_mc_results.csv"
     if not os.path.exists(csv_path):
-        csv_path = "../../output/logs/rm_dart_mc_results.csv"
+        csv_path = "../../output/logs/dart_mc_results.csv"
     analyze_results(csv_path)

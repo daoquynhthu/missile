@@ -3,8 +3,9 @@
 #include "aero/cfd/device_mesh.hpp"
 #include "aero/cfd/gpu_solver_internal.hpp"
 #include <cuda_runtime.h>
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -196,5 +197,6 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, int* d_faile
     return true;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

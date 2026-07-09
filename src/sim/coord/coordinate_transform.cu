@@ -1,7 +1,7 @@
 #include "sim/coord/coordinate_transform.hpp"
 #include <cmath>
 
-namespace AeroSim {
+namespace aerosp {
 
 __host__ __device__ Eigen::Vector3d CoordinateTransform::lla_to_ecef(const LLA& lla) {
     double sin_lat = sin(lla.lat);
@@ -9,11 +9,11 @@ __host__ __device__ Eigen::Vector3d CoordinateTransform::lla_to_ecef(const LLA& 
     double sin_lon = sin(lla.lon);
     double cos_lon = cos(lla.lon);
 
-    double N = Earth::A() / sqrt(1.0 - Earth::E2() * sin_lat * sin_lat);
+    double N = sim::coord::A() / sqrt(1.0 - sim::coord::E2() * sin_lat * sin_lat);
     
     double x = (N + lla.alt) * cos_lat * cos_lon;
     double y = (N + lla.alt) * cos_lat * sin_lon;
-    double z = (N * (1.0 - Earth::E2()) + lla.alt) * sin_lat;
+    double z = (N * (1.0 - sim::coord::E2()) + lla.alt) * sin_lat;
 
     return Eigen::Vector3d(x, y, z);
 }
@@ -27,16 +27,16 @@ __host__ __device__ LLA CoordinateTransform::ecef_to_lla(const Eigen::Vector3d& 
     double lon = atan2(y, x);
     
     // Initial guess
-    double lat = atan2(z, p * (1.0 - Earth::E2()));
+    double lat = atan2(z, p * (1.0 - sim::coord::E2()));
     double alt = 0.0;
     double N = 0.0;
 
     // Iterative approach (usually converges in 5-6 iterations)
     for (int i = 0; i < 5; ++i) {
         double sin_lat = sin(lat);
-        N = Earth::A() / sqrt(1.0 - Earth::E2() * sin_lat * sin_lat);
+        N = sim::coord::A() / sqrt(1.0 - sim::coord::E2() * sin_lat * sin_lat);
         alt = p / cos(lat) - N;
-        lat = atan2(z, p * (1.0 - Earth::E2() * (N / (N + alt))));
+        lat = atan2(z, p * (1.0 - sim::coord::E2() * (N / (N + alt))));
     }
 
     return LLA{lat, lon, alt};
@@ -146,4 +146,4 @@ __host__ __device__ Eigen::Vector3d CoordinateTransform::eci_to_ecef(const Eigen
     return R * eci;
 }
 
-} // namespace AeroSim
+} // namespace aerosp

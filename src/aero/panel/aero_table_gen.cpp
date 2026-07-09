@@ -7,8 +7,9 @@
 #include <cmath>
 #include <algorithm>
 
-namespace AeroSim {
-namespace Solver {
+namespace aerosp {
+namespace aero {
+namespace panel {
 
 bool generate_aero_table(
     const std::string& stl_path,
@@ -57,7 +58,7 @@ bool generate_aero_table(
               << " Beta)...\n";
 
     bool use_cfd = cfg.use_fvm;
-    std::vector<Cfd::CfdForceResult> cfd_results;
+    std::vector<aerosp::aero::cfd::CfdForceResult> cfd_results;
     std::vector<BatchResult> newtonian_results;
 
     if (use_cfd) {
@@ -89,17 +90,17 @@ bool generate_aero_table(
 
         std::cout << "[aero_table_gen] Generating cube mesh: outer_scale=" << cfg.mesh_outer_scale
                   << " n_per_dim=" << n << "\n";
-        Cfd::CfdMesh mesh = Cfd::generate_structured_cube_mesh(
+        aerosp::aero::cfd::CfdMesh mesh = aerosp::aero::cfd::generate_structured_cube_mesh(
             static_cast<Real>(cfg.mesh_outer_scale), n);
 
-        Cfd::MeshQualityReport qr = Cfd::compute_mesh_metrics(mesh);
+        aerosp::aero::cfd::MeshQualityReport qr = aerosp::aero::cfd::compute_mesh_metrics(mesh);
         if (!qr.valid || qr.cells == 0) {
             std::cerr << "[aero_table_gen] Mesh invalid: " << qr.message
                       << " (cells=" << qr.cells << ")\n";
             return false;
         }
 
-        Cfd::CfdConfig cfd_cfg;
+        aerosp::aero::cfd::CfdConfig cfd_cfg;
         cfd_cfg.use_gpu = true;
         cfd_cfg.ref_area  = static_cast<Real>(cfg.ref_area);
         cfd_cfg.ref_length = static_cast<Real>(cfg.ref_length);
@@ -109,7 +110,7 @@ bool generate_aero_table(
         cfd_cfg.prandtl   = static_cast<Real>(cfg.prandtl);
         cfd_cfg.wall_temperature = static_cast<Real>(cfg.wall_temperature);
 
-        Cfd::CfdSolver cfd_solver;
+        aerosp::aero::cfd::CfdSolver cfd_solver;
         if (!cfd_solver.load_mesh(mesh)) {
             std::cerr << "[aero_table_gen] Failed to load mesh into CFD solver\n";
             return false;
@@ -118,7 +119,7 @@ bool generate_aero_table(
         cfd_results.resize(conditions.size());
         for (size_t i = 0; i < conditions.size(); ++i) {
             auto& c = conditions[i];
-            Cfd::FreestreamCondition fc;
+            aerosp::aero::cfd::FreestreamCondition fc;
             fc.mach      = static_cast<Real>(c.mach);
             fc.alpha_deg = static_cast<Real>(c.alpha_deg);
             fc.beta_deg  = static_cast<Real>(c.beta_deg);
@@ -186,5 +187,6 @@ bool generate_aero_table(
     return true;
 }
 
-} // namespace Solver
-} // namespace AeroSim
+} // namespace panel
+} // namespace aero
+} // namespace aerosp

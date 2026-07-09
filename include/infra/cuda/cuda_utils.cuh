@@ -5,7 +5,7 @@
 #include <device_launch_parameters.h>
 #include "infra/common.hpp"
 
-namespace AeroSim {
+namespace aerosp {
 
     struct Vec3 {
         double x, y, z;

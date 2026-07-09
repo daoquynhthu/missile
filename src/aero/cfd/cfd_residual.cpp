@@ -1,8 +1,9 @@
 #include "aero/cfd/cfd_residual.hpp"
 #include "aero/cfd/reconstruction.hpp"
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 bool compute_euler_residual_cpu(
     const CfdMesh& mesh,
@@ -120,6 +121,7 @@ bool compute_euler_residual_cpu_order2(
     return true;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 

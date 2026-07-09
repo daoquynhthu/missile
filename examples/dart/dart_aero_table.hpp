@@ -10,8 +10,8 @@
 #include <map>
 #include <Eigen/Dense>
 
-namespace AeroSim {
-namespace RM {
+namespace aerosp {
+namespace dart {
 
 /**
  * @brief POD version of AeroCoeffs for GPU
@@ -318,5 +318,5 @@ private:
     DartAeroTableGPU m_gpu_data = {0, 0, nullptr, nullptr, nullptr};
 };
 
-} // namespace RM
-} // namespace AeroSim
+} // namespace dart
+} // namespace aerosp

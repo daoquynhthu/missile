@@ -9,8 +9,9 @@
 #include <string>
 #include <vector>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 struct CfdSolveSummary {
     CfdForceResult forces;
@@ -44,7 +45,8 @@ bool assert_oracle_equivalent(
     Real tol_forces,
     std::string* error);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 

@@ -5,8 +5,9 @@
 #include <algorithm>
 #include "infra/common.hpp"
 
-namespace AeroSim {
-namespace GNC {
+namespace aerosp {
+namespace sim {
+namespace control {
 
 class DartGuidance {
 public:
@@ -272,5 +273,6 @@ private:
     GuidanceState m_state;
 };
 
-} 
+} // namespace control
+} // namespace sim
 }

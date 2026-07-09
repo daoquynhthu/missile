@@ -8,8 +8,9 @@
 #include <cmath>
 #include <limits>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -415,6 +416,7 @@ bool assert_oracle_equivalent(
     return true;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 

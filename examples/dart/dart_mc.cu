@@ -13,14 +13,14 @@
 #include "sim/dynamics/dynamics_6dof.hpp"
 #include "sim/coord/coordinate_transform.hpp"
 #include "infra/math/constants.hpp"
-#include "rm_dart_config.hpp"
-#include "rm_dart_aero_table.hpp"
+#include "dart_config.hpp"
+#include "dart_aero_table.hpp"
 #include "sim/atmosphere/atmosphere_model.hpp"
 #include "sim/gravity/gravity_model.hpp"
 #include "sim/control/dart_guidance.hpp"
 
-using namespace AeroSim;
-using namespace AeroSim::RM;
+using namespace aerosp;
+using namespace aerosp::dart;
 
 // Simulation parameters
 struct MCSimParams {
@@ -105,8 +105,8 @@ MCSummary summarize_results(const std::vector<MCSimResult>& results, const Eigen
     return summary;
 }
 
-CUDA_HOST_DEVICE GNC::DartGuidance::Config build_guidance_config(const DartConfig& cfg) {
-    GNC::DartGuidance::Config guid_cfg;
+CUDA_HOST_DEVICE sim::control::DartGuidance::Config build_guidance_config(const DartConfig& cfg) {
+    sim::control::DartGuidance::Config guid_cfg;
     guid_cfg.nav_ratio = cfg.nav_ratio;
     guid_cfg.guidance_start_time = cfg.guid_start_time;
     guid_cfg.visual_fov_deg = cfg.guid_fov_deg;
@@ -137,7 +137,7 @@ CUDA_HOST_DEVICE GNC::DartGuidance::Config build_guidance_config(const DartConfi
 /**
  * @brief CUDA Kernel for Monte Carlo Simulation
  */
-__global__ void rm_dart_mc_kernel(
+__global__ void dart_mc_kernel(
     MCSimParams params,
     DartAeroTableGPU aero_table,
     DartConfig dart_cfg, 
@@ -220,12 +220,12 @@ __global__ void rm_dart_mc_kernel(
     inertia.mass = dart_cfg.mass;
     inertia.inertia = dart_cfg.inertia;
     inertia.com = dart_cfg.com;
-    GNC::DartGuidance::Config guid_cfg = build_guidance_config(dart_cfg);
+    sim::control::DartGuidance::Config guid_cfg = build_guidance_config(dart_cfg);
 
     bool guid_active_ever = false;
     double dp = 0, dy = 0;
-    GNC::DartGuidance::GuidanceState guid_state;
-    GNC::DartGuidance::reset_state(guid_state);
+    sim::control::DartGuidance::GuidanceState guid_state;
+    sim::control::DartGuidance::reset_state(guid_state);
     Eigen::Vector3d g_ecef = R_ne * Eigen::Vector3d(0, 0, g_mag);
     Eigen::Vector3d prev_p_ned = Eigen::Vector3d::Zero();
     Eigen::Vector3d eval_point_ned = prev_p_ned;
@@ -277,7 +277,7 @@ __global__ void rm_dart_mc_kernel(
                 active = true;
             } else {
                 Eigen::Vector3d v_ned_cur = R_en * state.vel_ecef;
-                auto guid_out = GNC::DartGuidance::update_closed_loop(
+                auto guid_out = sim::control::DartGuidance::update_closed_loop(
                     t, p_ned, v_ned_cur, state.omega_body, target_ned, dt, guid_cfg, guid_state
                 );
                 dp = guid_out.delta_pitch;
@@ -364,7 +364,7 @@ MCBatchOutput run_mc_batch(
     }
 
     auto start = std::chrono::high_resolution_clock::now();
-    rm_dart_mc_kernel<<<blocksPerGrid, threadsPerBlock>>>(
+    dart_mc_kernel<<<blocksPerGrid, threadsPerBlock>>>(
         params, aero_table, dart_cfg, origin_lla, origin_ecef, target_ned,
         dart_cfg.gravity_mag, dart_cfg.atm_density,
         d_results, write_debug_traj ? d_debug_traj : nullptr, 0ULL, use_guidance
@@ -389,7 +389,7 @@ void write_debug_traj_csv(const std::vector<TrajectoryPoint>& debug_traj) {
         return;
     }
 
-    std::ofstream debug_file("output/logs/rm_dart_mc_debug_traj.csv");
+    std::ofstream debug_file("output/logs/dart_mc_debug_traj.csv");
     debug_file << "Time,X,Y,Z,Vx,Vy,Vz,Qw,Qx,Qy,Qz,Alpha,Mach\n";
     for (const auto& p : debug_traj) {
         if (p.t == 0 && p.x == 0 && p.y == 0 && p.z == 0 && debug_file.tellp() > 50) {
@@ -403,7 +403,7 @@ void write_debug_traj_csv(const std::vector<TrajectoryPoint>& debug_traj) {
 }
 
 void write_results_csv(const std::vector<MCSimResult>& results) {
-    std::ofstream outfile("output/logs/rm_dart_mc_results.csv");
+    std::ofstream outfile("output/logs/dart_mc_results.csv");
     outfile << "ID,X,Y,Z,Time,Guidance\n";
     for (int i = 0; i < static_cast<int>(results.size()); ++i) {
         outfile << i << "," << results[i].x << "," << results[i].y << "," << results[i].z << ","
@@ -413,13 +413,13 @@ void write_results_csv(const std::vector<MCSimResult>& results) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cout << "Usage: RMDartMC <num_sims> [v0] [pitch] [yaw] [nav_ratio] [ctrl_gain] [v0_sigma] [pitch_sigma] [yaw_sigma] [seed] [forced_dp] [forced_dp_2] [forced_switch_x]" << std::endl;
-        std::cout << "   or: RMDartMC --sweep <num_sims> <v0> <pitch> <yaw> <nav_list> <ctrl_list> [seed]" << std::endl;
-        std::cout << "   or: RMDartMC --closed-loop-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <y_pos_list> <z_pos_list> <dp_gain_list> <dy_gain_list> [seed]" << std::endl;
-        std::cout << "   or: RMDartMC --closed-loop-structure-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <terminal_range_list> <max_accel_list> <rate_damp_list> <pitch_moment_list> <yaw_moment_list> [seed]" << std::endl;
-        std::cout << "   or: RMDartMC --forced-dp-sweep <v0> <pitch_list> <yaw> <dp_list> [seed]" << std::endl;
-        std::cout << "   or: RMDartMC --forced-dp-2stage-sweep <v0> <pitch_list> <yaw> <dp1_list> <dp2_list> <switch_list> [seed]" << std::endl;
-        std::cout << "   or: RMDartMC --forced-dp-2stage-mc-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <dp1_list> <dp2_list> <switch_list> [seed]" << std::endl;
+        std::cout << "Usage: DartMC <num_sims> [v0] [pitch] [yaw] [nav_ratio] [ctrl_gain] [v0_sigma] [pitch_sigma] [yaw_sigma] [seed] [forced_dp] [forced_dp_2] [forced_switch_x]" << std::endl;
+        std::cout << "   or: DartMC --sweep <num_sims> <v0> <pitch> <yaw> <nav_list> <ctrl_list> [seed]" << std::endl;
+        std::cout << "   or: DartMC --closed-loop-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <y_pos_list> <z_pos_list> <dp_gain_list> <dy_gain_list> [seed]" << std::endl;
+        std::cout << "   or: DartMC --closed-loop-structure-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <terminal_range_list> <max_accel_list> <rate_damp_list> <pitch_moment_list> <yaw_moment_list> [seed]" << std::endl;
+        std::cout << "   or: DartMC --forced-dp-sweep <v0> <pitch_list> <yaw> <dp_list> [seed]" << std::endl;
+        std::cout << "   or: DartMC --forced-dp-2stage-sweep <v0> <pitch_list> <yaw> <dp1_list> <dp2_list> <switch_list> [seed]" << std::endl;
+        std::cout << "   or: DartMC --forced-dp-2stage-mc-sweep <num_sims> <v0> <pitch> <yaw> <v0_sigma> <pitch_sigma> <yaw_sigma> <dp1_list> <dp2_list> <switch_list> [seed]" << std::endl;
         return 0;
     }
 
@@ -521,7 +521,7 @@ int main(int argc, char* argv[]) {
         return candidates.front();
     };
     std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "e:/missile/data/EGM2008.gfc"});
-    std::string aero_path = resolve_path({"data/dart/rm_dart_aero_table.csv", "../data/dart/rm_dart_aero_table.csv", "rm_dart_aero_table.csv"});
+    std::string aero_path = resolve_path({"data/dart/dart_aero_table.csv", "../data/dart/dart_aero_table.csv", "dart_aero_table.csv"});
     LLA origin_lla = {dart_cfg.launch_lat * 3.14159265 / 180.0, 
                       dart_cfg.launch_lon * 3.14159265 / 180.0, 
                       dart_cfg.launch_alt};
@@ -545,7 +545,7 @@ int main(int argc, char* argv[]) {
     dart_cfg.nav_ratio = params.nav_ratio;
     dart_cfg.ctrl_gain = params.control_gain;
 
-    std::cout << "--- AeroSim: RoboMaster Dart GPU Monte Carlo ---" << std::endl;
+    std::cout << "--- aerosp: RoboMaster Dart GPU Monte Carlo ---" << std::endl;
     std::cout << "Location: (" << dart_cfg.launch_lat << ", " << dart_cfg.launch_lon << ")" << std::endl;
     std::cout << "Env: Gravity=" << dart_cfg.gravity_mag << " m/s2, Density=" << dart_cfg.atm_density << " kg/m3" << std::endl;
     std::cout << "Params: v0=" << params.v0_mean << ", pitch=" << params.pitch_mean_deg 
@@ -573,7 +573,7 @@ int main(int argc, char* argv[]) {
     if (sweep_mode) {
         std::vector<double> nav_values = parse_double_list(argv[6]);
         std::vector<double> ctrl_values = parse_double_list(argv[7]);
-        std::ofstream sweep_file("output/logs/rm_dart_mc_sweep.csv");
+        std::ofstream sweep_file("output/logs/dart_mc_sweep.csv");
         sweep_file << "NavRatio,CtrlGain,HitRate,MeanMissMM,MaxMissMM,ElapsedSec\n";
 
         for (double nav_ratio : nav_values) {
@@ -601,7 +601,7 @@ int main(int argc, char* argv[]) {
         std::vector<double> z_pos_values = parse_double_list(argv[10]);
         std::vector<double> dp_gain_values = parse_double_list(argv[11]);
         std::vector<double> dy_gain_values = parse_double_list(argv[12]);
-        std::ofstream sweep_file("output/logs/rm_dart_mc_closed_loop_sweep.csv");
+        std::ofstream sweep_file("output/logs/dart_mc_closed_loop_sweep.csv");
         sweep_file << "YPosGain,ZPosGain,DPGain,DYGain,HitRate,MeanMissMM,MaxMissMM,ElapsedSec\n";
 
         for (double y_pos_gain : y_pos_values) {
@@ -636,7 +636,7 @@ int main(int argc, char* argv[]) {
         std::vector<double> rate_damp_values = parse_double_list(argv[11]);
         std::vector<double> pitch_moment_values = parse_double_list(argv[12]);
         std::vector<double> yaw_moment_values = parse_double_list(argv[13]);
-        std::ofstream sweep_file("output/logs/rm_dart_mc_closed_loop_structure_sweep.csv");
+        std::ofstream sweep_file("output/logs/dart_mc_closed_loop_structure_sweep.csv");
         sweep_file << "TerminalRange,MaxAccel,RateDamp,PitchMomentCoeff,YawMomentCoeff,HitRate,MeanMissMM,MaxMissMM,ElapsedSec\n";
 
         for (double terminal_range : terminal_range_values) {
@@ -672,7 +672,7 @@ int main(int argc, char* argv[]) {
     } else if (authority_mode) {
         std::vector<double> pitch_values = parse_double_list(argv[3]);
         std::vector<double> dp_values = parse_double_list(argv[5]);
-        std::ofstream sweep_file("output/logs/rm_dart_mc_forced_dp_sweep.csv");
+        std::ofstream sweep_file("output/logs/dart_mc_forced_dp_sweep.csv");
         sweep_file << "PitchDeg,ForcedDP,HitRate,MeanMissMM,MaxMissMM,ElapsedSec\n";
 
         for (double pitch_deg : pitch_values) {
@@ -697,7 +697,7 @@ int main(int argc, char* argv[]) {
         std::vector<double> dp1_values = parse_double_list(argv[5]);
         std::vector<double> dp2_values = parse_double_list(argv[6]);
         std::vector<double> switch_values = parse_double_list(argv[7]);
-        std::ofstream sweep_file("output/logs/rm_dart_mc_forced_dp_2stage_sweep.csv");
+        std::ofstream sweep_file("output/logs/dart_mc_forced_dp_2stage_sweep.csv");
         sweep_file << "PitchDeg,ForcedDP1,ForcedDP2,SwitchX,HitRate,MeanMissMM,MaxMissMM,ElapsedSec\n";
 
         for (double pitch_deg : pitch_values) {
@@ -727,7 +727,7 @@ int main(int argc, char* argv[]) {
         std::vector<double> dp1_values = parse_double_list(argv[9]);
         std::vector<double> dp2_values = parse_double_list(argv[10]);
         std::vector<double> switch_values = parse_double_list(argv[11]);
-        std::ofstream sweep_file("output/logs/rm_dart_mc_forced_dp_2stage_mc_sweep.csv");
+        std::ofstream sweep_file("output/logs/dart_mc_forced_dp_2stage_mc_sweep.csv");
         sweep_file << "ForcedDP1,ForcedDP2,SwitchX,HitRate,MeanMissMM,MaxMissMM,ElapsedSec\n";
 
         for (double forced_dp1 : dp1_values) {

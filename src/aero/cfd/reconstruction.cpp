@@ -3,8 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -371,6 +372,7 @@ PrimitiveState reconstruct_primitive_positive(
     return reconstruct_primitive(center, scale_gradient(gradient, t), dx, dy, dz);
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 

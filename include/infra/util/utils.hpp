@@ -5,8 +5,9 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace AeroSim {
-    namespace Utils {
+namespace aerosp {
+    namespace infra {
+        namespace util {
         
         /**
          * @brief Linear Interpolation for 1D data
@@ -91,6 +92,7 @@ namespace AeroSim {
 
             return p;
         }
-
     }
+
+}
 }

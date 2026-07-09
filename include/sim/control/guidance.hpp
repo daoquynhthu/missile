@@ -7,8 +7,9 @@
 #include "infra/math/constants.hpp"
 #include "sim/coord/coordinate_transform.hpp"
 
-namespace AeroSim {
-namespace GNC {
+namespace aerosp {
+namespace sim {
+namespace control {
 
 /**
  * @brief Guidance for Boost-Glide (Qian Xuesen) Trajectory
@@ -134,7 +135,7 @@ public:
                     if (target_pitch_deg < m_config.boost_pitch_min) target_pitch_deg = m_config.boost_pitch_min; 
 
                     
-                    double target_angle_from_vertical = (90.0 - target_pitch_deg) * AeroSim::Math::DEG2RAD();
+                    double target_angle_from_vertical = (90.0 - target_pitch_deg) * aerosp::infra::math::DEG2RAD();
                     
                     // Calculate Launch Azimuth to Target
                     // Vector from Pos to Target (Projected to Horizontal Plane)
@@ -212,7 +213,7 @@ public:
                      desired_aoa_deg = 20.0; 
                 }
                 
-                double desired_pitch_rad = gamma_rad + desired_aoa_deg * AeroSim::Math::DEG2RAD();
+                double desired_pitch_rad = gamma_rad + desired_aoa_deg * aerosp::infra::math::DEG2RAD();
                 
                 // Target Direction (Nose)
                 // Pitch relative to Horizon (Local Horizontal)
@@ -281,7 +282,7 @@ public:
                 }
                 
                 aoa_deg = std::clamp(aoa_deg, m_config.glide_aoa_min, m_config.glide_aoa_max);
-                double aoa = aoa_deg * AeroSim::Math::DEG2RAD();
+                double aoa = aoa_deg * aerosp::infra::math::DEG2RAD();
                 
                 // C. Lateral Guidance -> Heading Error -> Bank Angle
                 // Calculate Desired Heading (Azimuth to Target)
@@ -322,9 +323,9 @@ public:
                 // So positive Cross means Target is Left.
                 // We want Negative Roll.
                 // So phi = -K * error.
-                double bank_angle = -m_config.lateral_gain * heading_err * AeroSim::Math::RAD2DEG();
+                double bank_angle = -m_config.lateral_gain * heading_err * aerosp::infra::math::RAD2DEG();
                 bank_angle = std::clamp(bank_angle, -m_config.max_bank_angle, m_config.max_bank_angle);
-                double bank_rad = bank_angle * AeroSim::Math::DEG2RAD();
+                double bank_rad = bank_angle * aerosp::infra::math::DEG2RAD();
                 
                 // D. Construct Target Attitude (Bank-to-Turn)
                 // 1. Start with Velocity Frame (X=v_dir)
@@ -402,7 +403,7 @@ public:
                     Eigen::Vector3d body_y = desired_body_z.cross(v_dir).normalized();
 
                     // AoA proportional to lift demand, clamped to max 25 deg
-                    double alpha_cmd = std::min(lift_mag / (max_accel * 3.0), 1.0) * 25.0 * AeroSim::Math::DEG2RAD();
+                    double alpha_cmd = std::min(lift_mag / (max_accel * 3.0), 1.0) * 25.0 * aerosp::infra::math::DEG2RAD();
 
                     // Pitch nose up around body_y
                     Eigen::Vector3d body_x_final = Eigen::AngleAxisd(alpha_cmd, body_y) * v_dir;
@@ -478,5 +479,6 @@ private:
     }
 };
 
-} // namespace GNC
-} // namespace AeroSim
+} // namespace control
+} // namespace sim
+} // namespace aerosp

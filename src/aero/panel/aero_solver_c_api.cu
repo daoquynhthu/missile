@@ -15,7 +15,7 @@ int generate_aero_table_c(
     float ref_area, float ref_length, float ref_span,
     float com_x)
 {
-    AeroSim::Solver::AeroTableConfig cfg;
+    aerosp::aero::panel::AeroTableConfig cfg;
     cfg.ref_area = ref_area;
     cfg.ref_length = ref_length;
     cfg.ref_span = ref_span;
@@ -25,7 +25,7 @@ int generate_aero_table_c(
     std::vector<double> alpha_vec(alpha_grid, alpha_grid + n_alpha);
     std::vector<double> beta_vec(beta_grid, beta_grid + n_beta);
 
-    bool ok = AeroSim::Solver::generate_aero_table(
+    bool ok = aerosp::aero::panel::generate_aero_table(
         stl_path, csv_path, mach_vec, alpha_vec, beta_vec, cfg);
 
     if (!ok) {

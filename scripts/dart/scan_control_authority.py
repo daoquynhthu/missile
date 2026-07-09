@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 
-DEBUG_EXE = Path("build/bin/Release/RMDartDebug.exe")
+DEBUG_EXE = Path("build/bin/Release/DartDebug.exe")
 OUTPUT_DIR = Path("output/logs")
 TARGET_DIST = 25.233
 TARGET_YAW_DEG = 7.3

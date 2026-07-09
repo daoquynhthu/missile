@@ -29,12 +29,12 @@ int main(int argc, char** argv) {
     std::vector<double> alpha_grid = (argc > 4) ? parse_csv(argv[4]) : std::vector<double>{0.0, 5.0, 10.0};
     std::vector<double> beta_grid  = (argc > 5) ? parse_csv(argv[5]) : std::vector<double>{0.0};
 
-    AeroSim::Solver::AeroTableConfig cfg;
+    aerosp::aero::panel::AeroTableConfig cfg;
     cfg.ref_area = 1.131f;
     cfg.ref_length = 12.0f;
     cfg.ref_span = 3.0f;
 
-    bool ok = AeroSim::Solver::generate_aero_table(
+    bool ok = aerosp::aero::panel::generate_aero_table(
         stl_path, csv_path, mach_grid, alpha_grid, beta_grid, cfg);
 
     return ok ? 0 : 1;

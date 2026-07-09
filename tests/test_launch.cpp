@@ -12,7 +12,7 @@
 #include "config/missile_config.hpp"
 // #include "infra/util/integrator.hpp" // Removed
 
-using namespace AeroSim;
+using namespace aerosp;
 
 // Simplified System for Test
 struct TestSystem {
@@ -20,15 +20,15 @@ struct TestSystem {
     SolidMotor& motor;
     RCSModel& rcs;
     AerodynamicsModel& aero;
-    GNC::Autopilot& autopilot;
-    GNC::Guidance& guidance;
-    MissileDesign::HGV1Config& config;
+    sim::control::Autopilot& autopilot;
+    sim::control::Guidance& guidance;
+    config::HGV1Config& config;
     
     // State
-    GNC::Autopilot::AutopilotOutput current_cmd;
+    sim::control::Autopilot::AutopilotOutput current_cmd;
     InertialProps initial_inertia;
 
-    TestSystem(GravityModel& g, SolidMotor& m, RCSModel& r, AerodynamicsModel& a, GNC::Autopilot& ap, GNC::Guidance& gd, MissileDesign::HGV1Config& cfg)
+    TestSystem(GravityModel& g, SolidMotor& m, RCSModel& r, AerodynamicsModel& a, sim::control::Autopilot& ap, sim::control::Guidance& gd, config::HGV1Config& cfg)
         : gravity(g), motor(m), rcs(r), aero(a), autopilot(ap), guidance(gd), config(cfg) {
             initial_inertia.mass = config.total_mass;
             initial_inertia.com = Eigen::Vector3d(-6.0, 0, 0); // Approx
@@ -82,17 +82,17 @@ void test_launch_vertical() {
     std::cout << "[Test] Starting Launch Dynamics Test..." << std::endl;
     
     // 1. Setup
-    auto config = MissileDesign::load_hgv1_config();
+    auto config = config::load_hgv1_config();
     GravityModel gravity(4);
     SolidMotor motor(config.propulsion);
     RCSModel::Config rcs_cfg = {1000.0, 200.0, 10.0, 1.0};
     RCSModel rcs_model(rcs_cfg);
     
     AerodynamicsModel aero(config.aerodynamics);
-    GNC::Autopilot autopilot(config.autopilot);
-    GNC::Guidance::Config guide_cfg;
+    sim::control::Autopilot autopilot(config.autopilot);
+    sim::control::Guidance::Config guide_cfg;
     guide_cfg.boost_pitch_start = 5.0;
-    GNC::Guidance guidance(guide_cfg);
+    sim::control::Guidance guidance(guide_cfg);
     
     TestSystem system(gravity, motor, rcs_model, aero, autopilot, guidance, config);
     

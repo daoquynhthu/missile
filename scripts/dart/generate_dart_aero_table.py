@@ -119,4 +119,4 @@ def main(output_path):
 
 if __name__ == "__main__":
     os.makedirs("data/dart", exist_ok=True)
-    main("data/dart/rm_dart_aero_table.csv")
+    main("data/dart/dart_aero_table.csv")

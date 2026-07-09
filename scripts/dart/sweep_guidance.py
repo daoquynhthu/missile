@@ -2,8 +2,8 @@ import subprocess
 import pandas as pd
 import os
 
-MC_EXE = r"build\Release\RMDartMC.exe"
-SWEEP_OUT = "output/logs/rm_dart_mc_sweep.csv"
+MC_EXE = r"build\Release\DartMC.exe"
+SWEEP_OUT = "output/logs/dart_mc_sweep.csv"
 
 def sweep_params(pitch=9.6664):
     nav_ratios = [3.0, 4.0, 5.0]

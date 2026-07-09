@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <vector>
 
-namespace AeroSim {
-namespace Solver {
+namespace aerosp {
+namespace aero {
+namespace panel {
 
     // --- Single-point kernel ---
     __global__ void compute_forces_moments_kernel(const Triangle* triangles, int num_triangles, 
@@ -540,5 +541,6 @@ namespace Solver {
         return triangles;
     }
 
+}
 }
 }

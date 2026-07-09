@@ -5,7 +5,7 @@
 #include "infra/math/constants.hpp"
 #include "infra/common.hpp"
 
-namespace AeroSim {
+namespace aerosp {
 
 /**
  * @brief Geodetic coordinates (Latitude, Longitude, Altitude)
@@ -40,4 +40,4 @@ public:
     static CUDA_HOST_DEVICE Eigen::Vector3d eci_to_ecef(const Eigen::Vector3d& eci, double gmst);
 };
 
-} // namespace AeroSim
+} // namespace aerosp

@@ -1,0 +1,23 @@
+target_sources(missile_lib PRIVATE
+    panel/aero_solver.cu
+    panel/aero_table_gen.cpp
+    cfd/cfd_residual.cpp
+    cfd/cfd_residual_gpu.cu
+    cfd/cfd_solver.cpp
+    cfd/cuda_utils.cpp
+    cfd/device_mesh.cu
+    cfd/diagnostics.cpp
+    cfd/gpu_buffers.cu
+    cfd/gpu_diagnostics.cu
+    cfd/gpu_rans.cu
+    cfd/gpu_solver.cu
+    cfd/gpu_timestep.cu
+    cfd/gpu_update.cu
+    cfd/gpu_viscous.cu
+    cfd/gpu_wall.cu
+    cfd/mesh_metrics.cpp
+    cfd/rans.cpp
+    cfd/reconstruction.cpp
+    cfd/reconstruction_gpu.cu
+    cfd/viscous.cpp
+)

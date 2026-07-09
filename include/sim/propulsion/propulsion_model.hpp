@@ -7,7 +7,7 @@
 #include "infra/math/constants.hpp"
 #include "infra/util/utils.hpp"
 
-namespace AeroSim {
+namespace aerosp {
 
 struct TVCCommand {
     double pitch; // Nozzle deflection (radians)
@@ -217,7 +217,7 @@ public:
             if (m_config.burn_time > 0)
                 F_vac = m_config.total_impulse / m_config.burn_time;
         } else {
-            F_vac = Utils::interpolate_1d(m_config.time_knots, m_config.thrust_knots, dt);
+            F_vac = aerosp::infra::util::interpolate_1d(m_config.time_knots, m_config.thrust_knots, dt);
         }
         
         // Pressure correction: F = F_vac - P_amb * A_exit
@@ -300,4 +300,4 @@ private:
     double m_propellant_remaining;
 };
 
-} // namespace AeroSim
+} // namespace aerosp

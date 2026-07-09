@@ -6,8 +6,9 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <utility>
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 DeviceMesh::~DeviceMesh() {
     release();
@@ -469,6 +470,7 @@ bool DeviceMesh::allocate_halo(int n_halo_cells) {
     return true;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 

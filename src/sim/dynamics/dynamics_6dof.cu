@@ -2,7 +2,7 @@
 #include "infra/math/constants.hpp"
 #include <cmath>
 
-namespace AeroSim {
+namespace aerosp {
 
 __host__ __device__ State6DOF Dynamics6DOF::compute_derivatives(
     const State6DOF& state,
@@ -22,7 +22,7 @@ __host__ __device__ State6DOF Dynamics6DOF::compute_derivatives(
 
     // Coriolis and centrifugal forces only for global ballistic
     if (profile == SimulationProfile::GLOBAL_BALLISTIC) {
-        Eigen::Vector3d omega_e(0, 0, Earth::OMEGA());
+        Eigen::Vector3d omega_e(0, 0, sim::coord::OMEGA());
         coriolis = -2.0 * omega_e.cross(state.vel_ecef);
         centrifugal = -omega_e.cross(omega_e.cross(state.pos_ecef));
     }
@@ -78,4 +78,4 @@ __host__ __device__ State6DOF Dynamics6DOF::compute_derivatives(
     return dot;
 }
 
-} // namespace AeroSim
+} // namespace aerosp

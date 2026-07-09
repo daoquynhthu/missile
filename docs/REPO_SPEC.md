@@ -258,13 +258,14 @@ target_link_libraries(aerosp PRIVATE nrlmsise00)
 | 文件 | 说明 |
 |------|------|
 | `CMakeLists.txt` | 构建入口 |
-| `AGENTS.md` | 工作区规范 |
-| `REPO_SPEC.md` | 本文件 (工程规格，只读) |
-| `AERO_ACCURACY_UPGRADE.md` | CFD 精度升级架构 (只读) |
-| `PLAN.md` | 执行计划 |
-| `ISSUES.md` | 问题追踪 |
-| `progress.md` | 进度日志 (仅追加) |
-| `README.md` | 项目介绍 |
+| `AGENTS.md` | 工作区规范 (根目录) |
+| `LICENSE` | GPL 3.0 许可 (根目录) |
+| `docs/REPO_SPEC.md` | 本文件 (工程规格，只读) |
+| `docs/AERO_ACCURACY_UPGRADE.md` | CFD 精度升级架构 (只读) |
+| `docs/PLAN.md` | 执行计划 |
+| `docs/ISSUES.md` | 问题追踪 |
+| `docs/progress.md` | 进度日志 (仅追加) |
+| `README.md` | 项目介绍 (根目录) |
 | `.gitignore` | Git 忽略规则 |
 | `LICENSE` | 许可 |
 | `cmake/` | CMake 模块目录 |

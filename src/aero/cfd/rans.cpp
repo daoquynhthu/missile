@@ -6,8 +6,9 @@
 #include <algorithm>
 #include <limits>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 Real sa_vorticity(const PrimitiveGradient& grad) {
     Real vort_x = grad.dw_dy - grad.dv_dz;
@@ -114,5 +115,6 @@ std::vector<RansSource> compute_rans_sources(
     return sources;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

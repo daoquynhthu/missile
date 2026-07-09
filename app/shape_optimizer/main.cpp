@@ -136,8 +136,8 @@ struct DesignParams {
 
 class MissileGenerator {
 public:
-    static std::vector<AeroSim::Solver::Triangle> generate(const DesignParams& params) {
-        std::vector<AeroSim::Solver::Triangle> mesh;
+    static std::vector<aerosp::aero::panel::Triangle> generate(const DesignParams& params) {
+        std::vector<aerosp::aero::panel::Triangle> mesh;
         
         float Ln = params.nose_length;
         float Lb = params.body_length;
@@ -280,8 +280,8 @@ public:
     }
 
 private:
-    static void add_tri(std::vector<AeroSim::Solver::Triangle>& mesh, float3 v0, float3 v1, float3 v2) {
-        AeroSim::Solver::Triangle tri;
+    static void add_tri(std::vector<aerosp::aero::panel::Triangle>& mesh, float3 v0, float3 v1, float3 v2) {
+        aerosp::aero::panel::Triangle tri;
         tri.v0 = v0; tri.v1 = v1; tri.v2 = v2;
         
         // Compute Center
@@ -310,7 +310,7 @@ private:
 
 // --- Optimizer ---
 class ShapeOptimizer {
-    AeroSim::Solver::AeroSolver solver;
+    aerosp::aero::panel::AeroSolver solver;
     std::mt19937 rng;
     
 public:
@@ -318,7 +318,7 @@ public:
         rng.seed(std::random_device{}());
     }
     
-    float calculate_volume(const std::vector<AeroSim::Solver::Triangle>& mesh) {
+    float calculate_volume(const std::vector<aerosp::aero::panel::Triangle>& mesh) {
         float vol = 0.0f;
         for(const auto& tri : mesh) {
              // Signed volume of tetrahedron from origin to triangle

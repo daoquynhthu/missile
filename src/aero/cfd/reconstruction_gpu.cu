@@ -3,8 +3,9 @@
 #include "aero/cfd/cuda_utils.hpp"
 #include "aero/cfd/device_mesh.hpp"
 #include <cuda_runtime.h>
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -563,8 +564,9 @@ bool apply_limiter_gpu(DeviceMesh& mesh, bool sync, std::string* error) {
     return true;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 
 

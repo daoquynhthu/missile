@@ -250,7 +250,7 @@ def save_stl(vertices, faces, output_path):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-json", default="", help="geometry config json path")
-    parser.add_argument("--output", default="rm_dart_v5_full_square.stl", help="output STL path")
+    parser.add_argument("--output", default="dart_v5_full_square.stl", help="output STL path")
     return parser.parse_args()
 
 

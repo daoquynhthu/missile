@@ -523,10 +523,10 @@ CFD-RANS-*
 
 ## 10. 文档与状态文件
 
-- `AERO_ACCURACY_UPGRADE.md`：设计文档，只描述目标、架构、验收标准。
-- `PLAN.md`：执行计划，勾选任务。
-- `progress.md`：纯追加进度日志。
-- `ISSUES.md`：活跃阻塞问题。
+- `docs/AERO_ACCURACY_UPGRADE.md`：设计文档，只描述目标、架构、验收标准。
+- `docs/PLAN.md`：执行计划，勾选任务。
+- `docs/progress.md`：纯追加进度日志。
+- `docs/ISSUES.md`：活跃阻塞问题。
 
 任何实现阶段完成后必须同步：
 

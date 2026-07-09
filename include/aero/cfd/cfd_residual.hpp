@@ -10,8 +10,9 @@
 #include <string>
 #include <vector>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 bool compute_euler_residual_cpu(
     const CfdMesh& mesh,
@@ -69,7 +70,8 @@ bool compute_euler_residual_gpu(
     std::vector<EulerFlux>& residual,
     std::string* error = nullptr);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 

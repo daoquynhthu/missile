@@ -7,8 +7,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-namespace AeroSim {
-namespace RM {
+namespace aerosp {
+namespace dart {
 
 /**
  * @brief RoboMaster Dart 2022 Physical Parameters
@@ -111,5 +111,5 @@ struct DartConfig {
     }
 };
 
-} // namespace RM
-} // namespace AeroSim
+} // namespace dart
+} // namespace aerosp

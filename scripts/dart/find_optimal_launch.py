@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import numpy as np
 
-SIM_EXE = r"build\Release\RMDartSim.exe"
+SIM_EXE = r"build\Release\DartSim.exe"
 TARGET_DIST = 25.233
 TARGET_YAW_DEG = 7.3
 TARGET_Z = 1.5
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     # First regenerate table
     subprocess.run(["python", "scripts/dart/generate_dart_aero_table.py"])
     # Rebuild
-    subprocess.run(["cmake", "--build", "build", "--config", "Release", "--target", "RMDartSim"])
+    subprocess.run(["cmake", "--build", "build", "--config", "Release", "--target", "DartSim"])
     
     best = search_design()
     print(f"\nBest Design: v0={best['v0']:.4f} m/s, pitch={best['pitch']:.4f} deg, miss={best['miss_3d']:.4f} m")

@@ -148,7 +148,7 @@ All three gate tests pass based on their test definitions.
 ### Category H: Code Convention Compliance
 
 **PH2-H-1: No CUDA_KERNEL_CHECK macro exists** [FIXED]
-`AGENTS.md:56`, `PLAN.md:495`
+`../AGENTS.md:56`, `PLAN.md:495`
 
 Both AGENTS.md and PLAN.md specify that kernel launches should use `CUDA_KERNEL_CHECK()`. No such macro is defined anywhere in the codebase. All kernel launch error checking uses `cuda_check(cudaGetLastError(), ...)` instead, which is functionally correct but violates the stated convention.
 
@@ -683,7 +683,7 @@ Fix applied (2026-07-08): `cuda_utils.hpp` 添加 `cuda_free_safe<T>(T*&)` 模�
 **PH4-B-10: `CUDA_KERNEL_CHECK` 宏定义但从未使用** [INFO]
 `include/aero_cfd/cuda_utils.hpp:9`
 
-`AGENTS.md` 要求 "kernel launches via `CUDA_KERNEL_CHECK()`"，但所有 kernel launch 使用内联 `cuda_check(cudaGetLastError(), ...)` 模式。宏应被使用或文档应更新。
+`../AGENTS.md` 要求 "kernel launches via `CUDA_KERNEL_CHECK()`"，但所有 kernel launch 使用内联 `cuda_check(cudaGetLastError(), ...)` 模式。宏应被使用或文档应更新。
 
 ### Category D: 潜在数值安全性问题
 

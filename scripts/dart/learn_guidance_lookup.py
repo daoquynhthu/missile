@@ -5,8 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 
-GPU_SCAN_CSV = Path("output/logs/rm_dart_mc_forced_dp_sweep.csv")
-DEBUG_EXE = Path("build/bin/Release/RMDartDebug.exe")
+GPU_SCAN_CSV = Path("output/logs/dart_mc_forced_dp_sweep.csv")
+DEBUG_EXE = Path("build/bin/Release/DartDebug.exe")
 TARGET_DIST = 25.233
 TARGET_YAW_DEG = 7.3
 TARGET_Z = 1.5

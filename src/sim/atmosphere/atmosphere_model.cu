@@ -11,7 +11,7 @@ extern "C" {
                float* d, float* t);
 }
 
-namespace AeroSim {
+namespace aerosp {
 
 /**
  * @brief Simple exponential atmosphere model (fallback)
@@ -29,17 +29,17 @@ __host__ __device__ AtmosphereData AtmosphereModel::calculate_simple(double alt_
     
     if (alt_m < 11000.0) { // Troposphere
         data.temperature = T0 + L * alt_m;
-        data.pressure = p0 * pow(data.temperature / T0, -Earth::G() / (L * (Atmosphere::R_GAS() / Atmosphere::M_AIR())));
-        data.density = data.pressure / ((Atmosphere::R_GAS() / Atmosphere::M_AIR()) * data.temperature);
+        data.pressure = p0 * pow(data.temperature / T0, -sim::coord::G() / (L * (sim::atmosphere::R_GAS() / sim::atmosphere::M_AIR())));
+        data.density = data.pressure / ((sim::atmosphere::R_GAS() / sim::atmosphere::M_AIR()) * data.temperature);
     } else { // Simplified stratosphere
         double T_tropo = T0 + L * 11000.0;
-        double P_tropo = p0 * pow(T_tropo / T0, -Earth::G() / (L * (Atmosphere::R_GAS() / Atmosphere::M_AIR())));
+        double P_tropo = p0 * pow(T_tropo / T0, -sim::coord::G() / (L * (sim::atmosphere::R_GAS() / sim::atmosphere::M_AIR())));
         data.temperature = T_tropo;
-        data.pressure = P_tropo * exp(-Earth::G() * (alt_m - 11000.0) / ((Atmosphere::R_GAS() / Atmosphere::M_AIR()) * T_tropo));
-        data.density = data.pressure / ((Atmosphere::R_GAS() / Atmosphere::M_AIR()) * data.temperature);
+        data.pressure = P_tropo * exp(-sim::coord::G() * (alt_m - 11000.0) / ((sim::atmosphere::R_GAS() / sim::atmosphere::M_AIR()) * T_tropo));
+        data.density = data.pressure / ((sim::atmosphere::R_GAS() / sim::atmosphere::M_AIR()) * data.temperature);
     }
     
-    data.sound_speed = sqrt(1.4 * (Atmosphere::R_GAS() / Atmosphere::M_AIR()) * data.temperature);
+    data.sound_speed = sqrt(1.4 * (sim::atmosphere::R_GAS() / sim::atmosphere::M_AIR()) * data.temperature);
     
     return data;
 }
@@ -179,4 +179,4 @@ __host__ __device__ AtmosphereData AtmosphereModel::calculate(const NRLMSISE00In
 #endif
 }
 
-} // namespace AeroSim
+} // namespace aerosp

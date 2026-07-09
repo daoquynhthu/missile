@@ -12,8 +12,8 @@
 #include <vector>
 #include <string>
 
-using namespace AeroSim::Solver;
-namespace Cfd = AeroSim::Cfd;
+using namespace aerosp::aero::panel;
+namespace cfd = aerosp::aero::cfd;
 
 static int test_count = 0;
 static int pass_count = 0;

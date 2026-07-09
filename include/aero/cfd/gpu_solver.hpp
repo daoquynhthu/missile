@@ -11,8 +11,9 @@
 #include <string>
 #include <vector>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 CfdSolveSummary solve_gpu(
     DeviceMesh& d_mesh,
@@ -30,7 +31,8 @@ CfdSolveSummary solve_gpu(
     Real* d_forces,
     std::string* error = nullptr);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 

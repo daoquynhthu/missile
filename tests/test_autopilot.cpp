@@ -6,14 +6,14 @@
 #include "sim/control/autopilot.hpp"
 #include "config/missile_config.hpp"
 
-using namespace AeroSim;
+using namespace aerosp;
 
 void test_autopilot_polarity() {
     std::cout << "[Test] Starting Autopilot Polarity Test..." << std::endl;
 
     // 1. Setup Config
-    auto config = MissileDesign::load_hgv1_config();
-    GNC::Autopilot autopilot(config.autopilot);
+    auto config = config::load_hgv1_config();
+    sim::control::Autopilot autopilot(config.autopilot);
 
     // 2. Scenario: Pitch Up Command
     // Current Attitude: Level (Identity)

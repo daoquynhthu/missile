@@ -7,8 +7,8 @@ import os
 import json
 
 # Configuration
-SIM_EXE = r"build\Release\RMDartSim.exe"
-MC_EXE = r"build\Release\RMDartMC.exe"
+SIM_EXE = r"build\Release\DartSim.exe"
+MC_EXE = r"build\Release\DartMC.exe"
 NUM_SIMULATIONS = 10000
 MAX_WORKERS = 8
 
@@ -41,11 +41,11 @@ SIGMA_YAW = 0.2      # deg (Mechanical angle error)
 
 def run_single_sim(sim_id, v0, pitch, yaw, target_name):
     csv_name = f"mc_sim_{sim_id}.csv"
-    # Note: RMDartSim needs to be modified to accept output filename or we rename it
-    # For now, let's assume it always writes to rm_dart_trajectory.csv and we rename it
+    # Note: DartSim needs to be modified to accept output filename or we rename it
+    # For now, let's assume it always writes to dart_trajectory.csv and we rename it
     # To avoid collisions in parallel, we'll run sequentially or use a lock, 
-    # but better to modify RMDartSim to take an output path.
-    # Let's quickly check if I can modify RMDartSim.
+    # but better to modify DartSim to take an output path.
+    # Let's quickly check if I can modify DartSim.
     pass
 
 def analyze_monte_carlo_gpu(target_name):
@@ -53,13 +53,13 @@ def analyze_monte_carlo_gpu(target_name):
     print(f"\n--- GPU Monte Carlo Analysis for {target_name} ---")
     
     # Run GPU simulation
-    # Note: RMDartMC currently has fixed targets in code, but we can pass num_sims
+    # Note: DartMC currently has fixed targets in code, but we can pass num_sims
     # and it targets the Base (7.3 deg) by default.
     cmd = [MC_EXE, str(NUM_SIMULATIONS)]
     subprocess.run(cmd, check=True)
     
     # Read results
-    df_res = pd.read_csv("rm_dart_mc_results.csv")
+    df_res = pd.read_csv("dart_mc_results.csv")
     
     # Ensure numeric types
     df_res['X'] = pd.to_numeric(df_res['X'], errors='coerce')
@@ -106,5 +106,5 @@ if __name__ == "__main__":
     if not os.path.exists(MC_EXE):
         print(f"Error: {MC_EXE} not found. Build the project first.")
     else:
-        # Currently RMDartMC targets Base by default
+        # Currently DartMC targets Base by default
         analyze_monte_carlo_gpu("Base")

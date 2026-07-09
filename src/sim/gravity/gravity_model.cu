@@ -10,7 +10,7 @@
 #include "infra/cuda/cuda_utils.cuh"
 #include "infra/util/progress_bar.hpp"
 
-namespace AeroSim {
+namespace aerosp {
 
 // CUDA kernel to compute gravity using spherical harmonics (Pines' Algorithm - Fully Normalized)
 // Reference: Pines, S. (1973). "Uniform Representation of the Gravitational Potential and its Derivatives"
@@ -231,10 +231,10 @@ void launch_gravity_kernel(const Vec3& r_ecef, double mu, double R, int N,
     cudaFree(d_g_out);
 }
 
-} // namespace AeroSim
+} // namespace aerosp
 
 // Explicit qualification for class methods outside namespace block
-AeroSim::GravityModel::GravityModel(int max_degree) 
+aerosp::GravityModel::GravityModel(int max_degree) 
     : m_max_degree(max_degree), m_loaded_max_degree(0), m_mu(0), m_radius(0),
       d_C(nullptr), d_S(nullptr), m_cuda_ready(false) {
     
@@ -243,12 +243,12 @@ AeroSim::GravityModel::GravityModel(int max_degree)
     // m_S.assign(num_coeffs, 0.0);
 }
 
-AeroSim::GravityModel::~GravityModel() {
+aerosp::GravityModel::~GravityModel() {
     if (d_C) cudaFree(d_C);
     if (d_S) cudaFree(d_S);
 }
 
-bool AeroSim::GravityModel::load_coefficients(const std::string& filepath) {
+bool aerosp::GravityModel::load_coefficients(const std::string& filepath) {
     std::ifstream file(filepath);
     if (!file.is_open()) return false;
 
@@ -257,7 +257,7 @@ bool AeroSim::GravityModel::load_coefficients(const std::string& filepath) {
     size_t file_size = file.tellg();
     file.seekg(0, std::ios::beg);
     
-    // AeroSim::ProgressBar progress(file_size, 50, "Loading EGM2008");
+    // aerosp::ProgressBar progress(file_size, 50, "Loading EGM2008");
     std::cout << "[Init] Loading EGM2008..." << std::endl;
 
     std::string line;
@@ -322,7 +322,7 @@ bool AeroSim::GravityModel::load_coefficients(const std::string& filepath) {
     return true;
 }
 
-void AeroSim::GravityModel::prepare_cuda() {
+void aerosp::GravityModel::prepare_cuda() {
     if (m_cuda_ready) return;
     if (m_C.empty()) return;
     
@@ -344,23 +344,23 @@ void AeroSim::GravityModel::prepare_cuda() {
     m_cuda_ready = true;
 }
 
-Eigen::Vector3d AeroSim::GravityModel::calculate_acceleration_cuda(const Eigen::Vector3d& r_ecef) const {
+Eigen::Vector3d aerosp::GravityModel::calculate_acceleration_cuda(const Eigen::Vector3d& r_ecef) const {
     // Need to cast away constness conceptually or use mutable if we were modifying logic, 
     // but here we just need to ensure d_C/d_S are allocated.
     // The prepare_cuda() should be called before simulation loop.
     // Ideally check here:
     if (!m_cuda_ready) {
         // This is a hack, in real code handle initialization better
-        const_cast<AeroSim::GravityModel*>(this)->prepare_cuda();
+        const_cast<aerosp::GravityModel*>(this)->prepare_cuda();
     }
 
-    AeroSim::Vec3 h_r(r_ecef.x(), r_ecef.y(), r_ecef.z());
+    aerosp::Vec3 h_r(r_ecef.x(), r_ecef.y(), r_ecef.z());
 
     // Launch configuration: 1 thread for single point calculation
     // Note: This is inefficient due to per-call cudaMalloc. 
     // Use calculate_accelerations_cuda (batch) or calculate_acceleration (CPU) instead.
-    AeroSim::Vec3* d_g;
-    cudaMalloc(&d_g, sizeof(AeroSim::Vec3));
+    aerosp::Vec3* d_g;
+    cudaMalloc(&d_g, sizeof(aerosp::Vec3));
 
     // Increase stack size if needed (for large N recursion/stack variables)
     size_t stackSize = 0;
@@ -369,10 +369,10 @@ Eigen::Vector3d AeroSim::GravityModel::calculate_acceleration_cuda(const Eigen::
         cudaDeviceSetLimit(cudaLimitStackSize, 16384);
     }
 
-    AeroSim::gravity_kernel<<<1, 1>>>(h_r, m_mu, m_radius, m_loaded_max_degree, d_C, d_S, d_g);
+    aerosp::gravity_kernel<<<1, 1>>>(h_r, m_mu, m_radius, m_loaded_max_degree, d_C, d_S, d_g);
     
-    AeroSim::Vec3 h_g;
-    cudaMemcpy(&h_g, d_g, sizeof(AeroSim::Vec3), cudaMemcpyDeviceToHost);
+    aerosp::Vec3 h_g;
+    cudaMemcpy(&h_g, d_g, sizeof(aerosp::Vec3), cudaMemcpyDeviceToHost);
     cudaFree(d_g);
     
     return Eigen::Vector3d(h_g.x, h_g.y, h_g.z);
@@ -380,9 +380,9 @@ Eigen::Vector3d AeroSim::GravityModel::calculate_acceleration_cuda(const Eigen::
 
 
 // Host-side CPU implementation (Fixed: No longer calls inefficient GPU kernel)
-Eigen::Vector3d AeroSim::GravityModel::calculate_acceleration(const Eigen::Vector3d& r_ecef) const {
-    AeroSim::Vec3 r(r_ecef.x(), r_ecef.y(), r_ecef.z());
-    AeroSim::Vec3 g;
+Eigen::Vector3d aerosp::GravityModel::calculate_acceleration(const Eigen::Vector3d& r_ecef) const {
+    aerosp::Vec3 r(r_ecef.x(), r_ecef.y(), r_ecef.z());
+    aerosp::Vec3 g;
     
     // Direct CPU call using shared logic
     compute_gravity_single_point(r, m_mu, m_radius, m_loaded_max_degree, m_C.data(), m_S.data(), &g);
@@ -391,11 +391,11 @@ Eigen::Vector3d AeroSim::GravityModel::calculate_acceleration(const Eigen::Vecto
 }
 
 // Batch GPU implementation for multi-trajectory simulation
-std::vector<Eigen::Vector3d> AeroSim::GravityModel::calculate_accelerations_cuda(const std::vector<Eigen::Vector3d>& r_ecef_list) const {
+std::vector<Eigen::Vector3d> aerosp::GravityModel::calculate_accelerations_cuda(const std::vector<Eigen::Vector3d>& r_ecef_list) const {
     if (r_ecef_list.empty()) return {};
     
     if (!m_cuda_ready) {
-        const_cast<AeroSim::GravityModel*>(this)->prepare_cuda();
+        const_cast<aerosp::GravityModel*>(this)->prepare_cuda();
     }
 
     size_t count = r_ecef_list.size();
@@ -404,19 +404,19 @@ std::vector<Eigen::Vector3d> AeroSim::GravityModel::calculate_accelerations_cuda
     // Ideally, these should be persistent buffers to avoid malloc overhead every step.
     // But for batch=1000, one malloc is negligible compared to 1000 mallocs.
     
-    AeroSim::Vec3* d_r_list;
-    AeroSim::Vec3* d_g_list;
+    aerosp::Vec3* d_r_list;
+    aerosp::Vec3* d_g_list;
     
-    cudaMalloc(&d_r_list, count * sizeof(AeroSim::Vec3));
-    cudaMalloc(&d_g_list, count * sizeof(AeroSim::Vec3));
+    cudaMalloc(&d_r_list, count * sizeof(aerosp::Vec3));
+    cudaMalloc(&d_g_list, count * sizeof(aerosp::Vec3));
     
     // Prepare input data
-    std::vector<AeroSim::Vec3> h_r_list(count);
+    std::vector<aerosp::Vec3> h_r_list(count);
     for(size_t i=0; i<count; ++i) {
-        h_r_list[i] = AeroSim::Vec3(r_ecef_list[i].x(), r_ecef_list[i].y(), r_ecef_list[i].z());
+        h_r_list[i] = aerosp::Vec3(r_ecef_list[i].x(), r_ecef_list[i].y(), r_ecef_list[i].z());
     }
     
-    cudaMemcpy(d_r_list, h_r_list.data(), count * sizeof(AeroSim::Vec3), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_r_list, h_r_list.data(), count * sizeof(aerosp::Vec3), cudaMemcpyHostToDevice);
     
     // Launch kernel
     int threadsPerBlock = 256;
@@ -429,11 +429,11 @@ std::vector<Eigen::Vector3d> AeroSim::GravityModel::calculate_accelerations_cuda
         cudaDeviceSetLimit(cudaLimitStackSize, 16384);
     }
     
-    AeroSim::gravity_kernel_batch<<<blocksPerGrid, threadsPerBlock>>>(d_r_list, m_mu, m_radius, m_loaded_max_degree, d_C, d_S, d_g_list, count);
+    aerosp::gravity_kernel_batch<<<blocksPerGrid, threadsPerBlock>>>(d_r_list, m_mu, m_radius, m_loaded_max_degree, d_C, d_S, d_g_list, count);
     
     // Copy back
-    std::vector<AeroSim::Vec3> h_g_list(count);
-    cudaMemcpy(h_g_list.data(), d_g_list, count * sizeof(AeroSim::Vec3), cudaMemcpyDeviceToHost);
+    std::vector<aerosp::Vec3> h_g_list(count);
+    cudaMemcpy(h_g_list.data(), d_g_list, count * sizeof(aerosp::Vec3), cudaMemcpyDeviceToHost);
     
     cudaFree(d_r_list);
     cudaFree(d_g_list);

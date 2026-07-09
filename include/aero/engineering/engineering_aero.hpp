@@ -4,8 +4,9 @@
 #include <algorithm>
 #include "aero/panel/aero_solver.hpp"
 
-namespace AeroSim {
-namespace Solver {
+namespace aerosp {
+namespace aero {
+namespace panel {
 
 struct EngineeringAeroCoeffs {
     double CX, CY, CZ;
@@ -97,5 +98,6 @@ inline EngineeringAeroCoeffs compute_engineering_coeffs(
     return {CX, CY, CZ, Cl, Cm, Cn, CD_wind, CL};
 }
 
-} // namespace Solver
-} // namespace AeroSim
+} // namespace panel
+} // namespace aero
+} // namespace aerosp

@@ -1,49 +1,88 @@
-# AeroSim: 高保真弹道仿真工程
+# AeroHighPrecisionSim
 
-这是一个基于 C++ 和 CUDA 开发的高精度弹道仿真框架，旨在提供支持 GPU 加速的 6-DOF（六自由度）动力学仿真能力。
+High-fidelity ballistic simulation engine. C++17/CUDA, zero third-party CFD dependency.
 
-## 项目状态：核心物理引擎已就绪
+## Features
 
-### 已完成步骤 (Completed)
+- **6-DOF Simulation**: Rigid-body dynamics with RK4 integration, variable mass, ECEF/NED/body frames
+- **Aerodynamics**: Newtonian panel method (GPU-accelerated), engineering component-buildup (DATCOM-style), FVM Euler/NS/RANS CFD solver (GPU production path with CPU oracle)
+- **Atmosphere**: US Standard Atmosphere 1976 (≤86 km) + NRLMSISE-00 (Fortran, full altitude, host-only)
+- **Gravity**: EGM2008 (4/12 order), J2/J3/J4 corrections
+- **Guidance & Control**: Multi-phase guidance (boost/coast/glide/terminal), PID autopilot, PN guidance
+- **CFD Solver**: Finite-volume method on GPU with face coloring for deterministic reduction, SA turbulence, 2nd-order reconstruction, viscous NS, zero-cudaMemcpy iteration loop, MPI halo interface (reserved)
+- **Aero Table Generation**: Batch CFD/Newtonian table generation with fidelity tracking and condition-range enforcement
 
-1.  **高精度环境模型**
-    -   **重力模型**：实现了 EGM2008 地球重力场模型，支持 CPU 和 CUDA 双端计算。目前包含 J2/J3 项的高精度修正，并预留了全阶次球谐函数接口。
-    -   **大气模型**：建立了大气模型接口，实现了国际标准大气 (ISA) 作为 fallback 方案，并定义了 NRLMSISE-00 的输入接口。
-    -   **地球常数**：基于 WGS-84 标准定义了完整的物理和几何常数库。
+## Project Structure
 
-2.  **坐标系转换库**
-    -   支持 **LLA** (经纬高)、**ECEF** (地心地固)、**NED** (北东地)、**Body** (机体)、**ECI** (地心惯性) 之间的相互转换。
-    -   所有转换函数均通过 `CUDA_HOST_DEVICE` 宏实现，支持在 GPU 核函数中直接调用。
-
-3.  **6-DOF 动力学引擎**
-    -   构建了弹体 6-DOF 状态空间方程（位置、速度、四元数姿态、角速度）。
-    -   实现了 4 阶龙格-库塔 (RK4) 数值积分器。
-    -   考虑了地球自转引起的科氏力 (Coriolis) 和离心力 (Centrifugal)。
-
-4.  **工程基础设施**
-    -   **混合编译系统**：完善了 CMake 配置，解决了 Eigen 库与 CUDA/MSVC 之间的兼容性问题及警告。
-    -   **构建工具**：
-        -   `build.ps1`：自动化完整构建（并行加速）。
-        -   `quick_check.ps1`：核心库快速增量编译，用于提高开发调试效率。
-    -   **跨平台兼容**：通过 `common.hpp` 解决了 CUDA 关键字在纯 C++ 环境下的识别问题。
-
-## 快速开始
-
-### 环境依赖
-- Windows 10/11
-- Visual Studio 2022 (MSBuild)
-- CUDA Toolkit 12.0+
-- CMake 3.20+
-- Eigen 3.4.0 (由 CMake 自动下载)
-
-### 构建项目
-```powershell
-# 完整构建
-./build.ps1
-
-# 仅编译核心库（用于快速语法检查）
-./quick_check.ps1
+```
+├── AGENTS.md              # Workspace specification (AI agent instructions)
+├── LICENSE                # GPL 3.0
+├── README.md              # This file
+├── CMakeLists.txt         # Build entry
+├── docs/                  # Documentation
+│   ├── AERO_ACCURACY_UPGRADE.md  # CFD accuracy upgrade architecture (read-only)
+│   ├── REPO_SPEC.md       # Engineering specification
+│   ├── PLAN.md            # Execution plan (active tasks)
+│   ├── ISSUES.md          # Active blockers
+│   ├── ARCHITECTURE.md    # Pipeline architecture
+│   ├── PIPELINE.md        # Data flow documentation
+│   ├── HANDOFF.md         # Project handoff documentation
+│   ├── progress.md        # Progress log (append-only)
+│   ├── ARCH_STABILIZE.md  # GPU architecture stabilization plan
+│   └── DEVELOPMENT_LOG.md # Research & development log
+├── src/                   # Source code
+│   ├── infra/             # Math, utilities, CUDA helpers
+│   ├── sim/               # Physics: coord, gravity, atmosphere, propulsion, dynamics, control
+│   ├── aero/              # Aerodynamics: panel, engineering, cfd
+│   └── config/            # Vehicle/scenario configuration
+├── include/               # Public headers (parallel structure to src/)
+├── app/                   # Executable entry points
+│   ├── sim_main/          # Main simulation
+│   ├── aero_calc/         # Command-line aero calculator
+│   ├── aero_table_gen/    # Aero table generator
+│   └── shape_optimizer/   # Shape optimization tool
+├── examples/              # Validation cases
+│   └── dart/              # Low-speed dart validation (RM Dart heritage)
+├── data/                  # Input data (STL, tables, configs)
+├── scripts/               # Python utilities
+└── tests/                 # Test suite (custom TEST/FAIL/PASS, CTest)
 ```
 
-### 运行测试
-构建完成后，测试程序位于 `build/bin/Release/test_gravity.exe`。
+## Build
+
+```bash
+cmake -B build
+cmake --build build --config Release
+ctest --test-dir build -C Release
+```
+
+### Requirements
+
+- Windows 10+ (MSVC 2022)
+- CUDA 12+ (sm_75, RDC ON)
+- CMake 3.28+
+- Eigen 3.4 (FetchContent, automatic)
+- MinGW-W64 gfortran (for NRLMSISE-00, optional)
+
+### Options
+
+```bash
+cmake -B build -DAEROSIM_REAL_DOUBLE=ON   # Double precision (default: float)
+```
+
+## Namespace Convention
+
+All code lives under `aerosp::` with sub-namespaces mirroring the directory layout:
+
+| Directory | Namespace | Description |
+|-----------|-----------|-------------|
+| `src/infra/math/` | `aerosp::infra::math` | Math utilities, constants |
+| `src/sim/coord/` | `aerosp::sim::coord` | Coordinate transforms |
+| `src/sim/control/` | `aerosp::sim::control` | Guidance & autopilot |
+| `src/aero/cfd/` | `aerosp::aero::cfd` | FVM CFD solver |
+| `src/aero/panel/` | `aerosp::aero::panel` | Panel method |
+| `src/config/` | `aerosp::config` | Configuration |
+
+## License
+
+GNU General Public License v3.0. See `LICENSE`.

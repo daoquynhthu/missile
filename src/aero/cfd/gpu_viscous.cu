@@ -3,8 +3,9 @@
 #include "aero/cfd/device_mesh.hpp"
 #include "aero/cfd/gpu_solver_internal.hpp"
 #include <cuda_runtime.h>
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -346,5 +347,6 @@ bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
     return true;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

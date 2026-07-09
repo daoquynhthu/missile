@@ -4,8 +4,8 @@
 #include <cmath>
 #include <vector>
 
-namespace AeroSim {
-namespace MissileDesign {
+namespace aerosp {
+namespace config {
 
     HGV1Config load_hgv1_config() {
         HGV1Config config;
@@ -85,7 +85,7 @@ namespace MissileDesign {
         // --- Propulsion System Design ---
         // IRBM Scale
         
-        AeroSim::SolidMotor::Config& prop = config.propulsion;
+        aerosp::SolidMotor::Config& prop = config.propulsion;
         prop.payload_mass = config.payload_mass;
         prop.dry_mass = 1500.0; // Structure mass
         prop.propellant_mass = config.total_mass - config.payload_mass - prop.dry_mass; // 12500 kg propellant
@@ -114,7 +114,7 @@ namespace MissileDesign {
 
         // --- Aerodynamics Design (Standard Missile) ---
         // High L/D for hypersonic glide
-        AeroSim::AerodynamicsModel::Config& aero = config.aerodynamics;
+        aerosp::AerodynamicsModel::Config& aero = config.aerodynamics;
         
         // Updated values from Shape Optimizer (IRBM)
         aero.ref_area = 1.1310; // Reference Area (pi * 0.6^2)
@@ -133,7 +133,7 @@ namespace MissileDesign {
         aero.cl_delta_roll = 0.5;   // Roll moment due to aileron
 
         // Autopilot Config
-        AeroSim::GNC::Autopilot::Config ap_cfg;
+        aerosp::sim::control::Autopilot::Config ap_cfg;
         
         // Pitch PID
         // Tuned for HGV-1 (High Authority TVC & Aero)
@@ -193,5 +193,5 @@ namespace MissileDesign {
 
         return config;
     }
-}
-}
+} // namespace config
+} // namespace aerosp

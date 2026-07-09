@@ -7,8 +7,9 @@
 #include <string>
 #include <vector>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 enum class DiagnosticLevel : int {
     Off = 0,
@@ -67,5 +68,6 @@ bool write_vtk_cells(
     Real gamma,
     std::string* error = nullptr);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

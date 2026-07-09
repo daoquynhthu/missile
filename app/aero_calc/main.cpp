@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
             std::cerr << "GPU mode requires --stl path\n";
             return 1;
         }
-        AeroSim::Solver::AeroSolver solver;
+        aerosp::aero::panel::AeroSolver solver;
         if (!solver.load_model(cfg.stl_path, static_cast<float>(cfg.ref_area),
                                static_cast<float>(cfg.ref_length),
                                static_cast<float>(cfg.ref_span))) {
@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
 
     // --- Engineering Estimate (Mach < 5) ---
     if (use_eng) {
-        AeroSim::Solver::AeroGeometry geo;
+        aerosp::aero::panel::AeroGeometry geo;
         geo.ref_area = cfg.ref_area;
         geo.ref_length = cfg.ref_length;
         geo.ref_span = cfg.ref_span;
@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
         double alpha_rad = cfg.alpha_deg * 3.141592653589793 / 180.0;
         double beta_rad = cfg.beta_deg * 3.141592653589793 / 180.0;
 
-        auto c = AeroSim::Solver::compute_engineering_coeffs(geo, cfg.mach, alpha_rad, beta_rad);
+        auto c = aerosp::aero::panel::compute_engineering_coeffs(geo, cfg.mach, alpha_rad, beta_rad);
 
         // Engineering Cm is computed via static_margin about CG; no additional offset needed.
         // GPU solver computes moments about moment_ref_point (= com), so both methods

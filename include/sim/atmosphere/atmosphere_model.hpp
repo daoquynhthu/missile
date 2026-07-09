@@ -4,7 +4,7 @@
 #include <cuda_runtime.h>
 #include "infra/common.hpp"
 
-namespace AeroSim {
+namespace aerosp {
 
 /**
  * @brief Atmospheric properties
@@ -56,4 +56,4 @@ public:
     static CUDA_HOST_DEVICE AtmosphereData calculate_simple(double altitude_m);
 };
 
-} // namespace AeroSim
+} // namespace aerosp

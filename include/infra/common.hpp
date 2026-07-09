@@ -8,7 +8,7 @@
     #define CUDA_HOST_DEVICE
 #endif
 
-namespace AeroSim {
+namespace aerosp {
     enum class SimulationProfile {
         GLOBAL_BALLISTIC,  // Original missile logic
         LOCAL_TACTICAL     // Short-range dart logic

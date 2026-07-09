@@ -5,8 +5,9 @@
 #include <fstream>
 #include <limits>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, Real gamma) {
     StateBounds bounds;
@@ -95,7 +96,7 @@ bool write_vtk_cells(
     }
 
     out << "# vtk DataFile Version 3.0\n";
-    out << "AeroSim CFD cell diagnostics\n";
+    out << "aerosp CFD cell diagnostics\n";
     out << "ASCII\n";
     out << "DATASET UNSTRUCTURED_GRID\n";
     out << "POINTS " << mesh.nodes.size() << " float\n";
@@ -131,6 +132,7 @@ bool write_vtk_cells(
     return true;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 

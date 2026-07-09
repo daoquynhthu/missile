@@ -8,20 +8,20 @@
 #include "config/missile_config.hpp"
 #include "sim/coord/coordinate_transform.hpp"
 
-using namespace AeroSim;
+using namespace aerosp;
 
 void test_boost_pitch_program() {
     std::cout << "[Test] Starting Guidance Boost Pitch Test..." << std::endl;
 
     // 1. Setup Config
-    GNC::Guidance::Config config;
+    sim::control::Guidance::Config config;
     // Override for predictable testing
     config.boost_pitch_start = 5.0;
     config.boost_pitch_rate = 1.0;
     config.boost_pitch_min = 20.0;
     
     // Create Guidance
-    GNC::Guidance guidance(config);
+    sim::control::Guidance guidance(config);
     Eigen::Vector3d target_ecef(0, 0, 0); // Dummy target
     guidance.set_target(target_ecef);
 

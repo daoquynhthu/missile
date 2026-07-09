@@ -3,8 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 Real primitive_temperature(const PrimitiveState& w) {
     return w.p / std::max(w.rho, 1e-30f);
@@ -160,6 +161,7 @@ WallFlux compute_wall_flux(
     return out;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 

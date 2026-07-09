@@ -14,8 +14,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cuda_runtime.h>
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -347,8 +348,9 @@ CfdSolveSummary solve_gpu(
     return result;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 
 

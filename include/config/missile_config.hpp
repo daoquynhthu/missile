@@ -5,8 +5,8 @@
 #include <vector>
 #include <string>
 
-namespace AeroSim {
-namespace MissileDesign {
+namespace aerosp {
+namespace config {
 
     /**
      * @brief Missile Configuration Data Structure
@@ -21,13 +21,13 @@ namespace MissileDesign {
         Eigen::Vector3d center_of_mass;
         
         // Propulsion
-        AeroSim::SolidMotor::Config propulsion;
+        aerosp::SolidMotor::Config propulsion;
         
         // Aerodynamics
-        AeroSim::AerodynamicsModel::Config aerodynamics;
+        aerosp::AerodynamicsModel::Config aerodynamics;
         
         // Autopilot
-        AeroSim::GNC::Autopilot::Config autopilot;
+        aerosp::sim::control::Autopilot::Config autopilot;
 
         // RCS
         // RCSModel::Config rcs; // If we want to move RCS here too
@@ -38,5 +38,5 @@ namespace MissileDesign {
      */
     HGV1Config load_hgv1_config();
 
-}
-}
+} // namespace config
+} // namespace aerosp

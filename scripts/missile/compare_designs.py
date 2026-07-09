@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-SIM_EXE = r"build\Release\RMDartSim.exe"
+SIM_EXE = r"build\Release\DartSim.exe"
 
 def run_comparison_sim(diameter_mm, name):
     # Update aero table for this diameter

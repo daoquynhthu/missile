@@ -42,7 +42,7 @@ def evaluate(params):
     
     # Read the table to get metrics at Mach 0.1, Alpha 5
     import pandas as pd
-    df = pd.read_csv("rm_dart_aero_table.csv")
+    df = pd.read_csv("dart_aero_table.csv")
     
     # Filter for Mach ~0.1, Alpha 5
     sample = df[(df['Mach'] == 0.1) & (df['Alpha'] == 5.0)].iloc[0]

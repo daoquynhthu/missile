@@ -1,7 +1,8 @@
 #include "aero/cfd/cuda_utils.hpp"
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 bool cuda_check(cudaError_t error, const char* action, std::string* message) {
     if (error == cudaSuccess) return true;
@@ -13,5 +14,6 @@ bool cuda_check(cudaError_t error, const char* action, std::string* message) {
     return false;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

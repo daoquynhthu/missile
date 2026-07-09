@@ -4,7 +4,7 @@
 #include <cassert>
 #include "sim/dynamics/dynamics_6dof.hpp"
 
-using namespace AeroSim;
+using namespace aerosp;
 
 // Simple Harmonic Oscillator System
 // x'' = -omega^2 * x

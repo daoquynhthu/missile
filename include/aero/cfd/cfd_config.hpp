@@ -3,8 +3,9 @@
 #include "aero/cfd/real.hpp"
 #include "aero/cfd/diagnostics.hpp"
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 constexpr int CFD_NVAR = 6;
 
@@ -42,5 +43,6 @@ struct FreestreamCondition {
     Real nu_tilde_ratio = 0.1f;  // nu_tilde_inf / nu_inf, 0 = disabled
 };
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

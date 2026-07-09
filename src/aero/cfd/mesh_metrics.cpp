@@ -8,8 +8,9 @@
 #include <limits>
 #include <unordered_map>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -485,6 +486,7 @@ Real boundary_area(const CfdMesh& mesh, BoundaryKind boundary) {
     return area;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 

@@ -2,8 +2,9 @@
 #include "aero/cfd/real.hpp"
 #include "aero/cfd/cuda_utils.hpp"
 #include <cuda_runtime.h>
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 namespace {
 
@@ -543,8 +544,9 @@ std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh) {
     return face_bytes + state_reads + residual_writes;
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 
 

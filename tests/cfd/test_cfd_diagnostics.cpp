@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-using namespace AeroSim;
-using namespace AeroSim::Cfd;
+using namespace aerosp;
+using namespace aerosp::aero::cfd;
 
 static int test_count = 0;
 static int pass_count = 0;

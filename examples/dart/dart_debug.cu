@@ -7,8 +7,8 @@
 #include "sim/dynamics/dynamics_6dof.hpp"
 #include "sim/coord/coordinate_transform.hpp"
 #include "sim/atmosphere/atmosphere_model.hpp"
-#include "rm_dart_aero_table.hpp"
-#include "rm_dart_config.hpp"
+#include "dart_aero_table.hpp"
+#include "dart_config.hpp"
 #include "sim/control/dart_guidance.hpp"
 #include "sim/gravity/gravity_model.hpp"
 #include "infra/math/constants.hpp"
@@ -17,13 +17,13 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-using namespace AeroSim;
+using namespace aerosp;
 
 void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double nav_ratio, double ctrl_gain, double forced_dp, double forced_mom_y) {
     std::ofstream log("dart_debug_log.csv");
     log << "Time,X,Y,Z,Vx,Vy,Vz,Qw,Qx,Qy,Qz,p,q,r,Alpha,Mach,CX,CY,CZ,Cm,Cn,dp,dy,ForceX,ForceY,ForceZ,MomX,MomY,MomZ\n";
 
-    RM::DartConfig dart_cfg;
+    dart::DartConfig dart_cfg;
     auto resolve_path = [](const std::vector<std::string>& candidates) {
         for (const auto& candidate : candidates) {
             std::ifstream file(candidate);
@@ -34,7 +34,7 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
         return candidates.front();
     };
     std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "e:/missile/data/EGM2008.gfc"});
-    std::string aero_path = resolve_path({"data/dart/rm_dart_aero_table.csv", "../data/dart/rm_dart_aero_table.csv", "rm_dart_aero_table.csv"});
+    std::string aero_path = resolve_path({"data/dart/dart_aero_table.csv", "../data/dart/dart_aero_table.csv", "dart_aero_table.csv"});
 
     // 1. Precise Environment Initialization (Based on LLA: 22.58, 113.96)
     LLA origin_lla = {dart_cfg.launch_lat * M_PI / 180.0, 
@@ -61,7 +61,7 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
     dart_cfg.nav_ratio = nav_ratio;
     dart_cfg.ctrl_gain = ctrl_gain;
 
-    GNC::DartGuidance::Config guid_cfg;
+    sim::control::DartGuidance::Config guid_cfg;
     guid_cfg.nav_ratio = dart_cfg.nav_ratio;
     guid_cfg.guidance_start_time = dart_cfg.guid_start_time;
     guid_cfg.visual_fov_deg = dart_cfg.guid_fov_deg;
@@ -133,13 +133,13 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
     inertia.inertia = dart_cfg.inertia;
     inertia.com = dart_cfg.com;
 
-    AeroSim::RM::DartAeroTable aero_table(aero_path);
+    aerosp::dart::DartAeroTable aero_table(aero_path);
 
     double t = 0;
     double dt = 0.001;
     double dp = 0, dy = 0;
-    GNC::DartGuidance::GuidanceState guid_state;
-    GNC::DartGuidance::reset_state(guid_state);
+    sim::control::DartGuidance::GuidanceState guid_state;
+    sim::control::DartGuidance::reset_state(guid_state);
 
     std::cout << "Starting Debug Simulation..." << std::endl;
     // Location log already done above
@@ -156,7 +156,7 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
         Eigen::Vector3d v_ned_cur = R_en * state.vel_ecef;
         dp = forced_dp; dy = 0;
         if (std::abs(forced_dp) < 1e-12) {
-            auto guid_out = GNC::DartGuidance::update_closed_loop(
+            auto guid_out = sim::control::DartGuidance::update_closed_loop(
                 t, p_ned, v_ned_cur, state.omega_body, target_ned, dt, guid_cfg, guid_state
             );
             if (guid_out.active) {
@@ -216,7 +216,7 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
 
 int main(int argc, char** argv) {
     if (argc < 6) {
-        std::cout << "Usage: RMDartDebug <v0> <pitch_deg> <yaw_deg> <nav_ratio> <ctrl_gain> [forced_dp] [forced_mom_y]" << std::endl;
+        std::cout << "Usage: DartDebug <v0> <pitch_deg> <yaw_deg> <nav_ratio> <ctrl_gain> [forced_dp] [forced_mom_y]" << std::endl;
         return -1;
     }
     double v0 = std::stod(argv[1]);

@@ -3,8 +3,9 @@
 #include <cuda_runtime.h>
 #include <string>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 #define CUDA_KERNEL_CHECK(msg) cuda_check(cudaGetLastError(), msg)
 
@@ -15,5 +16,6 @@ static inline void cuda_free_safe(T*& ptr) {
     if (ptr) { cudaFree(ptr); ptr = nullptr; }
 }
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

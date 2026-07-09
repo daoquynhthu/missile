@@ -5,7 +5,7 @@
 #include "sim/atmosphere/atmosphere_model.hpp"
 #include "infra/math/constants.hpp"
 
-using namespace AeroSim;
+using namespace aerosp;
 
 NRLMSISE00Input get_input(double alt_km, double lat, double lon, int doy, double sec, double f107, double ap) {
     NRLMSISE00Input input;

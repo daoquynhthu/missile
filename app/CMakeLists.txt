@@ -1,0 +1,5 @@
+add_subdirectory(sim_main)
+add_subdirectory(aero_calc)
+add_subdirectory(aero_table_gen)
+add_subdirectory(shape_optimizer)
+add_subdirectory(aero_solver_c)

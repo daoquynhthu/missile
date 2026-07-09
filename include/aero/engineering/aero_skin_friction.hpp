@@ -4,8 +4,9 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 
-namespace AeroSim {
-namespace Solver {
+namespace aerosp {
+namespace aero {
+namespace panel {
 
 // Vector math for float3 (in namespace for ODR safety)
 __device__ __host__ inline float3 operator+(const float3& a, const float3& b) {
@@ -213,5 +214,6 @@ __device__ __host__ inline float3 surface_flow_direction(
     return make_float3(tan.x / len, tan.y / len, tan.z / len);
 }
 
-} // namespace Solver
-} // namespace AeroSim
+} // namespace panel
+} // namespace aero
+} // namespace aerosp

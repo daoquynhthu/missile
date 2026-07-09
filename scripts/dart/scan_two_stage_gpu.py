@@ -4,8 +4,8 @@ from pathlib import Path
 import pandas as pd
 
 
-MC_EXE = Path("build/Release/RMDartMC.exe")
-OUTPUT_CSV = Path("output/logs/rm_dart_mc_closed_loop_structure_sweep.csv")
+MC_EXE = Path("build/Release/DartMC.exe")
+OUTPUT_CSV = Path("output/logs/dart_mc_closed_loop_structure_sweep.csv")
 SEED = 123456789
 NUM_SIMS = 2000
 V0 = 25.0

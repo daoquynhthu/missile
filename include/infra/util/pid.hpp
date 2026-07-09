@@ -2,8 +2,9 @@
 
 #include <algorithm>
 
-namespace AeroSim {
-namespace Control {
+namespace aerosp {
+namespace sim {
+namespace control {
 
 /**
  * @brief Generic PID Controller
@@ -98,5 +99,6 @@ private:
     bool m_first_run;
 };
 
-} // namespace Control
-} // namespace AeroSim
+} // namespace control
+} // namespace sim
+} // namespace aerosp

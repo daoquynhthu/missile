@@ -3,6 +3,9 @@
 - Started Phase 1 mesh foundation under `include/aero_cfd/`, `src/aero_cfd/`, and `tests/cfd/`.
 - Added explicit node/cell/face mesh model, boundary labels, quality report, structured cube generator with hex-cull wall classification, structured flat plate generator, metric computation, validation, and boundary area utility.
 - Added `TestCfdMesh` CMake target.
+
+2026-07-09
+- Renamed namespaces: `gnc` → `sim::control` (guidance.hpp, dart_guidance.hpp, autopilot.hpp), `missile_design` → `config` (missile_config.hpp/.cpp), `aerosp::math::` → `aerosp::infra::math::` refs in guidance.hpp and main.cpp, updated using directives in main.cpp and examples/dart/sim.cpp
 - Verification: `cmake -B build` passed; `cmake --build build --target TestCfdMesh --config Release` passed; `build\bin\Release\TestCfdMesh.exe` passed 4/4.
 - Committed Phase 1 as `8fb9c10`.
 - Started Phase 2 Euler foundation with 5-variable state, primitive/conservative conversion, HLLC flux, slip-wall direct pressure flux, CPU first-order update skeleton, residual history, and `TestCfdEuler`.
@@ -25,6 +28,11 @@
 - Verification: `cmake --build build --target TestCfdReconstruction --config Release` passed; `TestCfdReconstruction.exe` passed 4/4; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.
 - Added Barth-Jespersen-style primitive limiters using neighbor extrema and per-variable gradient scaling.
 - Extended `TestCfdReconstruction` with limiter-inactive and new-pressure-extrema suppression tests.
+
+2026-07-09 (continued)
+- Renamed namespaces across ~50 files: `solver` → `aero::panel`, `cfd` → `aero::cfd` with intermediate `aero` layer.
+- Updated all opening/closing declarations, qualified refs (`aerosp::solver::` → `aerosp::aero::panel::`), using-directives, and namespace aliases.
+- Files modified: 5 solver namespace files, 33 CFD namespace files, 12 qualified-reference files.
 - Verification: `cmake --build build --target TestCfdReconstruction --config Release` passed; `TestCfdReconstruction.exe` passed 6/6; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction)" --output-on-failure` passed 4/4.
 - Added explicit VTK legacy unstructured-grid cell output for diagnostics with rho, pressure, and Mach cell fields.
 - Extended `TestCfdDiagnostics` to verify VTK dataset, cell data, and scalar field sections are written.
@@ -40,8 +48,8 @@
 - Temperature gradient is computed analytically from `T=p/rho`, using `gradT=(rho*gradp-p*gradrho)/rho^2`.
 - Verification: `cmake --build build --target TestCfdViscous --config Release` passed; `TestCfdViscous.exe` passed 7/7; `ctest --test-dir build -C Release -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction|Viscous)" --output-on-failure` passed 5/5.
 - Corrected the long-range architecture plan after identifying missing top-tier fidelity requirements: DNS-grade high-order/resolution route, explicit transition physics beyond SA, thermochemistry and wall-catalysis uncertainty for heat flux, and GPU-first production execution.
-- Updated `AERO_ACCURACY_UPGRADE.md` to define first-principles expectations, CPU/GPU roles, SA limitations, transition/DNS/high-order/thermal-chemistry stages, and heat-flux uncertainty constraints.
-- Updated `PLAN.md` with Phase 7 GPU Production Path, Phase 8 High-Order And DNS-Grade Verification, Phase 9 Transition Physics, and Phase 10 Thermochemistry And Wall Catalysis.
+- Updated `docs/AERO_ACCURACY_UPGRADE.md` to define first-principles expectations, CPU/GPU roles, SA limitations, transition/DNS/high-order/thermal-chemistry stages, and heat-flux uncertainty constraints.
+- Updated `docs/PLAN.md` with Phase 7 GPU Production Path, Phase 8 High-Order And DNS-Grade Verification, Phase 9 Transition Physics, and Phase 10 Thermochemistry And Wall Catalysis.
 - Switched implementation direction toward Phase 7 GPU production path: extracted CPU Euler residual assembly into `cfd_residual`, added CUDA Euler residual assembly, and added CPU/GPU residual equivalence test on a non-uniform interior-face case.
 - Added unified `scripts/check_cfd.ps1` verification script. It runs configure, CFD target builds, and CFD ctest while writing full logs under `build/logs/` and filtering Eigen/CMake dependency noise from terminal output.
 - Verification: `powershell -ExecutionPolicy Bypass -File scripts\check_cfd.ps1` passed; CFD ctest reported 6/6 passing.
@@ -331,9 +339,46 @@
 - PH7-I-1: BW-1 converted from FAIL to WARNING (ratio<0.5 prints [WARN] but test PASS).
 - ISSUES.md: All 9 HIGH closed, 6 MEDIUM closed (1 deferred: PH7-E-1 SA diffusion to Phase 8), 6 LOW closed.
 - Verification: TestCfdGpu 35/35 PASS. TestCfdEuler 8/8, TestCfdViscous 11/11, TestCfdMesh 5/5, TestCfdReconstruction 7/7 all PASS.
+2026-07-09 — Step 3 (CMake subdirectory modularization) completed.
+- Created per-module CMakeLists.txt for src/{sim,aero,config,infra}, app/ (5 per-app files), tests/ (15 targets), examples/dart/.
+- Top-level CMakeLists.txt simplified to project setup + add_subdirectory().
+- Added add_cuda_executable() macro for uniform executable boilerplate.
+- Verification: 98 targets build, 0 errors. 13/15 tests pass (2 STL-file-not-found pre-existing).
+
+2026-07-09 — Step 4 (namespace rename AeroSim:: → aerosp::) completed.
+
+2026-07-09 — Step 5 (brand cleanup — rm removal) completed.
+- Deleted `rm` namespace entirely: `aerosp::rm::DartConfig` → `aerosp::dart::DartConfig`
+- Renamed 4 files: `rm_dart_*.hpp/cu` → `dart_*.hpp/cu`
+- CMake targets: `RMDartSim/Debug/MC` → `DartSim/Debug/MC`
+- Updated all #include paths, namespace references, output file paths in source and scripts.
+- Verification: 0 build errors, 13/15 tests pass (same 2 pre-existing).
+- 10 sub-namespaces mapped: Solver→solver, Cfd→cfd, GNC→gnc, RM→rm, MissileDesign→missile_design, Control→control, Math→math, Earth→earth, Atmosphere→atmosphere, Utils→utils.
+- AERO_SIM_REAL_ macros renamed to AEROSP_REAL_.
+- ~150 source/header files modified across src/, include/, app/, tests/, examples/.
+- Verification: 0 build errors. 13/15 tests pass (same 2 pre-existing).
+
 2026-07-09 (session 8 — Phase 8 Track A: SA completeness)
 - Task 1: SA farfield BC nu_tilde/mu ratio — added FreestreamCondition.nu_tilde_ratio (=0.1 default). Auto-computes nu_tilde_inf = ratio * mu_inf / rho_inf from Sutherland viscosity in both gpu_solver.cu and cfd_solver.cpp.
 - Task 2: Point-implicit source treatment — added apply_rans_implicit_kernel in gpu_rans.cu. Approximates destruction eigenvalue d_dest = 2*cw1*nu/d^2, applies implicit scaling before update. Allows higher CFL for RANS.
 - Task 3: SA conservative diffusion (PH7-E-1) — added SA diffusion flux (mu/Re + rho*nu_tilde*fv1/sigma) * grad(nu_tilde) * n * area to viscous_flux_kernel_atomic. Fixed hardcoded inv_Re (was 1/1e6, now uses config.Re).
 - Task 4: Turbulent validation — RANS-3 improved: Re=2e6, 200 iterations, nu_tilde_ratio=0.1 freestream seed, sanity check (turb CD >= lam CD with margin).
 - All 35/35 TestCfdGpu tests PASS. All CPU test suites PASS.
+
+2026-07-09
+- REPO_SPEC namespace restructuring: added intermediate layers (aero::, sim::, infra::, config).
+  - solver→aero::panel (5 decl files, ~6 qualified ref files)
+  - cfd→aero::cfd (33 decl files, 6 test using-directives, 1 alias)
+  - gnc→sim::control (3 decl files, 2 using-directive files)
+  - missile_design→config (2 decl files, 3 ref files)
+  - constants.hpp: earth→sim::coord, math→infra::math, atmosphere→sim::atmosphere
+  - utils.hpp: utils→infra::util, pid.hpp: control→sim::control
+  - Pre-fixed 29 unqualified cross-namespace refs across 9 files
+  - Build: 0 errors, 98 targets. Tests: 13/15 pass (same 2 STL-not-found).
+
+2026-07-09
+- Moved all .md files except AGENTS.md to docs/ directory.
+- Updated all cross-references in docs (AGENTS.md, AERO_ACCURACY_UPGRADE.md, REPO_SPEC.md, PLAN.md, ISSUES.md, ARCH_STABILIZE.md, progress.md) from root paths to docs/ paths.
+- Removed stale `aerodynamics_table.csv.INVALID` from root.
+- Wrote GPL 3.0 LICENSE at root.
+- Wrote comprehensive README.md at root.

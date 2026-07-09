@@ -9,7 +9,7 @@
 #include <cmath>
 #include <Eigen/Dense>
 
-namespace AeroSim {
+namespace aerosp {
 
     class GravityModel {
     public:

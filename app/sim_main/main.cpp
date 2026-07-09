@@ -20,8 +20,8 @@
 #include "sim/control/guidance.hpp" 
 #include "config/missile_config.hpp"
 
-using namespace AeroSim;
-using namespace AeroSim::GNC;
+using namespace aerosp;
+using namespace aerosp::sim::control;
 
 // Helper to create NRLMSISE-00 input
 NRLMSISE00Input get_atmosphere_input(double t, const LLA& lla) {
@@ -149,7 +149,7 @@ struct Trajectory {
 
 int main(int argc, char** argv) {
     std::cout << "===============================================" << std::endl;
-    std::cout << "  AeroSim - Multi-Trajectory Monte Carlo Mode  " << std::endl;
+    std::cout << "  aerosp - Multi-Trajectory Monte Carlo Mode  " << std::endl;
     std::cout << "===============================================" << std::endl;
 
     // Config
@@ -165,7 +165,7 @@ int main(int argc, char** argv) {
         std::cerr << "[Warning] EGM2008.gfc not found (tried data/ and ../data/), using J2-J4 default." << std::endl;
     }
 
-    MissileDesign::HGV1Config hgv_config = MissileDesign::load_hgv1_config();
+    config::HGV1Config hgv_config = config::load_hgv1_config();
     SolidMotor motor(hgv_config.propulsion);
     RCSModel::Config rcs_cfg;
     rcs_cfg.max_thrust = 5000.0;
@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
     AerodynamicsModel aero(hgv_config.aerodynamics);
     
     // Initial State Template
-    LLA init_lla = {40.960556 * AeroSim::Math::DEG2RAD(), 100.298333 * AeroSim::Math::DEG2RAD(), 1000.0}; 
+    LLA init_lla = {40.960556 * aerosp::infra::math::DEG2RAD(), 100.298333 * aerosp::infra::math::DEG2RAD(), 1000.0}; 
     Eigen::Vector3d init_pos = CoordinateTransform::lla_to_ecef(init_lla);
     
     // Orientation
@@ -210,7 +210,7 @@ int main(int argc, char** argv) {
     inertia.com = Eigen::Vector3d(3.0, 0, 0); // Move CG to mid-body (3.0m) for stability
 
     // Guidance Config
-    GNC::Guidance::Config guid_cfg;
+    sim::control::Guidance::Config guid_cfg;
     guid_cfg.boost_end_time = 50.0;
     guid_cfg.boost_pitch_start = 10.0;
     guid_cfg.boost_pitch_rate = 1.0;
@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
     guid_cfg.glide_alt_end = 20000.0;
     guid_cfg.glide_vel_min = 800.0;
     guid_cfg.target_range = 4000000.0;
-    LLA target_lla = {20.0 * AeroSim::Math::DEG2RAD(), 135.0 * AeroSim::Math::DEG2RAD(), 0.0};
+    LLA target_lla = {20.0 * aerosp::infra::math::DEG2RAD(), 135.0 * aerosp::infra::math::DEG2RAD(), 0.0};
     Eigen::Vector3d target_ecef = CoordinateTransform::lla_to_ecef(target_lla);
 
     // Initialize Trajectories with Dispersion
@@ -239,10 +239,10 @@ int main(int argc, char** argv) {
         s.mass += dist_mass(rng);
         
         // Apply pitch dispersion to orientation
-        Eigen::AngleAxisd pitch_err(dist_pitch(rng) * AeroSim::Math::DEG2RAD(), Eigen::Vector3d::UnitY());
+        Eigen::AngleAxisd pitch_err(dist_pitch(rng) * aerosp::infra::math::DEG2RAD(), Eigen::Vector3d::UnitY());
         s.quat_be = s.quat_be * pitch_err;
 
-        GNC::Guidance::Config g_cfg = guid_cfg; // Copy config
+        sim::control::Guidance::Config g_cfg = guid_cfg; // Copy config
         // Could disperse guidance parameters here too
 
         Autopilot::Config ap_cfg = hgv_config.autopilot;

@@ -16,7 +16,7 @@
 #include "aero/panel/aero_solver.hpp"
 #include "infra/util/utils.hpp"
 
-namespace AeroSim {
+namespace aerosp {
 
 // Unified Coefficient Structure
 struct AeroCoeffs {
@@ -87,7 +87,7 @@ public:
         }
 
         if (m_config.use_cuda_solver && !m_table.loaded) {
-            m_solver = std::make_unique<Solver::AeroSolver>();
+            m_solver = std::make_unique<aero::panel::AeroSolver>();
             if (!m_solver->load_model(m_config.stl_path, m_config.ref_area, m_config.ref_length, m_config.ref_span)) {
                 std::cerr << "Warning: Failed to load STL model " << m_config.stl_path 
                           << ". Falling back to analytical model." << std::endl;
@@ -285,7 +285,7 @@ public:
 
         if (m_config.use_cuda_solver && m_solver) {
             // Use CUDA Solver
-            Solver::AeroCoefficients res = m_solver->compute_coefficients(
+            aerosp::aero::panel::AeroCoefficients res = m_solver->compute_coefficients(
                 static_cast<float>(mach), 
                 static_cast<float>(alpha * 180.0 / 3.14159265359),
                 static_cast<float>(beta * 180.0 / 3.14159265359)
@@ -312,10 +312,10 @@ public:
         double cl_alpha = 2.0;
         
         if (!m_config.cd0_table.empty() && !m_config.mach_grid.empty()) {
-            cd0 = Utils::interpolate_1d(m_config.mach_grid, m_config.cd0_table, mach);
+            cd0 = aerosp::infra::util::interpolate_1d(m_config.mach_grid, m_config.cd0_table, mach);
         }
         if (!m_config.cl_alpha_table.empty() && !m_config.mach_grid.empty()) {
-            cl_alpha = Utils::interpolate_1d(m_config.mach_grid, m_config.cl_alpha_table, mach);
+            cl_alpha = aerosp::infra::util::interpolate_1d(m_config.mach_grid, m_config.cl_alpha_table, mach);
         }
 
         double cl = cl_alpha * std::sin(alpha); // Better than linear for high alpha
@@ -397,8 +397,8 @@ public:
 
 private:
     Config m_config;
-    std::unique_ptr<Solver::AeroSolver> m_solver;
+    std::unique_ptr<aero::panel::AeroSolver> m_solver;
     TableData m_table;
 };
 
-} // namespace AeroSim
+} // namespace aerosp

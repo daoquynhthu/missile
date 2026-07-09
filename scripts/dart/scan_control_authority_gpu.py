@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 
-MC_EXE = Path("build/Release/RMDartMC.exe")
+MC_EXE = Path("build/Release/DartMC.exe")
 OUTPUT_DIR = Path("output/logs")
 SEED = 123456789
 
@@ -29,7 +29,7 @@ def main():
         raise RuntimeError(proc.stderr or proc.stdout)
     print(proc.stdout)
 
-    csv_path = OUTPUT_DIR / "rm_dart_mc_forced_dp_sweep.csv"
+    csv_path = OUTPUT_DIR / "dart_mc_forced_dp_sweep.csv"
     df = pd.read_csv(csv_path)
 
     best_per_pitch = (

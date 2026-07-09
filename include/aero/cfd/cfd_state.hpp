@@ -4,8 +4,9 @@
 
 #include <cmath>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 struct ConservativeState {
     Real rho = 0.0f;
@@ -102,5 +103,6 @@ PrimitiveState make_freestream(Real mach, Real alpha_deg, Real beta_deg, Real ga
 PrimitiveState farfield_ghost_state(const PrimitiveState& left, const PrimitiveState& freestream, Real gamma,
     Real nx, Real ny, Real nz);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

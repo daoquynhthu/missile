@@ -2,10 +2,12 @@
 
 #include "aero/cfd/device_mesh.hpp"
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 using GpuCfdBuffers = DeviceMesh;
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

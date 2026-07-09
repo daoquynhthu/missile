@@ -10,8 +10,9 @@
 #include <string>
 #include <vector>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 struct DeviceFaceData {
     Real* nx = nullptr;
@@ -155,5 +156,6 @@ private:
     int n_halo_cells_ = 0;
 };
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

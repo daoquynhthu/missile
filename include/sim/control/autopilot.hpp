@@ -5,8 +5,9 @@
 #include "infra/util/pid.hpp"
 #include "sim/propulsion/propulsion_model.hpp"
 
-namespace AeroSim {
-namespace GNC {
+namespace aerosp {
+namespace sim {
+namespace control {
 
 /**
  * @brief Autopilot for Attitude Control
@@ -15,19 +16,19 @@ namespace GNC {
 class Autopilot {
 public:
     struct Config {
-        Control::PID::Config pitch_pid;
-        Control::PID::Config yaw_pid;
-        Control::PID::Config roll_pid; // Roll control (if roll thrusters exist)
+        PID::Config pitch_pid;
+        PID::Config yaw_pid;
+        PID::Config roll_pid; // Roll control (if roll thrusters exist)
         
         // RCS specific PIDs (often higher gain or different tuning)
-        Control::PID::Config rcs_pitch_pid;
-        Control::PID::Config rcs_yaw_pid;
-        Control::PID::Config rcs_roll_pid;
+        PID::Config rcs_pitch_pid;
+        PID::Config rcs_yaw_pid;
+        PID::Config rcs_roll_pid;
         
         // Aero specific PIDs (for control surfaces)
-        Control::PID::Config aero_pitch_pid;
-        Control::PID::Config aero_yaw_pid;
-        Control::PID::Config aero_roll_pid;
+        PID::Config aero_pitch_pid;
+        PID::Config aero_yaw_pid;
+        PID::Config aero_roll_pid;
     };
     
     struct AutopilotOutput {
@@ -52,10 +53,10 @@ public:
           m_aero_roll_pid(config.aero_roll_pid) {}
 
     // Allow setting separate Aero PIDs
-    void set_aero_pids(const Control::PID::Config& pitch, const Control::PID::Config& yaw, const Control::PID::Config& roll) {
-        m_aero_pitch_pid = Control::PID(pitch);
-        m_aero_yaw_pid = Control::PID(yaw);
-        m_aero_roll_pid = Control::PID(roll);
+    void set_aero_pids(const PID::Config& pitch, const PID::Config& yaw, const PID::Config& roll) {
+        m_aero_pitch_pid = PID(pitch);
+        m_aero_yaw_pid = PID(yaw);
+        m_aero_roll_pid = PID(roll);
     }
 
     /**
@@ -134,18 +135,19 @@ public:
     }
 
 private:
-    Control::PID m_pitch_pid;
-    Control::PID m_yaw_pid;
-    Control::PID m_roll_pid;
+    PID m_pitch_pid;
+    PID m_yaw_pid;
+    PID m_roll_pid;
     
-    Control::PID m_rcs_pitch_pid;
-    Control::PID m_rcs_yaw_pid;
-    Control::PID m_rcs_roll_pid;
+    PID m_rcs_pitch_pid;
+    PID m_rcs_yaw_pid;
+    PID m_rcs_roll_pid;
     
-    Control::PID m_aero_pitch_pid;
-    Control::PID m_aero_yaw_pid;
-    Control::PID m_aero_roll_pid;
+    PID m_aero_pitch_pid;
+    PID m_aero_yaw_pid;
+    PID m_aero_roll_pid;
 };
 
-} // namespace GNC
-} // namespace AeroSim
+} // namespace control
+} // namespace sim
+} // namespace aerosp

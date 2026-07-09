@@ -7,8 +7,9 @@
 #include <string>
 #include <vector>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 struct PrimitiveGradient {
     Real drho_dx = 0.0f;
@@ -80,5 +81,6 @@ PrimitiveState reconstruct_primitive_positive(
     Real p_floor,
     Real* theta = nullptr);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

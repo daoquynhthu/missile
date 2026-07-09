@@ -6,7 +6,7 @@
 #include <chrono>
 #include <cmath>
 
-namespace AeroSim {
+namespace aerosp {
 
 class ProgressBar {
 public:
@@ -81,4 +81,4 @@ private:
     std::chrono::steady_clock::time_point m_last_update_time;
 };
 
-} // namespace AeroSim
+} // namespace aerosp

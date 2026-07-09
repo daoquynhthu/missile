@@ -6,8 +6,9 @@
 
 #include <vector>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 struct RansSource {
     Real production = 0.0f;
@@ -35,5 +36,6 @@ std::vector<RansSource> compute_rans_sources(
     Real gamma,
     Real Re);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

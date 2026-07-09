@@ -1,8 +1,8 @@
 # CFD GPU Production Plan
 
-> Design: `AERO_ACCURACY_UPGRADE.md`
-> Progress log: `progress.md`
-> Active blockers: `ISSUES.md`
+> Design: `docs/AERO_ACCURACY_UPGRADE.md`
+> Progress log: `docs/progress.md`
+> Active blockers: `docs/ISSUES.md`
 
 ## Architecture Decision
 
@@ -582,7 +582,7 @@ Gate:
 
 ## Phase 8 — High-Order And DNS-Grade Verification
 
-See `AERO_ACCURACY_UPGRADE.md` Stage HO/DNS for design.
+See `docs/AERO_ACCURACY_UPGRADE.md` Stage HO/DNS for design.
 
 Phase 7 deferred items (SA completeness):
 
@@ -612,7 +612,7 @@ Gate:
 
 ## Phase 9 — Transition Physics
 
-See `AERO_ACCURACY_UPGRADE.md` Stage T.
+See `docs/AERO_ACCURACY_UPGRADE.md` Stage T.
 
 Tasks placeholder:
 
@@ -632,7 +632,7 @@ Gate:
 
 ## Phase 10 — Thermochemistry And Wall Catalysis
 
-See `AERO_ACCURACY_UPGRADE.md` Stage H.
+See `docs/AERO_ACCURACY_UPGRADE.md` Stage H.
 
 Tasks placeholder:
 
@@ -660,7 +660,7 @@ Gate:
 - Do not silently clamp bad states and report success.
 - Keep diagnostics read-only.
 - Update `progress.md` after each completed phase.
-- Add blockers to `ISSUES.md` when progress is blocked by a reproducible failure.
+- Add blockers to `docs/ISSUES.md` when progress is blocked by a reproducible failure.
 - NaN/Inf checks are mandatory after every kernel producing cell state.
 - CUDA calls checked via `cuda_check()` macro; kernel launches via `CUDA_KERNEL_CHECK()`.
 - All floating-point comparisons use relative tolerance, never exact equality.

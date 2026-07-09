@@ -5,8 +5,9 @@
 #include <vector>
 #include <cuda_runtime.h>
 
-namespace AeroSim {
-namespace Cfd {
+namespace aerosp {
+namespace aero {
+namespace cfd {
 
 enum class BoundaryKind : int {
     Interior = 0,
@@ -90,8 +91,9 @@ bool validate_mesh(const CfdMesh& mesh, MeshQualityReport* report = nullptr);
 
 Real boundary_area(const CfdMesh& mesh, BoundaryKind boundary);
 
-} // namespace Cfd
-} // namespace AeroSim
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp
 
 
 

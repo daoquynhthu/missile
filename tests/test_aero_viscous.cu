@@ -4,7 +4,7 @@
 #include "aero/engineering/aero_skin_friction.hpp"
 #include "aero/panel/aero_solver.hpp"
 
-using namespace AeroSim::Solver;
+using namespace aerosp::aero::panel;
 
 // ─── Reference: White Table 7-6, adiabatic wall, gamma=1.4 ─────────────
 // M=0  Re=1e7  Cf=0.00288

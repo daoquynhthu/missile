@@ -5,13 +5,13 @@
 #include "aero/aerodynamics_model.hpp"
 #include "config/missile_config.hpp"
 
-using namespace AeroSim;
+using namespace aerosp;
 
 void test_aero_lookup() {
     std::cout << "[Test] Starting Aerodynamics Lookup Test..." << std::endl;
 
     // 1. Load Config
-    auto config = MissileDesign::load_hgv1_config();
+    auto config = config::load_hgv1_config();
     AerodynamicsModel aero(config.aerodynamics);
 
     // 2. Verify Table Loaded

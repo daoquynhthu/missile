@@ -3,7 +3,7 @@
 #include <Eigen/Dense>
 
 int main() {
-    AeroSim::GravityModel model(360);
+    aerosp::GravityModel model(360);
     
     std::cout << "Loading EGM2008 coefficients..." << std::endl;
     if (!model.load_coefficients("e:/missile/data/EGM2008.gfc")) {

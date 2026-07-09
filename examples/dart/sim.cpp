@@ -12,13 +12,13 @@
 #include "sim/atmosphere/atmosphere_model.hpp"
 #include "sim/coord/coordinate_transform.hpp"
 #include "infra/math/constants.hpp"
-#include "rm_dart_config.hpp"
-#include "rm_dart_aero_table.hpp"
+#include "dart_config.hpp"
+#include "dart_aero_table.hpp"
 #include "sim/control/dart_guidance.hpp"
 
-using namespace AeroSim;
-using namespace AeroSim::RM;
-using namespace AeroSim::GNC;
+using namespace aerosp;
+using namespace aerosp::dart;
+using namespace aerosp::sim::control;
 
 /**
  * @brief High-Fidelity Simulation for RM Dart
@@ -27,7 +27,7 @@ using namespace AeroSim::GNC;
  * from a lookup table (LUT) and closed-loop vision guidance.
  */
 int main(int argc, char* argv[]) {
-    std::cout << "--- AeroSim: RoboMaster Dart High-Fidelity Simulator ---" << std::endl;
+    std::cout << "--- aerosp: RoboMaster Dart High-Fidelity Simulator ---" << std::endl;
 
     // 1. Initial Configuration
     DartConfig config;
@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
         return candidates.front();
     };
     std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "e:/missile/data/EGM2008.gfc"});
-    std::string aero_path = resolve_path({"data/dart/rm_dart_aero_table.csv", "../data/dart/rm_dart_aero_table.csv", "rm_dart_aero_table.csv"});
+    std::string aero_path = resolve_path({"data/dart/dart_aero_table.csv", "../data/dart/dart_aero_table.csv", "dart_aero_table.csv"});
     DartAeroTable aero_table(aero_path);
     if (!aero_table.is_loaded()) {
         std::cerr << "Failed to load dart aero table." << std::endl;
@@ -91,7 +91,7 @@ int main(int argc, char* argv[]) {
     double initial_vel = 25.0; 
     double pitch_deg = 6.81;   // Optimized pitch
     double azimuth_deg = 7.3;  // Target Base
-    std::string output_path = "rm_dart_trajectory.csv";
+    std::string output_path = "dart_trajectory.csv";
     bool silent = false;
     bool use_guidance = true; // NEW: Toggle guidance
     
@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
         silent = true; // Assume batch mode if output path provided
     }
 
-    if (!silent) std::cout << "--- AeroSim: RoboMaster Dart High-Fidelity Simulator ---" << std::endl;
+    if (!silent) std::cout << "--- aerosp: RoboMaster Dart High-Fidelity Simulator ---" << std::endl;
 
     // 2. Initialize State
     State6DOF state;
@@ -251,7 +251,7 @@ int main(int argc, char* argv[]) {
         fm.mass_flow_rate = 0.0; // No propulsion for dart
 
         // D. Integration (RK4)
-        auto system = [&](const AeroSim::State6DOF& s, double /*time*/) {
+        auto system = [&](const aerosp::State6DOF& s, double /*time*/) {
             return Dynamics6DOF::compute_derivatives(s, fm, inertia_props, g_ecef, SimulationProfile::LOCAL_TACTICAL);
         };
         state = Dynamics6DOF::integrate_rk4(state, system, t, dt);

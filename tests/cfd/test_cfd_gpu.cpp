@@ -15,8 +15,8 @@
 #include <algorithm>
 #include <cmath>
 
-using namespace AeroSim;
-using namespace AeroSim::Cfd;
+using namespace aerosp;
+using namespace aerosp::aero::cfd;
 #include <cstdio>
 #include <cstring>
 #include <string>
