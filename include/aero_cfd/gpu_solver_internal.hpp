@@ -3,6 +3,8 @@
 #include "aero_cfd/real.hpp"
 #include "aero_cfd/device_mesh.hpp"
 
+#include <string>
+
 namespace AeroSim {
 namespace Cfd {
 
@@ -32,6 +34,9 @@ bool compute_failure_snapshot_gpu(DeviceMesh& mesh, Real gamma,
 
 bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
     Real mu_ref, Real T_ref, Real sutherland_T, int* d_failed);
+
+bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
+    int* d_failed, std::string* error = nullptr);
 
 } // namespace Cfd
 } // namespace AeroSim

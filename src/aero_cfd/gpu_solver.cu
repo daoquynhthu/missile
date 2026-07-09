@@ -101,10 +101,17 @@ static CfdSolveSummary solve_gpu_impl(
             goto fail;
         }
 
-        if (config.viscous) {
+if (config.viscous) {
             if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
                     config.mu_ref, config.T_ref, config.sutherland_T, d_failed)) {
                 if (error) *error = "viscous flux kernel failed";
+                goto fail;
+            }
+        }
+
+        if (config.turbulence) {
+            if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re, d_failed, error)) {
+                if (error && error->empty()) *error = "RANS source kernel failed";
                 goto fail;
             }
         }

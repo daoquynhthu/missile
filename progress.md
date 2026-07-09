@@ -268,3 +268,12 @@
 - Fixed upload_state missing rho_nu_tilde (index 5)
 - Fixed limiter init size nc*5→nc*6 (PrimitiveLimiter now 6 fields)
 - Build + TestCfdGpu 28/29 PASS (BW-1 pre-existing). Phase 7.2–7.5 deferred.
+2026-07-09
+- Phase 7.2 CPU SA oracle + GPU SA source kernel + solver integration:
+  - rans.hpp: RansSource struct, sa_vorticity, sa_omega_tilde, compute_rans_source declarations
+  - rans.cpp: CPU SA oracle — chi/fv1, production (cb1*Omega_tilde*nu_tilde), destruction (cw1*fw*(nu_tilde/d)^2), diffusion ((cb2/sigma)*|grad_nu|^2), wall_distance from h_min
+  - gpu_rans.cu: rans_source_kernel (in-place update to d_q[nvar+5]), compute_rans_source_gpu wrapper
+  - gpu_solver_internal.hpp: compute_rans_source_gpu declaration
+  - gpu_solver.cu: turbulence branch calls compute_rans_source_gpu after viscous flux
+  - Fix: real_pow → expf(logf) for fw computation in device code
+- Build + TestCfdGpu 28/29 PASS (BW-1 pre-existing).

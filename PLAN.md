@@ -535,9 +535,9 @@ Tasks:
 
 - [x] Phase 7.0: NVAR=6 structural — cfd_state, cfd_config, device_mesh, reconstruction, CPU HLLC/residual
 - [x] Phase 7.1: GPU kernel turbulence propagation — d_conservative_to_primitive, d_physical_flux, d_slip_wall_flux, d_hllc_flux, d_reconstruct_primitive, both residual kernels, upload_state
-- [ ] SA production term: `cb1 * Omega_tilde * nu_tilde`
-- [ ] SA destruction term: `cw1 * fw * (nu_tilde/d)^2`
-- [ ] SA diffusion: standard viscous operator
+- [x] Phase 7.2a: CPU SA oracle (rans.hpp + rans.cpp) — production, destruction, diffusion source terms
+- [x] Phase 7.2b: GPU SA kernel (gpu_rans.cu) — rans_source_kernel, compute_rans_source_gpu
+- [x] Phase 7.2c: GPU solver integration — turbulence branch in solve_gpu()
 - [ ] SA wall BC: `nu_tilde = 0`
 - [ ] SA farfield BC: specified `nu_tilde / mu` ratio
 - [ ] Source-term point-implicit treatment for stability
