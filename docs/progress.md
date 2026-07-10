@@ -385,6 +385,11 @@
 - Added `generate_prism_boundary_layer_mesh()` (penta6 extrusion from triangulated surface).
 - Updated `diagnostics.cpp` VTK output: per-type cell size + VTK type (10/12/13/14).
 - All 15 existing tests pass unchanged (backward compat with TET4 default).
+- 4-parallel audit of Phase 8.1 found 4 issues, all fixed:
+  - PH8-A1: centroid_pyramid formula corrected (5-avg → (3*base+4*apex)/16)
+  - PH8-A2: generate_prism_boundary_layer_mesh node indices fixed (dead resize removed, bottom/top indexing corrected)
+  - PH8-B1: NaN/Inf inline check added after volume computation in all 4 element type branches
+  - PH8-C1: redundant section-header comments removed from mesh_metrics.cpp and element_types.hpp
 
 2026-07-11 — Moved all .md files except AGENTS.md to docs/ directory.
 - Updated all cross-references in docs (AGENTS.md, AERO_ACCURACY_UPGRADE.md, REPO_SPEC.md, PLAN.md, ISSUES.md, ARCH_STABILIZE.md, progress.md) from root paths to docs/ paths.

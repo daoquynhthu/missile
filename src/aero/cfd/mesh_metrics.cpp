@@ -38,8 +38,6 @@ Vec3 cross(Vec3 a, Vec3 b) {
 
 Real norm(Vec3 a) { return std::sqrt(dot(a, a)); }
 
-// --- Volume functions ---
-
 Real volume_tet(Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
     return std::fabs(dot(b - a, cross(c - a, d - a))) / 6.0f;
 }
@@ -74,8 +72,6 @@ Real volume_pyramid(const Vec3 v[5]) {
     return vol;
 }
 
-// --- Area functions ---
-
 Real area_tri(Vec3 a, Vec3 b, Vec3 c) {
     return 0.5f * norm(cross(b - a, c - a));
 }
@@ -84,8 +80,6 @@ Real area_quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
     // Split into 2 triangles: (a,b,c) + (a,c,d)
     return area_tri(a, b, c) + area_tri(a, c, d);
 }
-
-// --- Centroid functions ---
 
 Vec3 centroid_tet(Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
     return (a + b + c + d) * (1.0f / 4.0f);
@@ -102,8 +96,8 @@ Vec3 centroid_prism(const Vec3 v[6]) {
 }
 
 Vec3 centroid_pyramid(const Vec3 v[5]) {
-    Vec3 sum = v[0] + v[1] + v[2] + v[3] + v[4];
-    return sum * (1.0f / 5.0f);
+    Vec3 base_sum = v[0] + v[1] + v[2] + v[3];
+    return (base_sum * 3.0f + v[4] * 4.0f) * (1.0f / 16.0f);
 }
 
 struct FaceKey {
@@ -315,6 +309,7 @@ void compute_cell_metrics(CfdMesh& mesh, CfdCell& cell) {
     switch (cell.type) {
         case ElementType::TET4: {
             cell.volume = volume_tet(v[0], v[1], v[2], v[3]);
+            if (!std::isfinite(cell.volume) || cell.volume <= 0.0f) cell.volume = 1e-30f;
             Vec3 c = centroid_tet(v[0], v[1], v[2], v[3]);
             cell.cx = c.x; cell.cy = c.y; cell.cz = c.z;
             // h_min = 3*V / max_face_area
@@ -330,6 +325,7 @@ void compute_cell_metrics(CfdMesh& mesh, CfdCell& cell) {
         }
         case ElementType::HEX8: {
             cell.volume = volume_hex(v);
+            if (!std::isfinite(cell.volume) || cell.volume <= 0.0f) cell.volume = 1e-30f;
             Vec3 c = centroid_hex(v);
             cell.cx = c.x; cell.cy = c.y; cell.cz = c.z;
             // h_min = V^(1/3) for hex
@@ -338,6 +334,7 @@ void compute_cell_metrics(CfdMesh& mesh, CfdCell& cell) {
         }
         case ElementType::PENTA6: {
             cell.volume = volume_prism(v);
+            if (!std::isfinite(cell.volume) || cell.volume <= 0.0f) cell.volume = 1e-30f;
             Vec3 c = centroid_prism(v);
             cell.cx = c.x; cell.cy = c.y; cell.cz = c.z;
             cell.h_min = std::pow(cell.volume, 1.0f / 3.0f);
@@ -345,6 +342,7 @@ void compute_cell_metrics(CfdMesh& mesh, CfdCell& cell) {
         }
         case ElementType::PYRAMID5: {
             cell.volume = volume_pyramid(v);
+            if (!std::isfinite(cell.volume) || cell.volume <= 0.0f) cell.volume = 1e-30f;
             Vec3 c = centroid_pyramid(v);
             cell.cx = c.x; cell.cy = c.y; cell.cz = c.z;
             cell.h_min = std::pow(cell.volume, 1.0f / 3.0f);
@@ -519,26 +517,20 @@ CfdMesh generate_prism_boundary_layer_mesh(
         return mesh;
     }
 
-    // Generate 2D triangulated surface at z=0, then extrude each triangle into a prism
     // Surface: nx × ny grid of quads, each quad split into 2 triangles
-    int n_nodes_surface = nx * ny;
-    mesh.nodes.resize(n_nodes_surface + nx * ny * nz * 0); // placeholder
-    // Actually: nodes are (nx * ny) surface nodes + (nx * ny) * nz layer nodes
-    // For simplicity: generate all node positions first
+    // then each triangle extruded into a prism
+    int layer_stride = nx * ny;
 
     // Surface nodes (z=0)
-    std::vector<int> surf_idx(nx * ny);
     for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
             Real x = length * static_cast<Real>(i) / static_cast<Real>(nx - 1);
             Real y = -0.5f * width + width * static_cast<Real>(j) / static_cast<Real>(ny - 1);
             mesh.nodes.push_back({x, y, 0.0f});
-            surf_idx[j * nx + i] = static_cast<int>(mesh.nodes.size()) - 1;
         }
     }
 
-    // Extrude: for each layer k, create nodes at height z[k]
-    // z[0] = 0 is the surface, z[1..nz-1] grow geometrically
+    // Extrude: for each layer k=1..nz-1, create nodes at height z[k]
     for (int k = 1; k < nz; ++k) {
         Real z;
         if (growth_ratio > 1.001f) {
@@ -555,10 +547,6 @@ CfdMesh generate_prism_boundary_layer_mesh(
         }
     }
 
-    auto layer_idx = [nx, ny](int k, int i, int j) {
-        return nx * ny * k + j * nx + i;
-    };
-
     // For each quad cell on the surface, split into 2 triangles, extrude each into a prism
     for (int j = 0; j < ny - 1; ++j) {
         for (int i = 0; i < nx - 1; ++i) {
@@ -567,27 +555,20 @@ CfdMesh generate_prism_boundary_layer_mesh(
             int t2 = (j + 1) * nx + i;
             int t3 = (j + 1) * nx + (i + 1);
 
-            // Two triangles per quad: (t0, t1, t2) and (t1, t3, t2)
             for (int tri = 0; tri < 2; ++tri) {
                 int a, b, c;
                 if (tri == 0) { a = t0; b = t1; c = t2; }
                 else { a = t1; b = t3; c = t2; }
 
-                // Create prisms for each layer
                 for (int k = 0; k < nz - 1; ++k) {
-                    int base = layer_idx(k, 0, 0);
-                    int top = layer_idx(k + 1, 0, 0);
-
                     CfdCell cell;
                     cell.type = ElementType::PENTA6;
-                    cell.node[0] = surf_idx[a];
-                    cell.node[1] = surf_idx[b];
-                    cell.node[2] = surf_idx[c];
-                    cell.node[3] = base + a;
-                    cell.node[4] = base + b;
-                    cell.node[5] = base + c;
-                    // Adjust for prism orientation: bottom = a,b,c, top = a',b',c'
-                    // Need to ensure proper winding for correct volume sign
+                    cell.node[0] = layer_stride * k + a;
+                    cell.node[1] = layer_stride * k + b;
+                    cell.node[2] = layer_stride * k + c;
+                    cell.node[3] = layer_stride * (k + 1) + a;
+                    cell.node[4] = layer_stride * (k + 1) + b;
+                    cell.node[5] = layer_stride * (k + 1) + c;
                     mesh.cells.push_back(cell);
                 }
             }

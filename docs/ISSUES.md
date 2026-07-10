@@ -1016,3 +1016,46 @@ BW-1 已改为 WARNING：当 `ratio < 0.5` 时打印 `[WARN]` 消息但测试仍
 | HIGH | 0 | 全部 9 项 FIXED |
 | MEDIUM | 0 | 全部 8 项 FIXED（含 PH7-E-1 SA 扩散） |
 | LOW | 0 | 全部 6 项 FIXED |
+
+## Phase 8.1 Audit (2026-07-10)
+
+4 路并行子 Agent 审计结果汇总（完整性/正确性/兼容性/代码风格）。
+
+### Category A: Correctness Bugs
+
+**PH8-A1: `centroid_pyramid` 使用 5 顶点算术平均，非正确质心公式** [FIXED 2026-07-10]
+`src/aero/cfd/mesh_metrics.cpp:104-107`
+
+金字塔质心公式应为 `(3*(v0+v1+v2+v3) + 4*v4) / 16`（基底加权 3/4 + 顶点加权 1/4），而非 5 顶点算术平均。之前 z 方向误差 20%（z=0.2 vs 正确值 z=0.25）。当前无金字塔单元由已有网格生成器产出，处于休眠状态。
+
+**PH8-A2: `generate_prism_boundary_layer_mesh` 底部节点索引错乱** [FIXED 2026-07-10]
+`src/aero/cfd/mesh_metrics.cpp:525`
+
+```cpp
+mesh.nodes.resize(n_nodes_surface + nx * ny * nz * 0);  // `* 0` 使 resize 为空操作
+```
+
+底部棱柱节点索引指向零填充节点而非正确表面节点。已修复：移除死代码，棱柱底部使用 `layer_stride * k + local_idx`，顶部使用 `layer_stride * (k+1) + local_idx`。
+
+### Category B: Numerical Safety
+
+**PH8-B1: `compute_cell_metrics` 中 `cell.volume` 用于 `h_min` 前无 NaN/Inf 内联检查** [FIXED 2026-07-10]
+`src/aero/cfd/mesh_metrics.cpp:328,336,343,350`
+
+已修复：在 volume 计算后立即添加 `if (!std::isfinite(cell.volume) || cell.volume <= 0.0f) cell.volume = 1e-30f;` 守卫。
+
+### Category C: Code Convention
+
+**PH8-C1: 多余章节标题和冗余注释** [FIXED 2026-07-10]
+- `mesh_metrics.cpp:42,77,88` 章节标题注释已移除
+- `element_types.hpp:19-23` 描述块和行末 `// TET4` / `// HEX8` 注释已移除
+
+### Summary
+
+| Severity | Count | IDs |
+|----------|-------|------|
+| HIGH     | 1 | PH8-A2 — FIXED |
+| MEDIUM   | 2 | PH8-A1 — FIXED, PH8-B1 — FIXED |
+| LOW      | 1 | PH8-C1 — FIXED |
+
+Total: 4 new findings, 4 fixed, 0 open.

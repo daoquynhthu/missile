@@ -16,16 +16,11 @@ enum class ElementType : int8_t {
 constexpr int ELEMENT_NODES[4] = {4, 8, 6, 5};
 constexpr int ELEMENT_FACES[4] = {4, 6, 5, 5};
 
-// Number of nodes on each face, per element type
-// TET4: 4 faces, each 3-node tri
-// HEX8: 6 faces, each 4-node quad
-// PENTA6: 5 faces (2 tri + 3 quad)
-// PYRAMID5: 5 faces (1 quad + 4 tri)
 constexpr int FACE_NODES_PER_ELEMENT[4][6] = {
-    {3, 3, 3, 3, 0, 0},  // TET4
-    {4, 4, 4, 4, 4, 4},  // HEX8
-    {3, 3, 4, 4, 4, 0},  // PENTA6 (tri,tri,quad,quad,quad)
-    {4, 3, 3, 3, 3, 0}   // PYRAMID5 (quad,tri,tri,tri,tri)
+    {3, 3, 3, 3, 0, 0},
+    {4, 4, 4, 4, 4, 4},
+    {3, 3, 4, 4, 4, 0},
+    {4, 3, 3, 3, 3, 0}
 };
 
 // Map: (element_type, local_face) -> nodes of that face
