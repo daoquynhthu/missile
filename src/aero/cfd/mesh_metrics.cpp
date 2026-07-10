@@ -38,29 +38,103 @@ Vec3 cross(Vec3 a, Vec3 b) {
 
 Real norm(Vec3 a) { return std::sqrt(dot(a, a)); }
 
-struct FaceKey {
-    int v[3];
+// --- Volume functions ---
 
-    FaceKey(int a, int b, int c) {
-        v[0] = a;
-        v[1] = b;
-        v[2] = c;
-        if (v[0] > v[1]) std::swap(v[0], v[1]);
-        if (v[1] > v[2]) std::swap(v[1], v[2]);
-        if (v[0] > v[1]) std::swap(v[0], v[1]);
+Real volume_tet(Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
+    return std::fabs(dot(b - a, cross(c - a, d - a))) / 6.0f;
+}
+
+Real volume_hex(const Vec3 v[8]) {
+    // Decompose hex into 5 or 6 tets. 6-tet decomposition (stable):
+    // split along diagonal (0,2,5,7)
+    Real vol = 0.0f;
+    vol += volume_tet(v[0], v[1], v[2], v[6]);
+    vol += volume_tet(v[0], v[2], v[3], v[6]);
+    vol += volume_tet(v[0], v[3], v[7], v[6]);
+    vol += volume_tet(v[0], v[7], v[4], v[6]);
+    vol += volume_tet(v[0], v[4], v[5], v[6]);
+    vol += volume_tet(v[0], v[5], v[1], v[6]);
+    return vol;
+}
+
+Real volume_prism(const Vec3 v[6]) {
+    // Decompose prism into 3 tets
+    Real vol = 0.0f;
+    vol += volume_tet(v[0], v[1], v[2], v[4]);
+    vol += volume_tet(v[0], v[2], v[5], v[4]);
+    vol += volume_tet(v[0], v[3], v[4], v[5]);
+    return vol;
+}
+
+Real volume_pyramid(const Vec3 v[5]) {
+    // Split into 2 tets along diagonal v[0]-v[2]
+    Real vol = 0.0f;
+    vol += volume_tet(v[0], v[1], v[2], v[4]);
+    vol += volume_tet(v[0], v[3], v[4], v[2]);
+    return vol;
+}
+
+// --- Area functions ---
+
+Real area_tri(Vec3 a, Vec3 b, Vec3 c) {
+    return 0.5f * norm(cross(b - a, c - a));
+}
+
+Real area_quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
+    // Split into 2 triangles: (a,b,c) + (a,c,d)
+    return area_tri(a, b, c) + area_tri(a, c, d);
+}
+
+// --- Centroid functions ---
+
+Vec3 centroid_tet(Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
+    return (a + b + c + d) * (1.0f / 4.0f);
+}
+
+Vec3 centroid_hex(const Vec3 v[8]) {
+    Vec3 sum = v[0] + v[1] + v[2] + v[3] + v[4] + v[5] + v[6] + v[7];
+    return sum * (1.0f / 8.0f);
+}
+
+Vec3 centroid_prism(const Vec3 v[6]) {
+    Vec3 sum = v[0] + v[1] + v[2] + v[3] + v[4] + v[5];
+    return sum * (1.0f / 6.0f);
+}
+
+Vec3 centroid_pyramid(const Vec3 v[5]) {
+    Vec3 sum = v[0] + v[1] + v[2] + v[3] + v[4];
+    return sum * (1.0f / 5.0f);
+}
+
+struct FaceKey {
+    int n;
+    int v[4];
+
+    FaceKey(int count, int a, int b, int c, int d = -1) : n(count) {
+        v[0] = a; v[1] = b; v[2] = c; v[3] = d;
+        if (n == 3) {
+            if (v[0] > v[1]) std::swap(v[0], v[1]);
+            if (v[1] > v[2]) std::swap(v[1], v[2]);
+            if (v[0] > v[1]) std::swap(v[0], v[1]);
+            v[3] = -1;
+        } else {
+            std::sort(v, v + 4);
+        }
     }
 
-    bool operator==(const FaceKey& other) const {
-        return v[0] == other.v[0] && v[1] == other.v[1] && v[2] == other.v[2];
+    bool operator==(const FaceKey& o) const {
+        if (n != o.n) return false;
+        return v[0] == o.v[0] && v[1] == o.v[1] && v[2] == o.v[2] && v[3] == o.v[3];
     }
 };
 
 struct FaceKeyHash {
     std::size_t operator()(const FaceKey& key) const {
-        std::uint64_t a = static_cast<std::uint64_t>(key.v[0]);
-        std::uint64_t b = static_cast<std::uint64_t>(key.v[1]);
-        std::uint64_t c = static_cast<std::uint64_t>(key.v[2]);
-        return static_cast<std::size_t>(a ^ (b << 21) ^ (c << 42));
+        std::uint64_t h = static_cast<std::uint64_t>(key.n);
+        for (int i = 0; i < 4; ++i) {
+            h ^= static_cast<std::uint64_t>(key.v[i]) << (i * 11);
+        }
+        return static_cast<std::size_t>(h);
     }
 };
 
@@ -69,12 +143,27 @@ struct PendingFace {
     int local_face;
 };
 
-std::array<int, 3> cell_face_nodes(const CfdCell& cell, int local_face) {
-    switch (local_face) {
-        case 0: return {cell.node[1], cell.node[2], cell.node[3]};
-        case 1: return {cell.node[0], cell.node[3], cell.node[2]};
-        case 2: return {cell.node[0], cell.node[1], cell.node[3]};
-        default: return {cell.node[0], cell.node[2], cell.node[1]};
+// Dispatch cell_face_nodes per element type
+// Returns face node indices into cell.node[], fills n_out with node count
+void cell_face_nodes(const CfdCell& cell, int local_face, int out[4], int& n_out) {
+    const int* fn = get_face_nodes(cell.type, local_face);
+    n_out = FACE_NODES_PER_ELEMENT[static_cast<int>(cell.type)][local_face];
+    for (int i = 0; i < n_out; ++i) {
+        out[i] = cell.node[fn[i]];
+    }
+    for (int i = n_out; i < 4; ++i) {
+        out[i] = -1;
+    }
+}
+
+// Get face node positions for a given element type and local face
+void cell_face_positions(const CfdMesh& mesh, const CfdCell& cell, int local_face, Vec3 pos[4], int& n_out) {
+    int nodes[4];
+    int n;
+    cell_face_nodes(cell, local_face, nodes, n);
+    n_out = n;
+    for (int i = 0; i < n; ++i) {
+        pos[i] = to_vec(mesh.nodes[nodes[i]]);
     }
 }
 
@@ -88,6 +177,7 @@ int hex_index(int i, int j, int k, int n_hex) {
 
 void add_tet(CfdMesh& mesh, int a, int b, int c, int d) {
     CfdCell cell;
+    cell.type = ElementType::TET4;
     cell.node[0] = a;
     cell.node[1] = b;
     cell.node[2] = c;
@@ -102,6 +192,20 @@ void add_hex_tets(CfdMesh& mesh, int p0, int p1, int p2, int p3, int p4, int p5,
     add_tet(mesh, p0, p7, p4, p6);
     add_tet(mesh, p0, p4, p5, p6);
     add_tet(mesh, p0, p5, p1, p6);
+}
+
+void add_hex(CfdMesh& mesh, int p0, int p1, int p2, int p3, int p4, int p5, int p6, int p7) {
+    CfdCell cell;
+    cell.type = ElementType::HEX8;
+    cell.node[0] = p0;
+    cell.node[1] = p1;
+    cell.node[2] = p2;
+    cell.node[3] = p3;
+    cell.node[4] = p4;
+    cell.node[5] = p5;
+    cell.node[6] = p6;
+    cell.node[7] = p7;
+    mesh.cells.push_back(cell);
 }
 
 BoundaryKind classify_cube_boundary(Vec3 fc, Vec3 outward, Real outer_scale, Real delta, const std::vector<bool>& is_body, int n_hex) {
@@ -134,7 +238,7 @@ BoundaryKind classify_cube_boundary(Vec3 fc, Vec3 outward, Real outer_scale, Rea
     return BoundaryKind::Farfield;
 }
 
-void rebuild_faces(CfdMesh& mesh, bool classify_cube, Real outer_scale, Real delta, const std::vector<bool>& is_body, int n_hex) {
+void rebuild_faces(CfdMesh& mesh, bool classify_cube = false, Real outer_scale = 0.0f, Real delta = 0.0f, const std::vector<bool>& is_body = {}, int n_hex = 0) {
     mesh.faces.clear();
     for (auto& cell : mesh.cells) {
         cell.first_face = 0;
@@ -143,9 +247,13 @@ void rebuild_faces(CfdMesh& mesh, bool classify_cube, Real outer_scale, Real del
 
     std::unordered_map<FaceKey, PendingFace, FaceKeyHash> face_map;
     for (int ci = 0; ci < static_cast<int>(mesh.cells.size()); ++ci) {
-        for (int lf = 0; lf < 4; ++lf) {
-            auto nodes = cell_face_nodes(mesh.cells[ci], lf);
-            FaceKey key(nodes[0], nodes[1], nodes[2]);
+        const auto& cell = mesh.cells[ci];
+        int nfaces = ELEMENT_FACES[static_cast<int>(cell.type)];
+        for (int lf = 0; lf < nfaces; ++lf) {
+            int nodes[4];
+            int nn;
+            cell_face_nodes(cell, lf, nodes, nn);
+            FaceKey key(nn, nodes[0], nodes[1], nodes[2], nn == 4 ? nodes[3] : -1);
             auto it = face_map.find(key);
             if (it == face_map.end()) {
                 face_map[key] = {ci, lf};
@@ -154,10 +262,11 @@ void rebuild_faces(CfdMesh& mesh, bool classify_cube, Real outer_scale, Real del
                 face.left_cell = it->second.cell;
                 face.right_cell = ci;
                 face.boundary = BoundaryKind::Interior;
-                auto left_nodes = cell_face_nodes(mesh.cells[face.left_cell], it->second.local_face);
-                face.node[0] = left_nodes[0];
-                face.node[1] = left_nodes[1];
-                face.node[2] = left_nodes[2];
+                face.node_count = nn;
+                int left_nodes[4];
+                int left_nn;
+                cell_face_nodes(mesh.cells[face.left_cell], it->second.local_face, left_nodes, left_nn);
+                for (int i = 0; i < left_nn; ++i) face.node[i] = left_nodes[i];
                 mesh.faces.push_back(face);
                 face_map.erase(it);
             }
@@ -168,10 +277,11 @@ void rebuild_faces(CfdMesh& mesh, bool classify_cube, Real outer_scale, Real del
         CfdFace face;
         face.left_cell = item.second.cell;
         face.right_cell = -1;
-        auto nodes = cell_face_nodes(mesh.cells[face.left_cell], item.second.local_face);
-        face.node[0] = nodes[0];
-        face.node[1] = nodes[1];
-        face.node[2] = nodes[2];
+        int fn[4];
+        int fn_n;
+        cell_face_nodes(mesh.cells[face.left_cell], item.second.local_face, fn, fn_n);
+        face.node_count = fn_n;
+        for (int i = 0; i < fn_n; ++i) face.node[i] = fn[i];
         face.boundary = BoundaryKind::Farfield;
         mesh.faces.push_back(face);
     }
@@ -192,6 +302,55 @@ void rebuild_faces(CfdMesh& mesh, bool classify_cube, Real outer_scale, Real del
     }
 
     compute_mesh_metrics(mesh);
+}
+
+// Compute volume, centroid, h_min for any element type
+void compute_cell_metrics(CfdMesh& mesh, CfdCell& cell) {
+    Vec3 v[8];
+    int nnodes = ELEMENT_NODES[static_cast<int>(cell.type)];
+    for (int i = 0; i < nnodes; ++i) {
+        v[i] = to_vec(mesh.nodes[cell.node[i]]);
+    }
+
+    switch (cell.type) {
+        case ElementType::TET4: {
+            cell.volume = volume_tet(v[0], v[1], v[2], v[3]);
+            Vec3 c = centroid_tet(v[0], v[1], v[2], v[3]);
+            cell.cx = c.x; cell.cy = c.y; cell.cz = c.z;
+            // h_min = 3*V / max_face_area
+            Real max_area = 0.0f;
+            for (int lf = 0; lf < 4; ++lf) {
+                Vec3 fp[4]; int fn;
+                cell_face_positions(mesh, cell, lf, fp, fn);
+                Real area = area_tri(fp[0], fp[1], fp[2]);
+                max_area = std::max(max_area, area);
+            }
+            cell.h_min = 3.0f * cell.volume / std::max(max_area, 1e-30f);
+            break;
+        }
+        case ElementType::HEX8: {
+            cell.volume = volume_hex(v);
+            Vec3 c = centroid_hex(v);
+            cell.cx = c.x; cell.cy = c.y; cell.cz = c.z;
+            // h_min = V^(1/3) for hex
+            cell.h_min = std::pow(cell.volume, 1.0f / 3.0f);
+            break;
+        }
+        case ElementType::PENTA6: {
+            cell.volume = volume_prism(v);
+            Vec3 c = centroid_prism(v);
+            cell.cx = c.x; cell.cy = c.y; cell.cz = c.z;
+            cell.h_min = std::pow(cell.volume, 1.0f / 3.0f);
+            break;
+        }
+        case ElementType::PYRAMID5: {
+            cell.volume = volume_pyramid(v);
+            Vec3 c = centroid_pyramid(v);
+            cell.cx = c.x; cell.cy = c.y; cell.cz = c.z;
+            cell.h_min = std::pow(cell.volume, 1.0f / 3.0f);
+            break;
+        }
+    }
 }
 
 } // namespace
@@ -309,6 +468,136 @@ CfdMesh generate_flat_plate_mesh(Real length, Real width, Real height, Real firs
     return mesh;
 }
 
+CfdMesh generate_structured_hex_mesh(int n_per_dim) {
+    CfdMesh mesh;
+    int n = n_per_dim;
+    if (n < 2) return mesh;
+
+    Real delta = 1.0f / static_cast<Real>(n - 1);
+    mesh.nodes.reserve(static_cast<std::size_t>(n) * n * n);
+    for (int k = 0; k < n; ++k) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                mesh.nodes.push_back({
+                    -0.5f + i * delta,
+                    -0.5f + j * delta,
+                    -0.5f + k * delta
+                });
+            }
+        }
+    }
+
+    auto idx = [n](int i, int j, int k) { return i + j * n + k * n * n; };
+    int n_hex = n - 1;
+    for (int k = 0; k < n_hex; ++k) {
+        for (int j = 0; j < n_hex; ++j) {
+            for (int i = 0; i < n_hex; ++i) {
+                int p0 = idx(i,   j,   k);
+                int p1 = idx(i+1, j,   k);
+                int p2 = idx(i+1, j+1, k);
+                int p3 = idx(i,   j+1, k);
+                int p4 = idx(i,   j,   k+1);
+                int p5 = idx(i+1, j,   k+1);
+                int p6 = idx(i+1, j+1, k+1);
+                int p7 = idx(i,   j+1, k+1);
+                add_hex(mesh, p0, p1, p2, p3, p4, p5, p6, p7);
+            }
+        }
+    }
+
+    rebuild_faces(mesh);
+    return mesh;
+}
+
+CfdMesh generate_prism_boundary_layer_mesh(
+    int nx, int ny, int nz,
+    Real length, Real width,
+    Real first_height, Real growth_ratio)
+{
+    CfdMesh mesh;
+    if (nx < 2 || ny < 2 || nz < 2 || length <= 0.0f || width <= 0.0f || first_height <= 0.0f) {
+        return mesh;
+    }
+
+    // Generate 2D triangulated surface at z=0, then extrude each triangle into a prism
+    // Surface: nx × ny grid of quads, each quad split into 2 triangles
+    int n_nodes_surface = nx * ny;
+    mesh.nodes.resize(n_nodes_surface + nx * ny * nz * 0); // placeholder
+    // Actually: nodes are (nx * ny) surface nodes + (nx * ny) * nz layer nodes
+    // For simplicity: generate all node positions first
+
+    // Surface nodes (z=0)
+    std::vector<int> surf_idx(nx * ny);
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            Real x = length * static_cast<Real>(i) / static_cast<Real>(nx - 1);
+            Real y = -0.5f * width + width * static_cast<Real>(j) / static_cast<Real>(ny - 1);
+            mesh.nodes.push_back({x, y, 0.0f});
+            surf_idx[j * nx + i] = static_cast<int>(mesh.nodes.size()) - 1;
+        }
+    }
+
+    // Extrude: for each layer k, create nodes at height z[k]
+    // z[0] = 0 is the surface, z[1..nz-1] grow geometrically
+    for (int k = 1; k < nz; ++k) {
+        Real z;
+        if (growth_ratio > 1.001f) {
+            z = first_height * (std::pow(growth_ratio, static_cast<Real>(k)) - 1.0f) / (growth_ratio - 1.0f);
+        } else {
+            z = first_height * static_cast<Real>(k);
+        }
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                Real x = length * static_cast<Real>(i) / static_cast<Real>(nx - 1);
+                Real y = -0.5f * width + width * static_cast<Real>(j) / static_cast<Real>(ny - 1);
+                mesh.nodes.push_back({x, y, z});
+            }
+        }
+    }
+
+    auto layer_idx = [nx, ny](int k, int i, int j) {
+        return nx * ny * k + j * nx + i;
+    };
+
+    // For each quad cell on the surface, split into 2 triangles, extrude each into a prism
+    for (int j = 0; j < ny - 1; ++j) {
+        for (int i = 0; i < nx - 1; ++i) {
+            int t0 = j * nx + i;
+            int t1 = j * nx + (i + 1);
+            int t2 = (j + 1) * nx + i;
+            int t3 = (j + 1) * nx + (i + 1);
+
+            // Two triangles per quad: (t0, t1, t2) and (t1, t3, t2)
+            for (int tri = 0; tri < 2; ++tri) {
+                int a, b, c;
+                if (tri == 0) { a = t0; b = t1; c = t2; }
+                else { a = t1; b = t3; c = t2; }
+
+                // Create prisms for each layer
+                for (int k = 0; k < nz - 1; ++k) {
+                    int base = layer_idx(k, 0, 0);
+                    int top = layer_idx(k + 1, 0, 0);
+
+                    CfdCell cell;
+                    cell.type = ElementType::PENTA6;
+                    cell.node[0] = surf_idx[a];
+                    cell.node[1] = surf_idx[b];
+                    cell.node[2] = surf_idx[c];
+                    cell.node[3] = base + a;
+                    cell.node[4] = base + b;
+                    cell.node[5] = base + c;
+                    // Adjust for prism orientation: bottom = a,b,c, top = a',b',c'
+                    // Need to ensure proper winding for correct volume sign
+                    mesh.cells.push_back(cell);
+                }
+            }
+        }
+    }
+
+    rebuild_faces(mesh);
+    return mesh;
+}
+
 MeshQualityReport compute_mesh_metrics(CfdMesh& mesh) {
     MeshQualityReport report;
     report.nodes = static_cast<int>(mesh.nodes.size());
@@ -321,31 +610,7 @@ MeshQualityReport compute_mesh_metrics(CfdMesh& mesh) {
     report.min_wall_distance = std::numeric_limits<Real>::max();
 
     for (auto& cell : mesh.cells) {
-        Vec3 v[4] = {
-            to_vec(mesh.nodes[cell.node[0]]),
-            to_vec(mesh.nodes[cell.node[1]]),
-            to_vec(mesh.nodes[cell.node[2]]),
-            to_vec(mesh.nodes[cell.node[3]])
-        };
-        Vec3 e1 = v[1] - v[0];
-        Vec3 e2 = v[2] - v[0];
-        Vec3 e3 = v[3] - v[0];
-        Real det = dot(e1, cross(e2, e3));
-        cell.volume = std::fabs(det) / 6.0f;
-        cell.cx = 0.25f * (v[0].x + v[1].x + v[2].x + v[3].x);
-        cell.cy = 0.25f * (v[0].y + v[1].y + v[2].y + v[3].y);
-        cell.cz = 0.25f * (v[0].z + v[1].z + v[2].z + v[3].z);
-
-        Real max_area = 0.0f;
-        for (int lf = 0; lf < 4; ++lf) {
-            auto fn = cell_face_nodes(cell, lf);
-            Vec3 a = to_vec(mesh.nodes[fn[0]]);
-            Vec3 b = to_vec(mesh.nodes[fn[1]]);
-            Vec3 c = to_vec(mesh.nodes[fn[2]]);
-            Real area = 0.5f * norm(cross(b - a, c - a));
-            max_area = std::max(max_area, area);
-        }
-        cell.h_min = 3.0f * cell.volume / std::max(max_area, 1e-30f);
+        compute_cell_metrics(mesh, cell);
         cell.wall_distance = 0.0f;
 
         report.min_volume = std::min(report.min_volume, cell.volume);
@@ -360,17 +625,36 @@ MeshQualityReport compute_mesh_metrics(CfdMesh& mesh) {
         Vec3 a = to_vec(mesh.nodes[face.node[0]]);
         Vec3 b = to_vec(mesh.nodes[face.node[1]]);
         Vec3 c = to_vec(mesh.nodes[face.node[2]]);
-        Vec3 nf = cross(b - a, c - a);
-        Real nlen = norm(nf);
-        face.area = 0.5f * nlen;
-        face.cx = (a.x + b.x + c.x) / 3.0f;
-        face.cy = (a.y + b.y + c.y) / 3.0f;
-        face.cz = (a.z + b.z + c.z) / 3.0f;
-        if (nlen > 0.0f) {
-            face.nx = nf.x / nlen;
-            face.ny = nf.y / nlen;
-            face.nz = nf.z / nlen;
+        Real area_tri_val = 0.5f * norm(cross(b - a, c - a));
+        face.area = area_tri_val;
+        if (face.node_count == 4) {
+            Vec3 d = to_vec(mesh.nodes[face.node[3]]);
+            face.area = area_quad(a, b, c, d);
         }
+
+        if (face.node_count == 3) {
+            face.cx = (a.x + b.x + c.x) / 3.0f;
+            face.cy = (a.y + b.y + c.y) / 3.0f;
+            face.cz = (a.z + b.z + c.z) / 3.0f;
+        } else {
+            Vec3 d = to_vec(mesh.nodes[face.node[3]]);
+            face.cx = (a.x + b.x + c.x + d.x) / 4.0f;
+            face.cy = (a.y + b.y + c.y + d.y) / 4.0f;
+            face.cz = (a.z + b.z + c.z + d.z) / 4.0f;
+        }
+
+        if (face.area > 0.0f) {
+            // Face normal via cross product of first two edges
+            Vec3 nf = cross(b - a, c - a);
+            Real nlen = norm(nf);
+            if (nlen > 0.0f) {
+                face.nx = nf.x / nlen;
+                face.ny = nf.y / nlen;
+                face.nz = nf.z / nlen;
+            }
+        }
+
+        // Orient normal outward from left cell
         Vec3 fc{face.cx, face.cy, face.cz};
         const CfdCell& left = mesh.cells[face.left_cell];
         Vec3 lc{left.cx, left.cy, left.cz};
@@ -379,6 +663,7 @@ MeshQualityReport compute_mesh_metrics(CfdMesh& mesh) {
             face.ny = -face.ny;
             face.nz = -face.nz;
         }
+
         if (face.left_cell >= 0) cell_faces[face.left_cell].push_back(fi);
         if (face.right_cell >= 0) cell_faces[face.right_cell].push_back(fi);
 

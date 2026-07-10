@@ -601,15 +601,15 @@ Files:
 
 Tasks:
 
-- [ ] Define `ElementType` enum and static property tables (node count, face count, face-node-count per face)
-- [ ] Update `CfdCell`: add `ElementType type` constructor defaults to `TET4`; `node[i]` array to 8; accessor methods
-- [ ] Update `CfdFace`: add `int node_count`; constructor from 3-node (tri) or 4-node (quad)
-- [ ] Update `FaceKey` in `rebuild_faces`: key must include node count to distinguish tri (sorted 3 nodes) from quad (sorted 4 nodes) sharing same sorted nodes
-- [ ] Implement `volume_tet(a,b,c,d)`, `volume_hex(8 nodes)`, `volume_prism(6 nodes)`, `volume_pyramid(5 nodes)` — pure functions with unit tests
-- [ ] Implement `area_tri(a,b,c)` and `area_quad(a,b,c,d)` — pure functions; quad area = 2-tri decomposition (cross-product sum / 2)
-- [ ] Update `compute_mesh_metrics()`: dispatch per cell type, compute centroids by type, compute face normals by tri/quad
-- [ ] Add `generate_structured_hex_mesh()`: produce hexahedral mesh (NOT decomposed to tet), matching cube/flat-plate interface
-- [ ] Add `prism_boundary_layer_mesh()`: generate prism boundary layer (wedge) extruded from triangulated surface, with growth ratio and first-layer height
+- [x] Define `ElementType` enum and static property tables (node count, face count, face-node-count per face)
+- [x] Update `CfdCell`: add `ElementType type` constructor defaults to `TET4`; `node[i]` array to 8; accessor methods
+- [x] Update `CfdFace`: add `int node_count`; constructor from 3-node (tri) or 4-node (quad)
+- [x] Update `FaceKey` in `rebuild_faces`: key must include node count to distinguish tri (sorted 3 nodes) from quad (sorted 4 nodes) sharing same sorted nodes
+- [x] Implement `volume_tet(a,b,c,d)`, `volume_hex(8 nodes)`, `volume_prism(6 nodes)`, `volume_pyramid(5 nodes)` — pure functions with unit tests
+- [x] Implement `area_tri(a,b,c)` and `area_quad(a,b,c,d)` — pure functions; quad area = 2-tri decomposition (cross-product sum / 2)
+- [x] Update `compute_mesh_metrics()`: dispatch per cell type, compute centroids by type, compute face normals by tri/quad
+- [x] Add `generate_structured_hex_mesh()`: produce hexahedral mesh (NOT decomposed to tet), matching cube/flat-plate interface
+- [x] Add `prism_boundary_layer_mesh()`: generate prism boundary layer (wedge) extruded from triangulated surface, with growth ratio and first-layer height
 
 Tests:
 

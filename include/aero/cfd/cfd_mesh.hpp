@@ -1,5 +1,7 @@
-#include "aero/cfd/real.hpp"
 #pragma once
+
+#include "aero/cfd/real.hpp"
+#include "aero/cfd/element_types.hpp"
 
 #include <string>
 #include <vector>
@@ -24,7 +26,8 @@ struct CfdNode {
 };
 
 struct CfdCell {
-    int node[4] = {-1, -1, -1, -1};
+    ElementType type = ElementType::TET4;
+    int node[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
     int first_face = 0;
     int face_count = 0;
     Real volume = 0.0f;
@@ -38,7 +41,8 @@ struct CfdCell {
 struct CfdFace {
     int left_cell = -1;
     int right_cell = -1;
-    int node[3] = {-1, -1, -1};
+    int node_count = 3;
+    int node[4] = {-1, -1, -1, -1};
     BoundaryKind boundary = BoundaryKind::Interior;
     Real area = 0.0f;
     Real nx = 0.0f;
@@ -84,6 +88,13 @@ CfdMesh generate_flat_plate_mesh(
     int nx = 30,
     int ny = 3,
     int nz = 50);
+
+CfdMesh generate_structured_hex_mesh(int n_per_dim = 10);
+
+CfdMesh generate_prism_boundary_layer_mesh(
+    int nx = 10, int ny = 5, int nz = 10,
+    Real length = 0.5f, Real width = 0.05f,
+    Real first_height = 1e-5f, Real growth_ratio = 1.12f);
 
 MeshQualityReport compute_mesh_metrics(CfdMesh& mesh);
 

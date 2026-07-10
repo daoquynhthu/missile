@@ -104,14 +104,34 @@ bool write_vtk_cells(
         out << node.x << " " << node.y << " " << node.z << "\n";
     }
 
-    out << "CELLS " << mesh.cells.size() << " " << mesh.cells.size() * 5 << "\n";
+    // Count total VTK cell data size: each entry = (n_nodes + 1) + node_ids
+    std::size_t total_entries = 0;
     for (const auto& cell : mesh.cells) {
-        out << "4 " << cell.node[0] << " " << cell.node[1] << " " << cell.node[2] << " " << cell.node[3] << "\n";
+        total_entries += 1 + ELEMENT_NODES[static_cast<int>(cell.type)];
+    }
+    out << "CELLS " << mesh.cells.size() << " " << total_entries << "\n";
+    for (const auto& cell : mesh.cells) {
+        int nn = ELEMENT_NODES[static_cast<int>(cell.type)];
+        out << nn;
+        for (int i = 0; i < nn; ++i) {
+            out << " " << cell.node[i];
+        }
+        out << "\n";
     }
 
+    // VTK cell types: 10=tetra, 12=hex, 13=prism, 14=pyramid
+    constexpr int VTK_TETRA = 10;
+    constexpr int VTK_HEX = 12;
+    constexpr int VTK_WEDGE = 13;
+    constexpr int VTK_PYRAMID = 14;
     out << "CELL_TYPES " << mesh.cells.size() << "\n";
-    for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
-        out << "10\n";
+    for (const auto& cell : mesh.cells) {
+        switch (cell.type) {
+            case ElementType::TET4:     out << VTK_TETRA << "\n"; break;
+            case ElementType::HEX8:     out << VTK_HEX << "\n"; break;
+            case ElementType::PENTA6:   out << VTK_WEDGE << "\n"; break;
+            case ElementType::PYRAMID5: out << VTK_PYRAMID << "\n"; break;
+        }
     }
 
     out << "CELL_DATA " << mesh.cells.size() << "\n";
