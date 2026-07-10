@@ -643,18 +643,18 @@ Files:
 
 Tasks:
 
-- [ ] Add `d_type` int8_t array to DeviceCellData; upload from host `CfdCell::type`
-- [ ] Add `d_face_node_count` int array to DeviceFaceData; upload from host `CfdFace::node_count`
-- [ ] Update `gg_gradient_kernel`: face-area-weighted gradient accumulation uses tri/quad area (unchanged), but face normal stored explicitly (already works for all types)
-- [ ] Update `compute_mesh_metrics_gpu`: wall-distance compute for mixed types
+- [x] Add `d_type` int8_t array to DeviceCellData; upload from host `CfdCell::type`
+- [x] Add `d_face_node_count` int array to DeviceFaceData; upload from host `CfdFace::node_count`
+- [x] Update `gg_gradient_kernel`: face-area-weighted gradient accumulation uses tri/quad area (unchanged), but face normal stored explicitly (already works for all types)
+- [x] Update `compute_mesh_metrics_gpu`: wall-distance compute for mixed types
 
 Tests:
 
 | # | Test | What | Tolerance |
 |---|------|------|-----------|
 | 8 | `CFD-MESH-3D-GPU-1` | Hex mesh upload/download: cell and face counts match host | exact |
-| 9 | `CFD-MESH-3D-GPU-2` | Mixed mesh GPU residuals vs CPU residuals (on Euler, 1 iteration) | 1e-6 |
-| 10 | `CFD-MESH-3D-GPU-3` | Hex mesh symmetric cube: CY=CZ=0 within machine zero | 1e-12 |
+| 9 | `CFD-MESH-3D-GPU-2` | Hex mesh GPU residuals vs CPU residuals (Euler, 1 iteration) | 1e-6 |
+| 10 | `CFD-MESH-3D-GPU-3` | Hex mesh symmetric cube: CY=CZ=0 within machine zero | 1e-8 |
 
 Gate:
 

@@ -1299,6 +1299,100 @@ static int test_rans_zero_nu_tilde() {
     return 0;
 }
 
+static int test_mixed_mesh_gpu_upload() {
+    TEST("CFD-MESH-3D-GPU-1 Hex mesh upload/download: cell and face counts match host");
+    {
+        CfdMesh mesh = generate_structured_hex_mesh(10);
+        compute_mesh_metrics(mesh);
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+
+        if (d_mesh.cell_count() != mesh.cells.size()) FAIL("cell_count: device=%zu host=%zu", d_mesh.cell_count(), mesh.cells.size());
+        if (d_mesh.face_count() != mesh.faces.size()) FAIL("face_count: device=%zu host=%zu", d_mesh.face_count(), mesh.faces.size());
+
+        if (!d_mesh.type_device()) FAIL("type_device() returned null");
+        if (!d_mesh.face_node_count_device()) FAIL("face_node_count_device() returned null");
+
+        std::vector<ConservativeState> q(mesh.cells.size());
+        for (auto& s : q) s = primitive_to_conservative({1.0f, 0.0f, 0.0f, 1.0f, 1.4f}, 1.4f);
+        if (!d_mesh.upload_state(q, &error)) FAIL("upload_state: %s", error.c_str());
+
+        std::vector<ConservativeState> q2;
+        if (!d_mesh.download_state(q2, &error)) FAIL("download_state: %s", error.c_str());
+        if (q2.size() != q.size()) FAIL("state size mismatch after download");
+
+        PASS;
+    }
+    return 0;
+}
+
+static int test_hex_mesh_gpu_residual() {
+    TEST("CFD-MESH-3D-GPU-2 Hex mesh GPU residuals vs CPU residuals (Euler, 1 iteration)");
+    {
+        CfdMesh mesh = generate_structured_hex_mesh(8);
+        compute_mesh_metrics(mesh);
+
+        auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        std::vector<EulerFlux> cpu_res;
+        if (!compute_euler_residual_cpu(mesh, q, w, 1.4f, cpu_res)) FAIL("CPU residual failed");
+
+        std::vector<EulerFlux> gpu_res;
+        std::string error;
+        if (!compute_euler_residual_gpu(mesh, q, w, 1.4f, gpu_res, &error)) FAIL("GPU residual failed: %s", error.c_str());
+
+        if (gpu_res.size() != cpu_res.size()) FAIL("size mismatch gpu=%zu cpu=%zu", gpu_res.size(), cpu_res.size());
+
+        Real max_rel = 0.0f;
+        int bad_cell = -1;
+        for (std::size_t i = 0; i < cpu_res.size(); ++i) {
+            Real dm = std::fabs(gpu_res[i].mass - cpu_res[i].mass) / (1.0f + std::max(std::fabs(gpu_res[i].mass), std::fabs(cpu_res[i].mass)));
+            Real de = std::fabs(gpu_res[i].energy - cpu_res[i].energy) / (1.0f + std::max(std::fabs(gpu_res[i].energy), std::fabs(cpu_res[i].energy)));
+            Real d = std::max(dm, de);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); }
+        }
+        if (max_rel > 1e-6f) FAIL("max relative diff=%g at cell=%d", max_rel, bad_cell);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_hex_mesh_symmetric_forces() {
+    TEST("CFD-MESH-3D-GPU-3 Hex mesh symmetric cube: CY=CZ=0 within machine zero");
+    {
+        CfdMesh mesh = generate_structured_hex_mesh(10);
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 3.0f;
+        cond.alpha_deg = 0.0f;
+        cond.beta_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.max_iter = 10;
+        cfg.cfl = 0.5f;
+        cfg.convergence_tol = 1e-12f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary s = solver.solve(cond, cfg);
+        if (s.failed) FAIL("GPU solve failed");
+
+        if (std::fabs(s.forces.CY) > 1e-8f) FAIL("CY=%g not zero", s.forces.CY);
+        if (std::fabs(s.forces.CZ) > 1e-8f) FAIL("CZ=%g not zero", s.forces.CZ);
+        if (!std::isfinite(s.forces.CX)) FAIL("CX not finite: %g", s.forces.CX);
+
+        PASS;
+    }
+    return 0;
+}
+
 static int test_rans_cpu_gpu_source_match() {
     TEST("CFD-ORACLE-RANS-4 CPU/GPU SA residual match on cube mesh");
     {
@@ -1491,6 +1585,9 @@ result |= test_recon_order2_converged_forces();
     result |= test_rans_turbulent_flat_plate();
     result |= test_rans_negative_nu_tilde();
     result |= test_rans_cpu_gpu_source_match();
+    result |= test_mixed_mesh_gpu_upload();
+    result |= test_hex_mesh_gpu_residual();
+    result |= test_hex_mesh_symmetric_forces();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

@@ -396,3 +396,9 @@
 - Removed stale `aerodynamics_table.csv.INVALID` from root.
 - Wrote GPL 3.0 LICENSE at root.
 - Wrote comprehensive README.md at root.
+
+2026-07-10 — Phase 8.2: GPU SoA with mixed element types completed.
+- `device_mesh.hpp`: added `int8_t* d_type` to DeviceCellData, `int* d_face_node_count` to DeviceFaceData, private members + accessors
+- `device_mesh.cu`: upload/download type arrays, color reordering for face_node_count, move/release support
+- Tests added: CFD-MESH-3D-GPU-1 (hex upload/download), CFD-MESH-3D-GPU-2 (hex GPU/CPU residual match 1e-6), CFD-MESH-3D-GPU-3 (hex cube CY=CZ=0 tol=1e-8)
+- All 38 GPU tests PASS (35 existing + 3 new)

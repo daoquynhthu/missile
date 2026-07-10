@@ -22,6 +22,7 @@ struct DeviceFaceData {
     int* left_cell = nullptr;
     int* right_cell = nullptr;
     int* boundary = nullptr;
+    int* face_node_count = nullptr;
     Real* cx = nullptr;
     Real* cy = nullptr;
     Real* cz = nullptr;
@@ -35,12 +36,14 @@ struct ConstDeviceFaceData {
     const int* left_cell = nullptr;
     const int* right_cell = nullptr;
     const int* boundary = nullptr;
+    const int* face_node_count = nullptr;
     const Real* cx = nullptr;
     const Real* cy = nullptr;
     const Real* cz = nullptr;
 };
 
 struct DeviceCellData {
+    int8_t* type = nullptr;
     Real* volume = nullptr;
     Real* h_min = nullptr;
     Real* wall_distance = nullptr;
@@ -50,6 +53,7 @@ struct DeviceCellData {
 };
 
 struct ConstDeviceCellData {
+    const int8_t* type = nullptr;
     const Real* volume = nullptr;
     const Real* h_min = nullptr;
     const Real* wall_distance = nullptr;
@@ -101,6 +105,8 @@ public:
     Real* residual_device() const { return d_residual_; }
     Real* gradients_device() const { return d_gradients_; }
     Real* limiters_device() const { return d_limiters_; }
+    int8_t* type_device() const { return d_type_; }
+    int* face_node_count_device() const { return d_face_node_count_; }
 
     // MPI halo (reserved, no-op in single-GPU mode)
     bool has_halo() const { return d_halo_indices_ != nullptr && n_halo_cells_ > 0; }
@@ -139,6 +145,9 @@ private:
     Real* d_face_cx_ = nullptr;
     Real* d_face_cy_ = nullptr;
     Real* d_face_cz_ = nullptr;
+
+    int8_t* d_type_ = nullptr;
+    int* d_face_node_count_ = nullptr;
 
     Real* d_gradients_ = nullptr;
     Real* d_limiters_ = nullptr;
