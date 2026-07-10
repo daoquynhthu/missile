@@ -254,10 +254,10 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
     if (!alloc(d_residual_, nc * NVAR * sizeof(Real), "cudaMalloc residual")) return false;
     if (!alloc(d_gradients_, nc * DeviceMesh::NGRAD * sizeof(Real), "cudaMalloc gradients")) return false;
     if (!alloc(d_limiters_, nc * sizeof(PrimitiveLimiter), "cudaMalloc limiters")) return false;
-    if (!cuda_check(cudaMemset(d_gradients_, 0, nc * DeviceMesh::NGRAD * sizeof(Real)), "cudaMemset gradients", error)) {
-        release();
-        return false;
-    }
+    if (!cuda_check(cudaMemset(d_q_, 0, nc * NVAR * sizeof(Real)), "cudaMemset state", error)) { release(); return false; }
+    if (!cuda_check(cudaMemset(d_residual_, 0, nc * NVAR * sizeof(Real)), "cudaMemset residual", error)) { release(); return false; }
+    if (!cuda_check(cudaMemset(d_gradients_, 0, nc * DeviceMesh::NGRAD * sizeof(Real)), "cudaMemset gradients", error)) { release(); return false; }
+    if (!cuda_check(cudaMemset(d_limiters_, 0, nc * sizeof(PrimitiveLimiter)), "cudaMemset limiters", error)) { release(); return false; }
 
     std::vector<Real> h_nx(nf), h_ny(nf), h_nz(nf), h_area(nf), h_face_cx(nf), h_face_cy(nf), h_face_cz(nf);
     std::vector<int> h_left_cell(nf), h_right_cell(nf);
@@ -365,7 +365,7 @@ bool DeviceMesh::upload_gradients(const std::vector<PrimitiveGradient>& gradient
     if (!d_gradients_) {
         if (!cuda_check(cudaMalloc(&d_gradients_, nc * DeviceMesh::NGRAD * sizeof(Real)), "cudaMalloc gradients", error)) return false;
     }
-    return cuda_check(cudaMemcpy(d_gradients_, gradients.data(), nc * sizeof(PrimitiveGradient), cudaMemcpyHostToDevice), "cudaMemcpy upload_gradients", error);
+    return cuda_check(cudaMemcpy(d_gradients_, gradients.data(), nc * DeviceMesh::NGRAD * sizeof(Real), cudaMemcpyHostToDevice), "cudaMemcpy upload_gradients", error);
 }
 
 bool DeviceMesh::upload_limiters(const std::vector<PrimitiveLimiter>& limiters, std::string* error) {
@@ -435,7 +435,7 @@ bool DeviceMesh::download_gradients(std::vector<PrimitiveGradient>& gradients, s
     }
     std::size_t nc = static_cast<std::size_t>(cell_count_);
     gradients.resize(nc);
-    return cuda_check(cudaMemcpy(gradients.data(), d_gradients_, nc * sizeof(PrimitiveGradient), cudaMemcpyDeviceToHost), "cudaMemcpy download_gradients", error);
+    return cuda_check(cudaMemcpy(gradients.data(), d_gradients_, nc * DeviceMesh::NGRAD * sizeof(Real), cudaMemcpyDeviceToHost), "cudaMemcpy download_gradients", error);
 }
 
 bool DeviceMesh::allocate_viscous() {

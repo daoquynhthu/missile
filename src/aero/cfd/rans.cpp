@@ -17,16 +17,6 @@ Real sa_vorticity(const PrimitiveGradient& grad) {
     return std::sqrt(vort_x*vort_x + vort_y*vort_y + vort_z*vort_z);
 }
 
-Real sa_omega_tilde(Real vorticity, Real nu_tilde, Real wall_distance, Real karman, Real rho, Real Re, Real mu) {
-    constexpr Real cv1 = 7.1f;
-    Real chi = rho * Re * nu_tilde / (mu + 1e-30f) + 1e-30f;
-    Real chi3 = chi*chi*chi;
-    Real cv13 = cv1*cv1*cv1;
-    Real fv1 = chi3 / (chi3 + cv13);
-    Real inv_kd2 = 1.0f / (karman * karman * wall_distance * wall_distance + 1e-30f);
-    return vorticity + nu_tilde * fv1 * inv_kd2;
-}
-
 RansSource compute_rans_source(
     const PrimitiveState& w,
     const PrimitiveGradient& grad,

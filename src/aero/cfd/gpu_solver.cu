@@ -265,6 +265,10 @@ fail:
     summary.failed = true;
 
 cleanup:
+#ifdef MPI_ENABLED
+    cudaStreamDestroy(stream_comp);
+    cudaStreamDestroy(stream_comm);
+#endif
     if (owned_buffers) solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history,
         d_state_bounds_history, d_failure_cell, d_failure_state);
     return summary;

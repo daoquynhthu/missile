@@ -215,14 +215,12 @@ __global__ void viscous_flux_kernel_atomic(
     Real visc_energy = (face_u * visc_mom_x + face_v * visc_mom_y + face_w * visc_mom_z
         + kappa_over_Re * dT_dn * area);
 
-    real_atomic_add(&d_residual[left * nvar + 0], 0.0f);
     real_atomic_add(&d_residual[left * nvar + 1], visc_mom_x);
     real_atomic_add(&d_residual[left * nvar + 2], visc_mom_y);
     real_atomic_add(&d_residual[left * nvar + 3], visc_mom_z);
     real_atomic_add(&d_residual[left * nvar + 4], visc_energy);
 
     if (right >= 0 && bnd == static_cast<int>(BoundaryKind::Interior)) {
-        real_atomic_add(&d_residual[right * nvar + 0], 0.0f);
         real_atomic_add(&d_residual[right * nvar + 1], -visc_mom_x);
         real_atomic_add(&d_residual[right * nvar + 2], -visc_mom_y);
         real_atomic_add(&d_residual[right * nvar + 3], -visc_mom_z);
@@ -304,7 +302,7 @@ __global__ void viscous_flux_kernel_atomic(
     Real chi3 = chi_face * chi_face * chi_face;
     Real fv1_face = chi3 / (chi3 + cv13 + 1e-30f);
     Real mu_tilde = face_rho * face_nu_tilde * fv1_face / sigma_sa;
-    Real mu_total = mu_face * inv_Re + mu_tilde;
+    Real mu_total = (mu_face * inv_Re) / sigma_sa + mu_tilde;
     Real visc_nu = mu_total * dnu_dn * area;
 
     real_atomic_add(&d_residual[left * nvar + 5], visc_nu);

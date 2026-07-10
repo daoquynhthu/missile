@@ -21,7 +21,7 @@ StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, Real g
     bounds.max_mach = -std::numeric_limits<Real>::max();
     bounds.valid = true;
 
-    for (int i = 0; i < static_cast<int>(q.size()); ++i) {
+    for (std::size_t i = 0; i < q.size(); ++i) {
         PrimitiveState w;
         if (!conservative_to_primitive(q[i], gamma, w)) {
             bounds.valid = false;

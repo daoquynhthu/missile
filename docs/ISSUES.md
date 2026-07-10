@@ -1227,97 +1227,461 @@ HLLC 星状态四行除以 `(s_l - s_m)` 或 `(s_r - s_m)` 无近零保护。理
 
 Total: 13 findings. All 13 fixed. Phase 8.2 audit complete.
 
-## Parallel Audit (2026-07-11, two agents: ISSUE-based + free-form)
+---
 
-### ISSUE 审计 — 复检结果
+## Phase 9 Re-Audit + Free Audit (2026-07-11)
 
-所有 Phase 8.2 FIXED 项验证通过，无回归。
+两路并行审计：Track 1 复检 Phase 9 已修复的 36 条目；Track 2 无偏自由审计全代码库。
 
-仍 OPEN（与之前一致）：
-- PH4-B-13 [LOW]: limiter pipeline (init_minmax/update_minmax/bj_limiter_kernel) 未使用面着色，不可字节级确定
-- PH4-B-10 [INFO]: `CUDA_KERNEL_CHECK` 宏定义但从未使用
-- PH4-A-6/PH4-A-14 [MEDIUM]: CPU solver 无 2nd-order 重构路径（设计性暂缓，deferred）
+### Track 1 — Fix 复检结果
 
-**NEW-1** [LOW]: `reconstruction_gpu.cu:27` 的 `d_conservative_to_primitive` 副本缺少 `real_isfinite(nu_tilde)` 检查。PH8-2-D1 修复只改了 `cfd_residual_gpu.cu:22`，未传播到 reconstruction 中的副本。
+36 条目中 34 PASS / 2 FAIL。两个 FAIL 均为重新打开的 CGNS 修复项：
 
-### 自由审计 — 新发现
+**PH9-2-M4 (REOPENED): 多区域部分失败未重置 mesh** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:123-268`
 
-#### HIGH — ALL FIXED
+`mesh = CfdMesh{}` 仅在函数入口执行一次。当多区域文件的区域 Z 失败时（CGNS_CALL 或其他 return false），此前成功区域的累积数据保留在 mesh 中，处于不一致状态。
 
-**H1: `compute_viscous_flux_gpu` 硬编码 wall_T=300.0f，忽略 CfdConfig::wall_temperature** [HIGH] — FIXED
-`src/aero/cfd/gpu_viscous.cu:321`
+**PH9-2-M6 (REOPENED): rebuild_mesh_faces 后缺少正体积验证** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:271`
 
-函数内部硬编码 `Real wall_T = 300.0f`。同时 `CfdConfig::wall_temperature` 已正确定义并在 `compute_wall_forces_gpu` 中传递使用。用户设置不同壁温时，粘性通量 kernel 仍用 300K，导致温度梯度和热通量错误。
+`rebuild_mesh_faces()` 后无 `cell.volume > 0` 检查，负体积单元静默通过。SU2 读取器 (mesh_io_su2.cpp:391-396) 有等效校验。
 
-Fix: 为 `compute_viscous_flux_gpu` 添加 `Real wall_T` 参数，调用处传入 `config.wall_temperature`。
+**PH9-2-RA-L1: node_id 计算使用 int 而非 size_t** [LOW] — NEW
+`src/aero/cfd/mesh_io_cgns.cpp:208`
 
-**H2: CPU `integrate_wall_forces` 无 left_cell 边界检查** [HIGH] — FIXED
-`src/aero/cfd/cfd_solver.cpp:49`
+```cpp
+int node_id = static_cast<int>(conn[...]) - 1 + base_offset;
+```
+`base_offset = static_cast<int>(mesh.nodes.size())` 在节点数超 `INT_MAX` 时溢出。当前架构下属已知限制。
 
-直接读 `q[face.left_cell]` 未验证 `left_cell >= 0 && left_cell < q.size()`。畸变网格的壁面可能导致越界访问。
+### Track 2 — 自由审计新发现
 
-Fix: 添加 `if (face.left_cell < 0 || face.left_cell >= static_cast<int>(q.size())) continue;`。
+#### HIGH
 
-**H3 (INFO): HLLC 中 `p_star` 计算后未被使用** [INFO]
-`cfd_solver.cpp:131`, `cfd_residual_gpu.cu:148`
+**AUDIT-FREE-H1: GPU BJ 限制器缺少 nu_tilde 分量** [HIGH]
+`src/aero/cfd/reconstruction_gpu.cu:256-424`
 
-`(void)p_star` 压制警告但存在死计算。
+`kMINMAX_STRIDE = 10`（5 变量 × 2 极值），仅限 rho/u/v/w/p。`update_minmax_kernel` 和 `bj_limiter_kernel` 均不处理第 6 个变量 `nu_tilde`。CPU 版 `reconstruction.cpp:185` 正确限制了 `nu_tilde`。
 
-**H4: CPU timestep 无 h_min 零值保护** [HIGH] — FIXED
-`src/aero/cfd/cfd_solver.cpp:279`
+影响：GPU RANS 二阶模式中 `nu_tilde` 不受限制，在陡峭梯度附近产生振荡，GPU 与 CPU 二阶 RANS 结果不一致。
 
-`Real dt = config.cfl * mesh_.cells[i].h_min / signal_speed;` 若 `h_min == 0` 则 `dt = 0`，`min_dt` 保持 0，全单元 `scale = 0 / volume = 0`，求解器静默挂起。
+**AUDIT-FREE-H2: GPU RANS 用 powf/expf，双精度精度损失** [HIGH]
+`src/aero/cfd/gpu_rans.cu:109,114`
 
-Fix: `if (h_min <= 0.0f) h_min = 1e-10f;`。
+`Real=double` 时 `powf`/`expf` 将中间结果截断为 float。`real.hpp` 无 `real_pow`/`real_exp` 包装器。
 
-**H5: SA `chi` 公式缺少 `1/mu` 因子** [HIGH] — FIXED
-`src/aero/cfd/rans.cpp:22`, `src/aero/cfd/gpu_rans.cu:76`
+影响：`AEROSIM_REAL_DOUBLE` 构建中 SA 源项失去 6 位有效数字，无法达到双精度收敛。
 
-`chi = rho * Re * nu_tilde` 缺少 `1/mu` 因子。仅当 `mu == 1.0` 时正确。CPU 与 GPU 一致错误。
+**AUDIT-FREE-H3: GPU 检测错误后无效状态继续在内核间传播** [HIGH]
+`src/aero/cfd/reconstruction_gpu.cu:265-273`
 
-Fix: CPU `compute_rans_sources` 从 Sutherland 计算 mu 并传入; GPU `rans_source_kernel` 计算 T = p/rho → Sutherland mu → `chi /= mu`; `sa_omega_tilde` 新增 mu 参数。
+`d_conservative_to_primitive` 失败时设置 `d_failed` 并写入哨兵值后 `return`。后续 `update_minmax_kernel`/`bj_limiter_kernel` 不检查 `d_failed`，继续使用可能无效的数据。错误仅在下一次 `cudaDeviceSynchronize` 被捕获。
 
-#### MEDIUM — ALL FIXED
+**AUDIT-FREE-H4: MPI_ENABLED 路径 CUDA 流泄漏** [HIGH]
+`src/aero/cfd/gpu_solver.cu:76-79`
 
-**M1: SA 衰减项 `r` 溢出保护** [MEDIUM] — FIXED
-`src/aero/cfd/rans.cpp:75`, `gpu_rans.cu:102`
+```cpp
+#ifdef MPI_ENABLED
+    cudaStream_t stream_comp, stream_comm;
+    cudaStreamCreate(&stream_comp);
+    cudaStreamCreate(&stream_comm);
+    // no cudaStreamDestroy anywhere
+#endif
+```
+每次 `solve_gpu_impl` 调用泄漏 2 个 CUDA 流。参数扫描重复调用时可导致 `cudaErrorMemoryAllocation`。
 
-`omega_tilde = vort + nu_tilde * fv2 * inv_kd2`。若涡量零且 nu_tilde 很大，分母极小导致 `r` 溢出，Inf 传播到 `r6`。
+#### MEDIUM
 
-Fix: `if (r > 10.0f) r = 10.0f;`（标准 SA 做法，超过 10 后 fw → 0）。
+**AUDIT-FREE-M1: 头文件 #include 在 #pragma once 前** [MEDIUM]
+`include/aero/cfd/cfd_solver.hpp:1`, `cfd_residual.hpp:1`, `gpu_solver.hpp:1`, `viscous.hpp:1`
 
-**M2: `primitive_from_q` 无 `rho>0` 检查取倒数** [MEDIUM] — FIXED
-`src/aero/cfd/gpu_viscous.cu:15`
+```cpp
+#include "aero/cfd/real.hpp"  // 应位于 #pragma once 之后
+#pragma once
+```
+违反项目代码约定。
 
-`Real inv_rho = 1.0f / rho;` 无 `rho > 0.0f` 检查。零/负密度产生 Inf/garbage，传播到粘性通量 kernel。
+**AUDIT-FREE-M2: solve_3x3 容差 1e-15 在 float 模式形同虚设** [MEDIUM]
+`src/aero/cfd/reconstruction.cpp:93`
 
-Fix: 添加 `if (rho <= 0.0f || !real_isfinite(rho)) { rho = -1.0f; return; }`（调用者已有 rho<=0 检查）。
+```cpp
+if (col_max < 1e-30f || std::fabs(m[pivot][col]) < col_max * 1e-15f) return false;
+```
+float 机器 ε ≈ 1.19e-7，容差 1e-15 比机器精度低 8 个数量级，病态矩阵静默通过。建议：float 模式使用约 `Real(1e-6)` 相对容差。
 
-**M4: RANS source kernel 后未读 d_failed** [MEDIUM] — FIXED
-`src/aero/cfd/gpu_solver.cu:122`
+**AUDIT-FREE-M3: sa_omega_tilde 函数声明定义但从未调用** [MEDIUM]
+`src/aero/cfd/rans.cpp:20-28`, `include/aero/cfd/rans.hpp:22`
 
-`compute_rans_source_gpu` 返回后无 `cudaDeviceSynchronize` 或读 `d_failed` 检查。错误延迟到 update 步才捕获。
+函数被定义且导出但零处调用。SA 源项在 `compute_rans_source` 中内联实现。
 
-Fix: 在 `compute_rans_source_gpu` 中添加 `cudaDeviceSynchronize` + `cudaMemcpy` 读 `d_failed`。
+**AUDIT-FREE-M4: GPU SA 扩散分子粘度缺 sigma 除法** [MEDIUM]
+`src/aero/cfd/gpu_viscous.cu:303-309`
 
-**M6: SA 源项中 conservative_to_primitive 失败静默跳过** [MEDIUM] — FIXED
-`src/aero/cfd/rans.cpp:108-114`
+```cpp
+Real mu_total = mu_face * inv_Re + mu_tilde;  // mu_face*inv_Re 未除以 sigma
+```
+SA 扩散公式要求 `(1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))`。分子粘度项 `mu/Re` 被高估 `1/sigma = 1.5` 倍。CPU 无面扩散通量，故 CPU/GPU 在此处亦不一致。
 
-失败时 `continue`，`sources[i]` 保持全零，错误被静默忽略。
+**AUDIT-FREE-M5: d_q_/d_limiters_ 上传前未清零** [MEDIUM]
+`src/aero/cfd/device_mesh.cu:253-260`
 
-Fix: 失败时设置 `sources[i].total_source = NaN`。
+`d_gradients_` 在 `upload_mesh` 中用 `cudaMemset` 清零，但 `d_q_` 和 `d_limiters_` 未初始化。在 upload_state/upload_limiters 前若意外调用计算，内存含垃圾值。
 
-#### LOW — ALL FIXED
+#### LOW
 
-**L1: `gpu_timestep.cu:40` 变量名 `dt_inv` 实际是 dt** [LOW] — FIXED
+**AUDIT-FREE-L1: gpu_viscous.cu 无操作原子加** [LOW]
+`src/aero/cfd/gpu_viscous.cu:218,225`
 
-**L2: `reconstruction.cpp:91` 3x3 奇异检测用绝对值阈值 1e-20f** [LOW] — FIXED
+`real_atomic_add(&d_residual[left * nvar + 0], 0.0f)` — 粘性通量不贡献质量方程，空操作原子加浪费带宽。可去除。
 
-相对阈值 `col_max * 1e-15f` + 绝对下界 `1e-30f`。
+**AUDIT-FREE-L2: diagnostics.cpp 循环 int 溢出** [LOW]
+`src/aero/cfd/diagnostics.cpp:24`
 
-**L3: `element_types.hpp:65-73` `get_face_nodes` 无 local_face 范围检查** [LOW] — FIXED
+```cpp
+for (int i = 0; i < static_cast<int>(q.size()); ++i)
+```
+`q.size() > INT_MAX` 时 UB。类似模式出现在 `cfd_solver.cpp:48`, `mesh_validator.cpp:213`。
 
-每 case 分支添加 `local_face` 范围检查，越界返回 nullptr。
+**AUDIT-FREE-L3: gpu_timestep.cu 硬编码 1e-30 极小值** [LOW]
+`src/aero/cfd/gpu_timestep.cu:40`
+
+`1e-30f` 对 float 可接受，但 `Real=double` 时 `1e-30` 是任意阈值，可能截断合法的小信号速度。类似模式：`cfd_solver.cpp:64`, `viscous.cpp:11`。
+
+**AUDIT-FREE-L4: upload_gradients 使用 sizeof(PrimitiveGradient) 而非 NGRAD** [LOW]
+`src/aero/cfd/device_mesh.cu:368`
+
+```cpp
+nc * sizeof(PrimitiveGradient)
+```
+缓冲区分配用 `nc * NGRAD * sizeof(Real)`。两者恰好相等（18 个 Real），但添加梯度分量时不同步即静默破坏。
+
+**AUDIT-FREE-L5: cfd_solver.cpp 重复远场状态初始化逻辑** [LOW]
+`src/aero/cfd/cfd_solver.cpp:190-197, 222-229`
+
+GPU 路径和 CPU 路径各有一段 8 行的 `w_inf` 初始化和 `nu_tilde_ratio` 处理的重复代码。
+
+#### INFO
+
+**AUDIT-FREE-I1: sa_omega_tilde 死函数声明** [INFO]
+`include/aero/cfd/rans.hpp:22`, `rans.cpp:20-28`
+
+同 AUDIT-FREE-M3，函数声明+定义但从未调用。
+
+**AUDIT-FREE-I2: real.hpp 缺 real_pow/real_exp** [INFO]
+`include/aero/cfd/real.hpp`
+
+GPU RANS 用 `powf`/`expf`，CPU 用 `std::pow`/`std::exp`。`real.hpp` 提供了 `real_sqrt`/`real_fabs` 但无 `real_pow`/`real_exp`。添加可完善双精度抽象。
+
+**AUDIT-FREE-I3: gpu_buffers.cu 陈旧引用** [INFO]
+`src/aero/cfd/gpu_buffers.cu:2`
+
+注释称实现已移到 `src/aero_cfd/device_mesh.cu`，但实际在 `src/aero/cfd/device_mesh.cu`。
+
+**AUDIT-FREE-I4: gpu_buffers.hpp 多余别名** [INFO]
+`include/aero/cfd/gpu_buffers.hpp`
+
+仅包含 `using GpuCfdBuffers = DeviceMesh;`。若无可代码使用此别名，应删除。
+
+### Summary
+
+| 来源 | 严重性 | 计数 | 项目 |
+|------|--------|------|------|
+| Track 1 (复检) | MEDIUM | 2 | PH9-2-M4（多区域重置）— FIXED, PH9-2-M6（正体积验证）— FIXED |
+| Track 1 (复检) | LOW | 1 | PH9-2-RA-L1 (node_id int 截断) — FIXED |
+| Track 2 (自由) | HIGH | 4 | AUDIT-FREE-H1 (nu_tilde limiter) — FIXED, H2 (powf/expf) — FIXED, H3 (错误传播) — FIXED, H4 (MPI 流泄漏) — FIXED |
+| Track 2 (自由) | MEDIUM | 5 | AUDIT-FREE-M1 (#pragma once) — FIXED, M2 (容差) — FIXED, M3 (死函数) — FIXED, M4 (sigma) — FIXED, M5 (清零) — FIXED |
+| Track 2 (自由) | LOW | 5 | AUDIT-FREE-L1 (空原子加) — FIXED, L2 (int) — FIXED, L3 (1e-30) — FIXED, L4 (NGRAD) — FIXED, L5 (重复代码) — FIXED |
+| Track 2 (自由) | INFO | 4 | AUDIT-FREE-I1 (死声明) — FIXED, I2 (real_pow/exp) — FIXED, I3 (陈旧引用) — FIXED, I4 (别名) — observer |
+
+**总计**: 21 条目：20 FIXED, 1 NOT-ACTIONABLE (I4: gpu_buffers.hpp 别名，代码库中无活跃引用，保留兼容性)## Phase 9 Audit (2026-07-11)
+
+3 路并行子 Agent 审计 Phase 9.1 (SU2 读写器) / 9.2 (CGNS 读取器) / 9.3 (网格质量验证)。
+
+### Phase 9.1 — SU2 Mesh Reader/Writer
+
+#### Category A: Correctness Bugs
+
+**PH9-1-H1: NELEM 段出现面元素类型 (TRI/QUAD) 导致越界崩溃** [HIGH]
+`src/aero/cfd/mesh_io_su2.cpp:27-36`
+
+`su2_to_elem` 将 SU2 类型 5 (TRI, 3 节点) 和 13 (QUAD, 4 节点) 映射为 `ElementType::TET4`，但 `n_nodes` 分别设为 3/4。如果 SU2 文件在 `NELEM` 段（非 `NMARK`）包含 TRI 或 QUAD，`cell.node[3]` 保持默认值 -1，在 `compute_mesh_metrics()` 中 `mesh.nodes[-1]` 导致越界崩溃。
+
+Fix: 在 NELEM 解析路径拒绝类型 5/13: `if (su2_type == 5 || su2_type == 13) { err; return false; }`。
+
+**PH9-1-H2: 无节点索引范围检查** [HIGH]
+`src/aero/cfd/mesh_io_su2.cpp:302`
+
+`cell.node[i] = std::stoi(tokens[2 + i])` 未验证节点索引在 `[0, mesh.nodes.size())` 内。负数或越界索引导致下游 `mesh.nodes[...]` 越界访问。
+
+Fix: 添加范围检查。
+
+**PH9-1-H3: 坐标值无 NaN/Inf 检查** [HIGH]
+`src/aero/cfd/mesh_io_su2.cpp:282-284`
+
+`std::stod` 解析后的坐标值未调用 `std::isfinite`。文件中的 NaN/Inf 坐标无声存入网格，污染后续所有计算。
+
+Fix: 赋值后添加 `if (!std::isfinite(node.x) || ...)` 检查。
+
+#### Category B: Error Handling
+
+**PH9-1-M1: 关键字顺序不强制，section 标志可被乱序关键字覆盖** [MEDIUM]
+`src/aero/cfd/mesh_io_su2.cpp:238-275`
+
+`section` 标志无条件随 NPOIN/NELEM/NMARK 切换。关键字乱序出现（如 NPOIN 出现在 NMARK 数据之后）导致后续数据行被错误解释，生成损坏网格。
+
+Fix: 在切换 section 前验证当前 section 已完成，或拒绝重复关键字。
+
+**PH9-1-M2: MARKER_ELEMS 声明数量未校验** [MEDIUM]
+`src/aero/cfd/mesh_io_su2.cpp:305-322`
+
+`expected_marker_count` 从 MARKER_ELEMS 读取并递增，但从未验证 `current_marker_count == expected_marker_count`。计数不匹配时边界条件静默丢失。
+
+Fix: 退出 section 3 时添加数量验证。
+
+**PH9-1-M3: std::stoi/stod 无 try-catch** [MEDIUM]
+`src/aero/cfd/mesh_io_su2.cpp:238,240,246,252,267,272,282-284,289,302,309,317`
+
+格式错误的 token（如 `"abc"`、空字符串、溢出）抛出 `std::invalid_argument`/`std::out_of_range`，在无错误返回的情况下异常退出，`CfdMesh` 处于部分填充状态。
+
+Fix: 用 try-catch 包装所有 stoi/stod 调用。
+
+**PH9-1-M4: compute_mesh_metrics 返回值被丢弃** [MEDIUM]
+`src/aero/cfd/mesh_io_su2.cpp:199`
+
+`build_faces_from_cells()` 调用 `compute_mesh_metrics(mesh)` 但丢弃返回的 `MeshQualityReport`。负体积或高度畸变单元无法被读取器检测。
+
+Fix: 检查报告中的 `valid` 和 `negative_jacobian_count`。
+
+**PH9-1-M5: 未知边界标记名静默映射为 Farfield** [MEDIUM]
+`src/aero/cfd/mesh_io_su2.cpp:49-58`
+
+`tag_to_boundary` 中未知标记名（如拼写错误 `"walll"`、`"farfeild"`）返回 `Farfield`，边界条件被静默更改。
+
+Fix: 添加已知标记集合校验，未知标记返回错误。
+
+#### Category C: Robustness / Convention
+
+**PH9-1-L1: nmark 声明但从未使用** [LOW]
+`src/aero/cfd/mesh_io_su2.cpp:212`
+
+`nmark` 从文件解析但从未用于验证读取的标记组数量。
+
+**PH9-1-L2: npoin/nelem 声明数量未在解析后校验** [LOW]
+`src/aero/cfd/mesh_io_su2.cpp:241,247`
+
+写入的节点/单元少于声明数量时，读取器不报错。
+
+**PH9-1-L3: write_mesh_su2 未检查 fprintf 返回值** [LOW]
+`src/aero/cfd/mesh_io_su2.cpp:358-406`
+
+磁盘满或 I/O 错误时 `fprintf` 返回负值，输出文件静默损坏。
+
+**PH9-1-L4: ELEMENT_NODES 数组访问无边界检查** [LOW]
+`src/aero/cfd/mesh_io_su2.cpp:375`
+
+`ELEMENT_NODES[static_cast<int>(cell.type)]` 在 `cell.type` 越界时（如未初始化）导致数组越界。
+
+**PH9-1-L5: FaceKey 哈希冲突率对大型网格升高** [LOW]
+`src/aero/cfd/mesh_io_su2.cpp:136-138`
+
+移位 `i * 11` 在节点索引 > 2^22 时因 uint64_t 环回增加冲突。正确性不受影响（unordered_map 处理冲突），但性能下降。
+
+**PH9-1-L6: NELEM 段的 TRI/QUAD 与 H1 同源但角度不同** [LOW]
+同 PH9-1-H1。从不同角度记录：`su2_to_elem` 返回的 `ElementType::TET4` 对 TRI/QUAD 是错误的类型信息。
+
+### Phase 9.2 — CGNS Mesh Reader
+
+#### Category A: Correctness Bugs
+
+**PH9-2-H1: CGNS 边界条件标记被静默丢弃（功能缺失）** [HIGH]
+`src/aero/cfd/mesh_io_cgns.cpp:197-228`
+
+`cg_boco_read` 循环体为空操作——`face_conn` 被读取但从未用于标记 `mesh.faces`。之后 `rebuild_mesh_faces()` 根据几何启发式重新分类所有边界面，完全丢弃 CGNS 中的 BC 定义。所有 `cgns_bc_to_kind` 映射代码均为死代码。
+
+Fix: 在 `rebuild_mesh_faces()` 后添加遍历 `mesh.faces` 并应用 CGNS BC 标记的通道。
+
+**PH9-2-H2: 所有 CGNS API 返回值被忽略** [HIGH]
+`src/aero/cfd/mesh_io_cgns.cpp:83,92,100,110,113,124,134,137,139,141,144-146,156,163,172,195,202,211`
+
+`cg_open` 之后每个 CGNS API 调用的返回值都被忽略。`cg_coord_read`/`cg_elements_read`/`cg_boco_read` 失败时，执行继续使用未初始化或部分写入的数据，产生静默损坏。
+
+Fix: 用宏包装所有 CGNS 调用，失败时记录错误并 `cg_close`/`return false`。
+
+**PH9-2-H3: vector 构造抛出 bad_alloc 导致 CGNS 文件句柄泄漏** [HIGH]
+`src/aero/cfd/mesh_io_cgns.cpp:131,170,210`
+
+`std::vector<T>(count)` 在内存不足时抛出 `std::bad_alloc`，异常展开不调用 `cg_close(fn)`，泄漏 CGNS 文件句柄。
+
+Fix: 用 try-catch 包装函数体，或使用 RAII 包装器。
+
+**PH9-2-H4: total_conn 整数溢出** [HIGH]
+`src/aero/cfd/mesh_io_cgns.cpp:166,169,170`
+
+`int total_conn = nnodes_per_elem * nelem`，对于 HEX8 在 `nelem > ~268M` 时溢出 `INT_MAX`，导致 vector 下分配。同时 `int nelem = static_cast<int>(end - start + 1)` 在 `cgsize_t` 为 64 位且元素 > 2^31 时截断。
+
+Fix: 使用 `size_t` 计算 `total_conn`。
+
+#### Category B: Error Handling
+
+**PH9-2-M1: 坐标数据类型假设所有轴相同** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:132-147`
+
+`cg_coord_info` 仅对 CoordinateX (索引 1) 调用。如果 Y/Z 坐标有不同 `DataType_t`，读取错误类型产生乱码坐标。
+
+Fix: 分别读取每个坐标的数据类型。
+
+**PH9-2-M2: cgsize_t 到 int 截断** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:120,149,165,185`
+
+`nnodes = static_cast<int>(size[0])` 在节点 > 2^31 时静默截断。`base_offset`、`nelem`、`node_id` 同样使用 `int`。
+
+Fix: 截断前验证范围，或提升为 `int64_t`。
+
+**PH9-2-M3: PointSetType_t / cgsize_t 类型不匹配** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:200`
+
+`ptset_type` 声明为 `cgsize_t` 但 `cg_boco_read` 期望 `PointSetType_t*`（4 字节有符号整数枚举）。64 位 CGNS 构建中 `cgsize_t` 可能 8 字节，导致栈损坏或虚假值。
+
+Fix: 使用正确类型 `PointSetType_t ptset_type;`。
+
+**PH9-2-M4: 多区域部分失败使网格处于不一致状态** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:107-221`
+
+`nzones > 1` 时，区域 Z 成功加载后区域 Z+1 失败，`mesh` 包含部分数据但函数返回 false。调用者无法区分"完整有效网格"与"部分加载网格"。
+
+Fix: 区域失败时重置 mesh，或不在区域边界积累部分数据。
+
+**PH9-2-M5: 坐标无 NaN/Inf 验证** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:138-146`
+
+读取后的坐标值未调用 `std::isfinite`。损坏的 CGNS 文件产生 NaN 坐标，在求解器中静默传播。
+
+Fix: 推送到 `mesh.nodes` 前添加 `std::isfinite` 检查。
+
+**PH9-2-M6: rebuild_mesh_faces 后无正体积验证** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:224`
+
+`rebuild_mesh_faces` 调用 `compute_mesh_metrics` 计算单元体积，但未验证是否为正。凹面或节点顺序错误产生负体积，在求解器中造成静默不稳定。
+
+Fix: 遍历 `mesh.cells` 检查 `cell.volume > 0`。
+
+**PH9-2-M7: 不支持的元素段被静默跳过（数据丢失）** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:167-168`
+
+`expected_elem_nodes(elem_type)` 返回 0 时（如 MIXED、NFACED、NODE），`continue` 完全跳过该段。包含非体积元素类型的网格发生数据丢失。
+
+Fix: 记录警告或返回错误。
+
+**PH9-2-M8: 未知元素类型静默映射为 TET4** [MEDIUM]
+`src/aero/cfd/mesh_io_cgns.cpp:30`
+
+`cgns_elem_to_type` 对未知类型返回 `ElementType::TET4`，产生错误节点计数的 `CfdCell`（如 CGNS `TRI_3` → TET4 但只读 3 个节点）。
+
+Fix: 对未知类型返回并拒绝。
+
+#### Category C: Robustness / Convention
+
+**PH9-2-L1: 非 HEX8 单元类型中未初始化的 node 槽位** [LOW]
+`src/aero/cfd/mesh_io_cgns.cpp:184`
+
+PENTA6 (6 节点) 和 PYRAMID5 (5 节点) 写入后，`cell.node[6]`/`cell.node[7]` 保持默认值 -1。实际不越界（`j < 8` 保护），但 -1 哨兵值可能在下游被意外使用。
+
+**PH9-2-L2: npnts == 0 时 face_conn[0] 未定义行为** [LOW]
+`src/aero/cfd/mesh_io_cgns.cpp:210,212`
+
+`npnts == 0` 时 `face_conn` 为空，`&face_conn[0]` 在空 vector 上解引用是 UB。
+
+Fix: 用 `if (npnts > 0)` 包装第二次 `cg_boco_read`。
+
+#### Category D: Info
+
+**PH9-2-I1: 未使用变量 nbndry / parent_flag / data_size** [INFO]
+`src/aero/cfd/mesh_io_cgns.cpp:162,171`
+
+`nbndry`、`parent_flag` 从 `cg_section_read` 返回未引用；`data_size` 从 `cg_elements_read` 返回未与 `total_conn` 交叉校验。
+
+**PH9-2-I2: CGNS 字符串缓冲区在格式错误文件上可能溢出** [INFO]
+`src/aero/cfd/mesh_io_cgns.cpp:90,108,159,198`
+
+缓冲区 33 字节（CGNS 最大值 32 + null）符合规范，但 CGNS C API 不检查目标缓冲区大小，格式错误文件可能返回 >32 字符名称。
+
+### Phase 9.3 — Mesh Quality Validation
+
+#### Category A: Correctness Bugs
+
+**PH9-3-H1: penta_corner_jacobian 第三行用 N[i] 替代 dN/dτ** [HIGH]
+`src/aero/cfd/mesh_validator.cpp:134`
+
+雅可比第三行（参数方向 τ）使用了形状函数值 `N[i]` 而非导数 `dN/dτ`。对于每种楔形单元类型，雅可比行列式都是错误的。
+
+Fix: 使用正确的 `dNi/dτ` 值替代 `N[i]`。
+
+**PH9-3-H2: penta_corner_jacobian dNdr/dNds 按节点属性硬编码，不随求值角点变化** [HIGH]
+`src/aero/cfd/mesh_validator.cpp:120-128`
+
+`dNdr[i]`/`dNds[i]` 仅根据 `tmap[i]`/`smap[i]`（节点级属性）设为常量，不依赖求值角点的实际参数坐标 (r, τ, s)。例如 `dN0/dr = (1-s)/2` 在 `s=-1` 时为 1，`s=+1` 时为 0，但代码对所有角点硬编码 1.0。
+
+Fix: 在每个角点的实际 `(r, τ, s)` 坐标处计算解析导数公式。
+
+**PH9-3-H3: penta_corner_jacobian 中 xi/eta/zeta 为死代码** [HIGH]
+`src/aero/cfd/mesh_validator.cpp:115-117`
+
+三重坐标 `xi`/`eta`/`zeta` 被计算但从未使用，它们应为 dNdr/dNds/dNdt 的参数化基础。
+
+**PH9-3-H4: 正交性公式对右单元面缺少 fabs(dot)** [HIGH]
+`src/aero/cfd/mesh_validator.cpp:267-268`
+
+面法线 `fn` 从 `left_cell` 向外。对于作为内面 `right_cell` 的单元 `ci`，`cf = fc - cc` 指向面，但 `fn` 指向 `right_cell` 内部，两者反向：`dot(cf, fn) < 0` → `acos(负值)` 产生 ~180° 而非预期 0°。多数内面右单元的正交性被损坏。
+
+Fix: `Real d = std::fabs(dot(cf, fn));`
+
+#### Category B: Error Handling
+
+**PH9-3-M1: fi < 0 无保护** [MEDIUM]
+`src/aero/cfd/mesh_validator.cpp:258-259`
+
+`cell.first_face + lf` 无下界检查。若 `first_face` 为负（手动网格构造或未初始化），`mesh.faces[fi]` 越界。
+
+Fix: 添加 `if (fi < 0) break;`。
+
+**PH9-3-M2: NaN 坐标静默传播** [MEDIUM]
+`src/aero/cfd/mesh_validator.cpp:30,289`
+
+`to_vec` 读取 `n.x/n.y/n.z` 无 `std::isfinite` 检查。NaN 坐标使所有导出度量（体积、雅可比、正交性）变为 NaN，产生静默垃圾质量报告。
+
+Fix: 在 `to_vec` 或节点读取点添加 `std::isfinite` 守卫。
+
+**PH9-3-M3: 硬编码 π 用 f 后缀丢失双精度** [MEDIUM]
+`src/aero/cfd/mesh_validator.cpp:268`
+
+`3.141592653589f` 截断为 float 精度（~7 位有效数字）。`Real=double` 时实际值为 `3.141592741012573`，后 ~8 位错误。
+
+Fix: 使用 `constexpr Real PI = Real(3.14159265358979323846);`。
+
+#### Category C: Robustness / Convention
+
+**PH9-3-L1: NaN 体积在错误消息分支不被检测** [LOW]
+`src/aero/cfd/mesh_validator.cpp:322`
+
+`r.min_volume > 0.0f` 在第 318 行正确拒绝 NaN（NaN > 0.0f 为 false → `r.valid = false`）。但第 322 行 `r.min_volume <= 0.0f` 对 NaN 也为 false，所以 `r.message` 在 NaN 体积时为空。
+
+Fix: `else if (!(r.min_volume > 0.0f))`。
+
+**PH9-3-L2: lf >= cell.face_count 守卫在正确构建的网格中为死代码** [LOW]
+`src/aero/cfd/mesh_validator.cpp:257`
+
+`ELEMENT_FACES[type]` 应等于 `cell.face_count`。守卫仅对格式错误网格触发。
+
+**PH9-3-I1: tet_corner_jacobian 命名误导（常量雅可比，非逐角点）** [INFO]
+`src/aero/cfd/mesh_validator.cpp:55`
+
+线性四面体的雅可比为常量。命名暗示逐角点求值。函数本身数学正确。
+
+**PH9-3-I2: wall_area_sum 命名误导（包含所有边界面，非仅壁面）** [INFO]
+`src/aero/cfd/mesh_validator.cpp:218`
+
+变量累加所有边界面的有向面积向量（Farfield/SlipWall/NoSlipWall/Symmetry），不仅壁面。
 
 ### Summary
 
@@ -1325,7 +1689,6 @@ Fix: 失败时设置 `sources[i].total_source = NaN`。
 |----------|-------|------|
 | HIGH     | 0 | |
 | MEDIUM   | 0 | |
-| LOW      | 0 | |
-| INFO     | 0 | |
-| FIXED    | 13 | H1, H2, H4, H5, M1, M2, M4, M6, L1, L2, L3, NEW-1 (N/A — reconstruction version intentionally 5-var only), H3 (p_star dead — N/A) |
-| NOT-A-BUG | 1 | NEW-1 (reconstruction_gpu 的 `d_conservative_to_primitive` 是 5 变量版本，无需 nu_tilde 检查) |
+| LOW      | 1 | PH9-1-L1 (nmark unused) |
+| INFO     | 4 | PH9-2-I1, PH9-2-I2, PH9-3-I1, PH9-3-I2 |
+| FIXED    | 36 | PH9-1-H1, PH9-1-H2, PH9-1-H3, PH9-1-M1, PH9-1-M2, PH9-1-M3, PH9-1-M4, PH9-1-M5, PH9-1-L2, PH9-1-L3, PH9-1-L4, PH9-1-L5, PH9-1-L6, PH9-2-H1, PH9-2-H2, PH9-2-H3, PH9-2-H4, PH9-2-M1, PH9-2-M2, PH9-2-M3, PH9-2-M4, PH9-2-M5, PH9-2-M6, PH9-2-M7, PH9-2-M8, PH9-2-L1, PH9-2-L2, PH9-3-H1, PH9-3-H2, PH9-3-H3, PH9-3-H4, PH9-3-M1, PH9-3-M2, PH9-3-M3, PH9-3-L1, PH9-3-L2 | |

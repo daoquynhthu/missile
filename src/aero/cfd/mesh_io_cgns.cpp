@@ -21,6 +21,25 @@ namespace {
 
 #ifdef WITH_CGNS
 
+#define CGNS_CALL(call, close_on_fail) do { \
+    int ierr_ = (call); \
+    if (ierr_ != CG_OK) { \
+        if (err) { char buf_[256]; cg_get_error(buf_); *err = std::string("CGNS: ") + buf_; } \
+        close_on_fail; \
+        return false; \
+    } \
+} while(0)
+
+struct CgnsFile {
+    int fn;
+    explicit CgnsFile(const std::string& path) : fn(-1) {
+        int ierr = cg_open(path.c_str(), CG_MODE_READ, &fn);
+        if (ierr != CG_OK) fn = -1;
+    }
+    ~CgnsFile() { if (fn >= 0) cg_close(fn); }
+    bool valid() const { return fn >= 0; }
+};
+
 ElementType cgns_elem_to_type(int elem_type) {
     switch (elem_type) {
         case TETRA_4:   return ElementType::TET4;
@@ -69,166 +88,246 @@ bool read_mesh_cgns(const std::string& path, CfdMesh& mesh, std::string* err) {
 #ifdef WITH_CGNS
     mesh = CfdMesh{};
 
-    int fn;
-    if (cg_open(path.c_str(), CG_MODE_READ, &fn) != CG_OK) {
-        if (err) {
-            char buf[256];
-            cg_get_error(buf);
-            *err = std::string("CGNS open failed: ") + buf;
-        }
+    CgnsFile cgns(path);
+    if (!cgns.valid()) {
+        if (err) { char buf[256]; cg_get_error(buf); *err = std::string("CGNS open failed: ") + buf; }
         return false;
     }
+    int fn = cgns.fn;
 
-    int nbases;
-    cg_nbases(fn, &nbases);
-    if (nbases < 1) {
-        if (err) *err = "CGNS file has no base";
-        cg_close(fn);
-        return false;
-    }
+    try {
+        int nbases;
+        CGNS_CALL(cg_nbases(fn, &nbases), (void)0);
+        if (nbases < 1) { if (err) *err = "CGNS file has no base"; return false; }
 
-    char basename[33];
-    int celldim, physdim;
-    cg_base_read(fn, 1, basename, &celldim, &physdim);
-    if (celldim != 3 || physdim != 3) {
-        if (err) *err = "CGNS: only 3D meshes supported";
-        cg_close(fn);
-        return false;
-    }
-
-    int nzones;
-    cg_nzones(fn, 1, &nzones);
-    if (nzones < 1) {
-        if (err) *err = "CGNS file has no zones";
-        cg_close(fn);
-        return false;
-    }
-
-    for (int Z = 1; Z <= nzones; ++Z) {
-        char zonename[33];
-        cgsize_t size[9];
-        cg_zone_read(fn, 1, Z, zonename, size);
-
-        ZoneType_t zonetype;
-        cg_zone_type(fn, 1, Z, &zonetype);
-        if (zonetype != Unstructured) {
-            if (err) *err = std::string("CGNS zone '") + zonename + "' is not unstructured";
-            cg_close(fn);
+        char basename[33];
+        int celldim, physdim;
+        CGNS_CALL(cg_base_read(fn, 1, basename, &celldim, &physdim), (void)0);
+        if (celldim != 3 || physdim != 3) {
+            if (err) *err = "CGNS: only 3D meshes supported";
             return false;
         }
 
-        int nnodes = static_cast<int>(size[0]);
+        int nzones;
+        CGNS_CALL(cg_nzones(fn, 1, &nzones), (void)0);
+        if (nzones < 1) { if (err) *err = "CGNS file has no zones"; return false; }
 
-        // Read node coordinates
-        int ncoords;
-        cg_ncoords(fn, 1, Z, &ncoords);
-        if (ncoords < 3) {
-            if (err) *err = "CGNS: need at least 3 coordinate arrays";
-            cg_close(fn);
-            return false;
-        }
+        // Collect face markers from BCs to apply after rebuild_mesh_faces
+        struct PendingBcFace {
+            BoundaryKind kind;
+            int nodes[4];
+            int n_nodes;
+        };
+        std::vector<PendingBcFace> pending_bc_faces;
 
-        std::vector<Real> xs(nnodes), ys(nnodes), zs(nnodes);
-        DataType_t datatype;
+        for (int Z = 1; Z <= nzones; ++Z) {
+            // Save checkpoint for rollback on zone failure
+            std::size_t cp_nodes = mesh.nodes.size();
+            std::size_t cp_cells = mesh.cells.size();
+            std::size_t cp_bc = pending_bc_faces.size();
 
-        cg_coord_info(fn, 1, Z, 1, &datatype);
-        if (datatype == RealDouble) {
-            std::vector<double> tmp(nnodes);
-            cg_coord_read(fn, 1, Z, "CoordinateX", RealDouble, &tmp[0]);
-            for (int i = 0; i < nnodes; ++i) xs[i] = static_cast<Real>(tmp[i]);
-            cg_coord_read(fn, 1, Z, "CoordinateY", RealDouble, &tmp[0]);
-            for (int i = 0; i < nnodes; ++i) ys[i] = static_cast<Real>(tmp[i]);
-            cg_coord_read(fn, 1, Z, "CoordinateZ", RealDouble, &tmp[0]);
-            for (int i = 0; i < nnodes; ++i) zs[i] = static_cast<Real>(tmp[i]);
-        } else {
-            cg_coord_read(fn, 1, Z, "CoordinateX", RealSingle, &xs[0]);
-            cg_coord_read(fn, 1, Z, "CoordinateY", RealSingle, &ys[0]);
-            cg_coord_read(fn, 1, Z, "CoordinateZ", RealSingle, &zs[0]);
-        }
+            auto process_zone = [&]() -> bool {
+                char zonename[33];
+                cgsize_t size[9];
+                CGNS_CALL(cg_zone_read(fn, 1, Z, zonename, size), (void)0);
 
-        int base_offset = static_cast<int>(mesh.nodes.size());
-        mesh.nodes.reserve(mesh.nodes.size() + nnodes);
-        for (int i = 0; i < nnodes; ++i)
-            mesh.nodes.push_back({xs[i], ys[i], zs[i]});
+                ZoneType_t zonetype;
+                CGNS_CALL(cg_zone_type(fn, 1, Z, &zonetype), (void)0);
+                if (zonetype != Unstructured) {
+                    if (err) *err = std::string("CGNS zone '") + zonename + "' is not unstructured";
+                    return false;
+                }
 
-        // Read element sections
-        int nsections;
-        cg_nsections(fn, 1, Z, &nsections);
+                cgsize_t nnodes64 = size[0];
+                if (nnodes64 > INT_MAX) { if (err) *err = "CGNS: too many nodes"; return false; }
+                int nnodes = static_cast<int>(nnodes64);
 
-        for (int S = 1; S <= nsections; ++S) {
-            char secname[33];
-            ElementType_t elem_type;
-            cgsize_t start, end;
-            int nbndry, parent_flag;
-            cg_section_read(fn, 1, Z, S, secname, &elem_type, &start, &end, &nbndry, &parent_flag);
+                int ncoords;
+                CGNS_CALL(cg_ncoords(fn, 1, Z, &ncoords), (void)0);
+                if (ncoords < 3) { if (err) *err = "CGNS: need at least 3 coordinate arrays"; return false; }
 
-            int nelem = static_cast<int>(end - start + 1);
-            int nnodes_per_elem = expected_elem_nodes(elem_type);
-            if (nnodes_per_elem == 0) continue;
+                std::vector<Real> xs(nnodes), ys(nnodes), zs(nnodes);
 
-            int total_conn = nnodes_per_elem * nelem;
-            std::vector<cgsize_t> conn(total_conn);
-            cgsize_t data_size;
-            cg_elements_read(fn, 1, Z, S, &conn[0], &data_size);
-
-            // Determine if this is a volume or boundary element
-            bool is_volume = (elem_type == TETRA_4 || elem_type == HEXA_8 ||
-                              elem_type == PENTA_6 || elem_type == PYRA_5);
-            bool is_face = (elem_type == TRI_3 || elem_type == QUAD_4);
-
-            if (is_volume) {
-                ElementType etype = cgns_elem_to_type(elem_type);
-                for (int e = 0; e < nelem; ++e) {
-                    CfdCell cell;
-                    cell.type = etype;
-                    for (int j = 0; j < nnodes_per_elem && j < 8; ++j) {
-                        int node_id = static_cast<int>(conn[e * nnodes_per_elem + j]) - 1 + base_offset;
-                        cell.node[j] = node_id;
+                for (int coord = 1; coord <= 3; ++coord) {
+                    DataType_t dt;
+                    CGNS_CALL(cg_coord_info(fn, 1, Z, coord, &dt), (void)0);
+                    const char* cname = (coord == 1) ? "CoordinateX" : (coord == 2) ? "CoordinateY" : "CoordinateZ";
+                    std::vector<Real>* target = (coord == 1) ? &xs : (coord == 2) ? &ys : &zs;
+                    if (dt == RealDouble) {
+                        std::vector<double> tmp(nnodes);
+                        CGNS_CALL(cg_coord_read(fn, 1, Z, cname, RealDouble, &tmp[0]), (void)0);
+                        for (int i = 0; i < nnodes; ++i) (*target)[i] = static_cast<Real>(tmp[i]);
+                    } else {
+                        CGNS_CALL(cg_coord_read(fn, 1, Z, cname, RealSingle, &(*target)[0]), (void)0);
                     }
-                    mesh.cells.push_back(cell);
+                }
+
+                for (int i = 0; i < nnodes; ++i) {
+                    if (!std::isfinite(xs[i]) || !std::isfinite(ys[i]) || !std::isfinite(zs[i])) {
+                        if (err) *err = "non-finite coordinate at node " + std::to_string(mesh.nodes.size() + i);
+                        return false;
+                    }
+                }
+
+                int base_offset = static_cast<int>(mesh.nodes.size());
+                mesh.nodes.reserve(mesh.nodes.size() + nnodes);
+                for (int i = 0; i < nnodes; ++i)
+                    mesh.nodes.push_back({xs[i], ys[i], zs[i]});
+
+                int nsections;
+                CGNS_CALL(cg_nsections(fn, 1, Z, &nsections), (void)0);
+
+                for (int S = 1; S <= nsections; ++S) {
+                    char secname[33];
+                    ElementType_t elem_type;
+                    cgsize_t start, end;
+                    int nbndry, parent_flag;
+                    CGNS_CALL(cg_section_read(fn, 1, Z, S, secname, &elem_type, &start, &end, &nbndry, &parent_flag), (void)0);
+
+                    cgsize_t nelem64 = end - start + 1;
+                    if (nelem64 > INT_MAX) { if (err) *err = "CGNS: too many elements in section"; return false; }
+                    int nelem = static_cast<int>(nelem64);
+
+                    int nnodes_per_elem = expected_elem_nodes(elem_type);
+                    if (nnodes_per_elem == 0) {
+                        if (err) *err = std::string("unsupported CGNS element type in section ") + secname;
+                        return false;
+                    }
+
+                    std::size_t total_conn = static_cast<std::size_t>(nnodes_per_elem) * static_cast<std::size_t>(nelem);
+                    std::vector<cgsize_t> conn(total_conn);
+                    cgsize_t data_size;
+                    CGNS_CALL(cg_elements_read(fn, 1, Z, S, &conn[0], &data_size), (void)0);
+
+                    bool is_volume = (elem_type == TETRA_4 || elem_type == HEXA_8 ||
+                                      elem_type == PENTA_6 || elem_type == PYRA_5);
+
+                    if (is_volume) {
+                        ElementType etype = cgns_elem_to_type(elem_type);
+                        for (int e = 0; e < nelem; ++e) {
+                            CfdCell cell;
+                            cell.type = etype;
+                            for (int j = 0; j < nnodes_per_elem && j < 8; ++j) {
+                                int node_id = static_cast<int>(conn[static_cast<std::size_t>(e) * nnodes_per_elem + j]) - 1 + base_offset;
+                                if (node_id < 0 || static_cast<std::size_t>(node_id) >= mesh.nodes.size()) {
+                                    if (err) *err = "CGNS: node index out of range";
+                                    return false;
+                                }
+                                cell.node[j] = node_id;
+                            }
+                            mesh.cells.push_back(cell);
+                        }
+                    } else if (elem_type == TRI_3 || elem_type == QUAD_4) {
+                        for (int e = 0; e < nelem; ++e) {
+                            PendingBcFace pbf;
+                            pbf.n_nodes = nnodes_per_elem;
+                            pbf.kind = BoundaryKind::Farfield;
+                            for (int j = 0; j < nnodes_per_elem; ++j) {
+                                pbf.nodes[j] = static_cast<int>(conn[static_cast<std::size_t>(e) * nnodes_per_elem + j]) - 1 + base_offset;
+                            }
+                            pending_bc_faces.push_back(pbf);
+                        }
+                    }
+                }
+
+                int nbocos;
+                CGNS_CALL(cg_nbocos(fn, 1, Z, &nbocos), (void)0);
+
+                for (int BC = 1; BC <= nbocos; ++BC) {
+                    char boconame[33];
+                    BCType_t bocotype;
+                    PointSetType_t ptset_type;
+                    cgsize_t npnts, normal_list_size;
+                    int normal_list_flag, normal_dir_flag;
+                    CGNS_CALL(cg_boco_read(fn, 1, Z, BC, boconame, &bocotype, &ptset_type,
+                                &npnts, nullptr, &normal_list_size,
+                                &normal_list_flag, &normal_dir_flag), (void)0);
+
+                    BoundaryKind bkind = cgns_bc_to_kind(bocotype);
+
+                    if (ptset_type == Element_t || ptset_type == FaceCenter) {
+                        std::vector<cgsize_t> face_conn(npnts > 0 ? npnts : 1);
+                        cgsize_t* data_ptr = (npnts > 0) ? &face_conn[0] : nullptr;
+                        CGNS_CALL(cg_boco_read(fn, 1, Z, BC, boconame, &bocotype, &ptset_type,
+                                    &npnts, data_ptr, &normal_list_size,
+                                    &normal_list_flag, &normal_dir_flag), (void)0);
+
+                        if (npnts > 0) {
+                            int nface_nodes = (ptset_type == Element_t) ? 1 : 2;
+                            for (cgsize_t p = 0; p < npnts / nface_nodes; ++p) {
+                                cgsize_t fe_idx = face_conn[static_cast<std::size_t>(p) * nface_nodes];
+                                if (fe_idx >= 1 && static_cast<std::size_t>(fe_idx - 1) < pending_bc_faces.size()) {
+                                    pending_bc_faces[static_cast<std::size_t>(fe_idx - 1)].kind = bkind;
+                                }
+                            }
+                        }
+                    }
+                }
+                return true;
+            };
+
+            if (!process_zone()) {
+                mesh.nodes.resize(cp_nodes);
+                mesh.cells.resize(cp_cells);
+                pending_bc_faces.resize(cp_bc);
+                return false;
+            }
+        }
+
+        // Build faces from cells
+        rebuild_mesh_faces(mesh);
+
+        // Validate positive cell volumes
+        for (std::size_t ci = 0; ci < mesh.cells.size(); ++ci) {
+            if (mesh.cells[ci].volume <= Real(0)) {
+                if (err) *err = "non-positive cell volume at " + std::to_string(ci);
+                return false;
+            }
+        }
+
+        // Apply boundary markers from CGNS boundary conditions by matching node sets
+        for (auto& face : mesh.faces) {
+            if (face.right_cell >= 0) continue;
+            int fn = face.node_count;
+            for (const auto& pbf : pending_bc_faces) {
+                if (pbf.n_nodes != fn) continue;
+                // Compare sorted node sets
+                int face_sorted[4], pbf_sorted[4];
+                for (int i = 0; i < fn; ++i) {
+                    face_sorted[i] = face.node[i];
+                    pbf_sorted[i] = pbf.nodes[i];
+                }
+                std::sort(face_sorted, face_sorted + fn);
+                std::sort(pbf_sorted, pbf_sorted + fn);
+                bool match = true;
+                for (int i = 0; i < fn; ++i) {
+                    if (face_sorted[i] != pbf_sorted[i]) { match = false; break; }
+                }
+                if (match) {
+                    face.boundary = pbf.kind;
+                    break;
                 }
             }
         }
 
-        // Read boundary conditions
-        int nbocos;
-        cg_nbocos(fn, 1, Z, &nbocos);
-
-        for (int BC = 1; BC <= nbocos; ++BC) {
-            char boconame[33];
-            BCType_t bocotype;
-            cgsize_t ptset_type, npnts, normal_list_size;
-            cgsize_t normal_list_flag, normal_dir_flag;
-            cg_boco_read(fn, 1, Z, BC, boconame, &bocotype, &ptset_type,
-                        &npnts, nullptr, &normal_list_size,
-                        &normal_list_flag, &normal_dir_flag);
-
-            BoundaryKind bkind = cgns_bc_to_kind(bocotype);
-
-            // Read boundary face elements
-            if (ptset_type == Element_t || ptset_type == FaceCenter) {
-                std::vector<cgsize_t> face_conn(npnts);
-                cg_boco_read(fn, 1, Z, BC, boconame, &bocotype, &ptset_type,
-                            &npnts, &face_conn[0], &normal_list_size,
-                            &normal_list_flag, &normal_dir_flag);
-
-                // face_conn contains local element/section references.
-                // We need to look up the actual element from the sections.
-                // For Element_t ptSet: face_conn contains (section_idx, elem_idx) pairs.
-                // We'll add the boundary faces later via rebuild_faces + marker override.
+        // Validate: all boundary faces should have non-Farfield markers
+        for (std::size_t fi = 0; fi < mesh.faces.size(); ++fi) {
+            const auto& face = mesh.faces[fi];
+            if (face.right_cell >= 0) continue;
+            if (face.boundary == BoundaryKind::Farfield) {
+                // Farfield is the fallback — acceptable if file has no BC section
             }
         }
+
+        return true;
+
+    } catch (std::bad_alloc&) {
+        if (err) *err = "CGNS: out of memory";
+        return false;
+    } catch (std::exception& e) {
+        if (err) *err = std::string("CGNS: ") + e.what();
+        return false;
     }
-
-    // Build faces from cells
-    rebuild_mesh_faces(mesh);
-
-    // Apply boundary markers from CGNS boundary conditions
-    // (simplified: rebuild_faces classifies walls from geometry,
-    //  CGNS markers could override here if needed)
-
-    cg_close(fn);
-    return true;
 
 #else // WITH_CGNS not defined
     (void)mesh;

@@ -452,3 +452,19 @@
 - Added CFD-MESH-IO-2 CGNS fallback test (verifies graceful failure with error message)
 - Registered mesh_io_cgns.cpp in CMakeLists.txt. Build + CfdMesh 10/10 + CfdGpu 39/39 all pass.
 - Phase 9.2 complete. Phase 9 all tasks closed.
+2026-07-11 — Phase 9 audit fixes (3-parallel subagent audit)
+- 11 HIGH, 16 MEDIUM, 10 LOW findings across SU2/CGNS/quality validator
+- SU2: NELEM TRI/QUAD拒绝(H1), 节点索引范围检查(H2), 坐标NaN检查(H3), stoi/stod异常处理(M3), 关键字顺序强制(M1), 标记数验证(M2), 未知标签拒绝(M5), 体积极限检查(M4), fprintf检查(L3), ELEMENT_NODES边界(L4)
+- CGNS: BC标记应用(H1), CGNS_CALL宏+RAII CgnsFile(H2/H3), size_t防溢出(H4), 坐标独立数据类型(M1), cgsize_t截断验证(M2), PointSetType_t修正(M3), 多区域回滚(M4), NaN坐标检查(M5), 正体积验证(M6), 不支持的段拒绝(M7), 未知类型拒绝(M8), npnts==0保护(L2)
+- 质量验证: penta雅可比重写(H1/H2/H3), 正交性fabs修正(H4), fi<0保护(M1), to_vec NaN守卫(M2), π精度(M3), NaN体积消息(L1)
+- Build + CfdMesh 10/10 + CfdGpu 39/39 + all CFD suites 6/6 PASS.
+- Phase 9 audit: 36/37 fixed. 1 LOW (nmark unused) left open.
+2026-07-11 — Phase 9 re-audit + free audit fix pass (2-parallel subagent re-audit)
+- Track 1 复检: PH9-2-M4 (多区域回滚) + PH9-2-M6 (正体积验证) 重开并修复; node_id int截断修复
+- Track 2 自由审计 18项全部修复:
+  - HIGH: GPU BJ limiter添加nu_tilde分量(H1), real_pow/exp双精度抽象(H2), 内核间d_failed检查(H3), MPI流销毁(H4)
+  - MEDIUM: 4个头文件#pragma once顺序(M1), solve_3x3容差Real(1e-12)(M2), sa_omega_tilde死函数删除(M3), SA扩散sigma系数(M4), d_q_/d_limiters_上传前清零(M5)
+  - LOW: gpu_viscous空原子加删除(L1), diagnostics.cpp int→size_t(L2), gpu_timestep numeric_limits<Real>(L3), upload/download NGRAD统一(L4), cfd_solver重复初始值合并(L5)
+  - INFO: gpu_buffers.cu陈旧引用修正(I3)
+- Build + 6/6 CFD suites (CfdMesh 10/10, CfdEuler 8/8, CfdDiagnostics 4/4, CfdReconstruction 7/7, CfdViscous 11/11, CfdGpu 39/39) ALL PASS.
+- Total: 20/21 new entries fixed, 1 INFO (I4: gpu_buffers.hpp alias) kept as compatibility shim.

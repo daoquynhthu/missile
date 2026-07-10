@@ -1,5 +1,6 @@
-#include "aero/cfd/real.hpp"
 #pragma once
+#include "aero/cfd/real.hpp"
+
 
 #include "aero/cfd/cfd_config.hpp"
 #include "aero/cfd/cfd_mesh.hpp"

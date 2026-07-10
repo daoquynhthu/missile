@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -54,7 +55,16 @@ BoundaryKind tag_to_boundary(const std::string& tag) {
     if (low == "symmetry")                        return BoundaryKind::Symmetry;
     if (low == "inflow" || low == "inlet")        return BoundaryKind::Farfield;
     if (low == "outflow" || low == "outlet")      return BoundaryKind::Farfield;
+    // Unknown tag — return Farfield as fallback, err set by caller if needed
     return BoundaryKind::Farfield;
+}
+
+bool is_known_boundary_tag(const std::string& tag) {
+    std::string low = tag;
+    for (auto& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return low == "wall" || low == "noslipwall" || low == "farfield" ||
+           low == "symmetry" || low == "inflow" || low == "inlet" ||
+           low == "outflow" || low == "outlet";
 }
 
 std::string boundary_to_tag(BoundaryKind b) {
@@ -225,6 +235,7 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
         auto tokens = tokenize(line);
         if (tokens.empty()) continue;
 
+        try {
         // Handle key = value (SU2 format: "NDIME= 3" or "NDIME=3" or "NDIME 3")
         auto split_kv = [](const std::string& s) -> std::pair<std::string, std::string> {
             auto eq = s.find('=');
@@ -237,18 +248,23 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
 
         if (kw == "NDIME") { ndime = std::stoi(val); continue; }
         if (kw == "NPOIN") {
+            if (section >= 1) { if (err) *err = "duplicate NPOIN"; return false; }
             npoin = std::stoi(val);
             mesh.nodes.reserve(static_cast<std::size_t>(npoin));
             section = 1;
             continue;
         }
         if (kw == "NELEM") {
+            if (section >= 2) { if (err) *err = "duplicate NELEM"; return false; }
+            if (section < 1) { if (err) *err = "NELEM before NPOIN"; return false; }
             nelem = std::stoi(val);
             mesh.cells.reserve(static_cast<std::size_t>(nelem));
             section = 2;
             continue;
         }
         if (kw == "NMARK") {
+            if (section >= 3) { if (err) *err = "duplicate NMARK"; return false; }
+            if (section < 2) { if (err) *err = "NMARK before NELEM"; return false; }
             nmark = std::stoi(val);
             section = 3;
             continue;
@@ -258,6 +274,10 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
             if (current_marker_tag.empty() && tokens.size() > 1) current_marker_tag = tokens[1];
             if (current_marker_tag.empty()) {
                 if (err) *err = "MARKER_TAG without value";
+                return false;
+            }
+            if (!is_known_boundary_tag(current_marker_tag)) {
+                if (err) *err = "unknown boundary tag: " + current_marker_tag;
                 return false;
             }
             expected_marker_count = 0;
@@ -282,11 +302,19 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
             node.x = static_cast<Real>(std::stod(tokens[1]));
             node.y = static_cast<Real>(std::stod(tokens[2]));
             node.z = static_cast<Real>(std::stod(tokens[3]));
+            if (!std::isfinite(node.x) || !std::isfinite(node.y) || !std::isfinite(node.z)) {
+                if (err) *err = "non-finite coordinate at node " + std::to_string(mesh.nodes.size());
+                return false;
+            }
             mesh.nodes.push_back(node);
         } else if (section == 2) {
             // NELEM: <su2_type> <tag> <node1> <node2> ...
             if (tokens.size() < 3) continue;
             int su2_type = std::stoi(tokens[0]);
+            if (su2_type == 5 || su2_type == 13) {
+                if (err) *err = std::string("face element type ") + std::to_string(su2_type) + " in volume element section";
+                return false;
+            }
             auto info = su2_to_elem(su2_type);
             if (info.n_nodes == 0) {
                 if (err) *err = "unsupported SU2 element type: " + std::to_string(su2_type);
@@ -299,7 +327,12 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
             CfdCell cell;
             cell.type = info.type;
             for (int i = 0; i < info.n_nodes; ++i) {
-                cell.node[i] = std::stoi(tokens[2 + i]);
+                int ni = std::stoi(tokens[2 + i]);
+                if (ni < 0 || static_cast<std::size_t>(ni) >= mesh.nodes.size()) {
+                    if (err) *err = "node index " + std::to_string(ni) + " out of range [0," + std::to_string(mesh.nodes.size()) + ")";
+                    return false;
+                }
+                cell.node[i] = ni;
             }
             mesh.cells.push_back(cell);
         } else if (section == 3) {
@@ -320,8 +353,28 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
             marker_faces.push_back(mf);
             current_marker_count++;
         }
+        } // try
+        catch (const std::exception& e) {
+            if (err) *err = std::string("parse error: ") + e.what();
+            return false;
+        }
     }
 
+    if (expected_marker_count > 0 && current_marker_count != expected_marker_count) {
+        if (err) *err = "marker element count mismatch: expected " + std::to_string(expected_marker_count) +
+                        ", got " + std::to_string(current_marker_count);
+        return false;
+    }
+    if (static_cast<int>(mesh.nodes.size()) != npoin) {
+        if (err) *err = "node count mismatch: declared " + std::to_string(npoin) +
+                        ", read " + std::to_string(mesh.nodes.size());
+        return false;
+    }
+    if (static_cast<int>(mesh.cells.size()) != nelem) {
+        if (err) *err = "element count mismatch: declared " + std::to_string(nelem) +
+                        ", read " + std::to_string(mesh.cells.size());
+        return false;
+    }
     if (ndime != 3) {
         if (err) *err = "only 3D meshes supported (NDIME=" + std::to_string(ndime) + ")";
         return false;
@@ -333,6 +386,14 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
 
     // Build faces from volume elements
     build_faces_from_cells(mesh);
+
+    // Validate positive cell volumes
+    for (std::size_t ci = 0; ci < mesh.cells.size(); ++ci) {
+        if (mesh.cells[ci].volume <= Real(0)) {
+            if (err) *err = "non-positive volume at cell " + std::to_string(ci);
+            return false;
+        }
+    }
 
     // Match boundary faces to marker faces
     for (auto& face : mesh.faces) {
@@ -347,6 +408,18 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
     return true;
 }
 
+static bool checked_fprintf(std::FILE* f, std::string* err, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    if (std::vfprintf(f, fmt, args) < 0) {
+        va_end(args);
+        if (err) *err = "write error";
+        return false;
+    }
+    va_end(args);
+    return true;
+}
+
 bool write_mesh_su2(const CfdMesh& mesh, const std::string& path, std::string* err) {
     std::FILE* f = std::fopen(path.c_str(), "w");
     if (!f) {
@@ -354,16 +427,18 @@ bool write_mesh_su2(const CfdMesh& mesh, const std::string& path, std::string* e
         return false;
     }
 
-    std::fprintf(f, "NDIME= 3\n");
-    std::fprintf(f, "NPOIN= %zu\n", mesh.nodes.size());
+#define CHECKED_PRINTF(...) do { if (!checked_fprintf(f, err, __VA_ARGS__)) { std::fclose(f); return false; } } while(0)
+
+    CHECKED_PRINTF("NDIME= 3\n");
+    CHECKED_PRINTF("NPOIN= %zu\n", mesh.nodes.size());
     for (std::size_t i = 0; i < mesh.nodes.size(); ++i) {
-        std::fprintf(f, "%zu  %.15g  %.15g  %.15g\n", i,
+        CHECKED_PRINTF("%zu  %.15g  %.15g  %.15g\n", i,
                      static_cast<double>(mesh.nodes[i].x),
                      static_cast<double>(mesh.nodes[i].y),
                      static_cast<double>(mesh.nodes[i].z));
     }
 
-    std::fprintf(f, "NELEM= %zu\n", mesh.cells.size());
+    CHECKED_PRINTF("NELEM= %zu\n", mesh.cells.size());
     for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
         const auto& cell = mesh.cells[i];
         int su2_type = elem_to_su2(cell.type);
@@ -372,12 +447,18 @@ bool write_mesh_su2(const CfdMesh& mesh, const std::string& path, std::string* e
             if (err) *err = "unsupported cell type at cell " + std::to_string(i);
             return false;
         }
-        int nn = ELEMENT_NODES[static_cast<int>(cell.type)];
-        std::fprintf(f, "%d %zu", su2_type, i);
-        for (int j = 0; j < nn; ++j) {
-            std::fprintf(f, " %d", cell.node[j]);
+        int et = static_cast<int>(cell.type);
+        if (et < 0 || et >= 4) {
+            std::fclose(f);
+            if (err) *err = "invalid cell type at cell " + std::to_string(i);
+            return false;
         }
-        std::fprintf(f, "\n");
+        int nn = ELEMENT_NODES[et];
+        CHECKED_PRINTF("%d %zu", su2_type, i);
+        for (int j = 0; j < nn; ++j) {
+            CHECKED_PRINTF(" %d", cell.node[j]);
+        }
+        CHECKED_PRINTF("\n");
     }
 
     // Collect boundary faces by kind
@@ -389,21 +470,23 @@ bool write_mesh_su2(const CfdMesh& mesh, const std::string& path, std::string* e
         boundary_groups[bk].push_back(i);
     }
 
-    std::fprintf(f, "NMARK= %zu\n", boundary_groups.size());
+    CHECKED_PRINTF("NMARK= %zu\n", boundary_groups.size());
     for (const auto& [bk_int, face_indices] : boundary_groups) {
         auto bk = static_cast<BoundaryKind>(bk_int);
-        std::fprintf(f, "MARKER_TAG= %s\n", boundary_to_tag(bk).c_str());
-        std::fprintf(f, "MARKER_ELEMS= %zu\n", face_indices.size());
+        CHECKED_PRINTF("MARKER_TAG= %s\n", boundary_to_tag(bk).c_str());
+        CHECKED_PRINTF("MARKER_ELEMS= %zu\n", face_indices.size());
         for (std::size_t fi : face_indices) {
             const auto& face = mesh.faces[fi];
             int face_type = (face.node_count == 4) ? 13 : 5;  // QUAD or TRI
-            std::fprintf(f, "%d 0", face_type);
+            CHECKED_PRINTF("%d 0", face_type);
             for (int j = 0; j < face.node_count; ++j) {
-                std::fprintf(f, " %d", face.node[j]);
+                CHECKED_PRINTF(" %d", face.node[j]);
             }
-            std::fprintf(f, "\n");
+            CHECKED_PRINTF("\n");
         }
     }
+
+#undef CHECKED_PRINTF
 
     std::fclose(f);
     return true;

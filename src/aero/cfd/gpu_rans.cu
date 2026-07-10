@@ -106,12 +106,12 @@ __global__ void rans_source_kernel(
         Real fw_g = r + cw2 * (r6 - r);
         Real fw_num = 1.0f + cw3*cw3*cw3*cw3*cw3*cw3;
         Real fw_den = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3*cw3*cw3*cw3*cw3*cw3 + 1e-30f;
-        Real fw = fw_g * powf(fw_num / fw_den, 1.0f / 6.0f);
+        Real fw = fw_g * real_pow(fw_num / fw_den, Real(1.0 / 6.0));
         Real destruction = cw1 * fw * (nu_tilde / wall_distance) * (nu_tilde / wall_distance);
 
         source = production - destruction + diffusion;
     } else {
-        Real ft2 = ct3 * expf(-ct4 * chi * chi);
+        Real ft2 = ct3 * real_exp(-ct4 * chi * chi);
         Real vort = d_sa_vorticity(*g);
         Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
         source = cb1 * (1.0f - ft2) * vort * nu_tilde

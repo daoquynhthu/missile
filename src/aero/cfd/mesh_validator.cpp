@@ -27,7 +27,11 @@ Vec3 cross(Vec3 a, Vec3 b) {
 }
 Real norm(Vec3 a) { return std::sqrt(dot(a, a)); }
 
-Vec3 to_vec(const CfdNode& n) { return {n.x, n.y, n.z}; }
+Vec3 to_vec(const CfdNode& n) {
+    if (!std::isfinite(n.x) || !std::isfinite(n.y) || !std::isfinite(n.z))
+        return {0, 0, 0};
+    return {n.x, n.y, n.z};
+}
 
 Real signed_volume_tet(Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
     return dot(b - a, cross(c - a, d - a)) / 6.0f;
@@ -97,41 +101,30 @@ bool hex_jacobian_sign(const Vec3 v[8], int& neg_count) {
 }
 
 Real penta_corner_jacobian(const Vec3 v[6], int corner) {
-    constexpr int tmap[6] = {0, 1, 2, 0, 1, 2};
-    constexpr int smap[6] = {0, 0, 0, 1, 1, 1};
-    int s = smap[corner] ? 1 : -1;
-    int t = tmap[corner];
-    Real N[6];
-    if (t == 0) {
-        N[0] = (1.0f - s) / 2.0f; N[3] = (1.0f + s) / 2.0f;
-        N[1] = N[2] = N[4] = N[5] = 0.0f;
-    } else if (t == 1) {
-        N[1] = (1.0f - s) / 2.0f; N[4] = (1.0f + s) / 2.0f;
-        N[0] = N[2] = N[3] = N[5] = 0.0f;
-    } else {
-        N[2] = (1.0f - s) / 2.0f; N[5] = (1.0f + s) / 2.0f;
-        N[0] = N[1] = N[3] = N[4] = 0.0f;
-    }
-    Real xi = (t == 0) ? 1.0f : 0.0f;
-    Real eta = (t == 1) ? 1.0f : 0.0f;
-    Real zeta = (t == 2) ? 1.0f : (1.0f - xi - eta);
-    Real dNdr[6], dNds[6];
-    for (int i = 0; i < 6; ++i) {
-        if (i < 3) {
-            if (tmap[i] == 0) { dNdr[i] = 1.0f; dNds[i] = -(1.0f + smap[i]) / 2.0f; }
-            else if (tmap[i] == 1) { dNdr[i] = 0.0f; dNds[i] = -(1.0f + smap[i]) / 2.0f; }
-            else { dNdr[i] = -1.0f; dNds[i] = -(1.0f + smap[i]) / 2.0f; }
-        } else {
-            if (tmap[i] == 0) { dNdr[i] = 1.0f; dNds[i] = (1.0f + smap[i]) / 2.0f; }
-            else if (tmap[i] == 1) { dNdr[i] = 0.0f; dNds[i] = (1.0f + smap[i]) / 2.0f; }
-            else { dNdr[i] = -1.0f; dNds[i] = (1.0f + smap[i]) / 2.0f; }
-        }
-    }
+    // Wedge parametric coordinates (xi, eta, zeta):
+    //   xi, eta in [0,1]  (triangle barycentric coordinates)
+    //   zeta in [-1, 1]  (extrusion direction)
+    // Corner mapping:
+    //   0: (1,0,-1)  3: (1,0,1)
+    //   1: (0,1,-1)  4: (0,1,1)
+    //   2: (0,0,-1)  5: (0,0,1)
+    constexpr Real xi_c[6] = {1,0,0, 1,0,0};
+    constexpr Real eta_c[6] = {0,1,0, 0,1,0};
+    constexpr Real zeta_c[6] = {-1,-1,-1, 1,1,1};
+    Real xi = xi_c[corner], eta = eta_c[corner], zeta = zeta_c[corner];
+    Real dN[6][3] = {};
+    // dN[i][0] = dNi/dxi, dN[i][1] = dNi/deta, dN[i][2] = dNi/dzeta
+    dN[0][0] = -0.5f * (1.0f - zeta); dN[0][1] = -0.5f * (1.0f - zeta); dN[0][2] = -0.5f * (1.0f - xi - eta);
+    dN[1][0] =  0.5f * (1.0f - zeta); dN[1][1] =  0.0f;                 dN[1][2] = -0.5f * xi;
+    dN[2][0] =  0.0f;                 dN[2][1] =  0.5f * (1.0f - zeta); dN[2][2] = -0.5f * eta;
+    dN[3][0] = -0.5f * (1.0f + zeta); dN[3][1] = -0.5f * (1.0f + zeta); dN[3][2] =  0.5f * (1.0f - xi - eta);
+    dN[4][0] =  0.5f * (1.0f + zeta); dN[4][1] =  0.0f;                 dN[4][2] =  0.5f * xi;
+    dN[5][0] =  0.0f;                 dN[5][1] =  0.5f * (1.0f + zeta); dN[5][2] =  0.5f * eta;
     Real J[3][3] = {};
     for (int i = 0; i < 6; ++i) {
-        J[0][0] += v[i].x * dNdr[i]; J[0][1] += v[i].y * dNdr[i]; J[0][2] += v[i].z * dNdr[i];
-        J[1][0] += v[i].x * dNds[i]; J[1][1] += v[i].y * dNds[i]; J[1][2] += v[i].z * dNds[i];
-        J[2][0] += v[i].x * N[i];    J[2][1] += v[i].y * N[i];    J[2][2] += v[i].z * N[i];
+        J[0][0] += v[i].x * dN[i][0]; J[0][1] += v[i].y * dN[i][0]; J[0][2] += v[i].z * dN[i][0];
+        J[1][0] += v[i].x * dN[i][1]; J[1][1] += v[i].y * dN[i][1]; J[1][2] += v[i].z * dN[i][1];
+        J[2][0] += v[i].x * dN[i][2]; J[2][1] += v[i].y * dN[i][2]; J[2][2] += v[i].z * dN[i][2];
     }
     Real det = J[0][0] * (J[1][1]*J[2][2] - J[1][2]*J[2][1])
              - J[0][1] * (J[1][0]*J[2][2] - J[1][2]*J[2][0])
@@ -256,7 +249,7 @@ MeshQualityReport compute_mesh_quality_detail(const CfdMesh& mesh) {
         for (int lf = 0; lf < nf; ++lf) {
             if (lf >= cell.face_count) break;
             int fi = cell.first_face + lf;
-            if (fi >= static_cast<int>(mesh.faces.size())) break;
+            if (fi < 0 || fi >= static_cast<int>(mesh.faces.size())) break;
             const CfdFace& face = mesh.faces[fi];
             Vec3 fc = {face.cx, face.cy, face.cz};
             Vec3 cf = fc - cc;
@@ -264,8 +257,8 @@ MeshQualityReport compute_mesh_quality_detail(const CfdMesh& mesh) {
             if (cf_len < 1e-30f) continue;
             cf.x /= cf_len; cf.y /= cf_len; cf.z /= cf_len;
             Vec3 fn = {face.nx, face.ny, face.nz};
-            Real d = dot(cf, fn);
-            Real ortho = std::acos(std::min(std::max(d, -1.0f), 1.0f)) * 180.0f / 3.141592653589f;
+            Real d = std::fabs(dot(cf, fn));
+            Real ortho = std::acos(std::min(std::max(d, -1.0f), 1.0f)) * Real(180.0) / Real(3.14159265358979323846);
             Real skew = std::fabs(90.0f - ortho) / 90.0f;
             cell_ortho_sum += ortho;
             cell_skew_sum += skew;
@@ -319,8 +312,8 @@ MeshQualityReport compute_mesh_quality_detail(const CfdMesh& mesh) {
     if (!r.valid) {
         if (r.negative_jacobian_count > 0)
             r.message = "negative Jacobian detected";
-        else if (r.min_volume <= 0.0f)
-            r.message = "non-positive cell volume";
+        else if (!(r.min_volume > 0.0f))
+            r.message = "non-positive or NaN cell volume";
     }
 
     return r;

@@ -253,7 +253,7 @@ __global__ void gg_gradient_kernel_colored(
     gL[14] += dp * nz * left_scale;
 }
 
-constexpr int kMINMAX_STRIDE = 10;
+constexpr int kMINMAX_STRIDE = 12;
 
 __global__ void init_minmax_kernel(
     const Real* d_q, int nvar, int n_cells, Real gamma,
@@ -270,6 +270,7 @@ __global__ void init_minmax_kernel(
         m[4] = 1e10f;  m[5] = -1e10f;
         m[6] = 1e10f;  m[7] = -1e10f;
         m[8] = 1e10f;  m[9] = -1e10f;
+        m[10] = 1e10f; m[11] = -1e10f;
         return;
     }
     Real* m = d_minmax + idx * kMINMAX_STRIDE;
@@ -278,6 +279,8 @@ __global__ void init_minmax_kernel(
     m[4] = v;   m[5] = v;
     m[6] = w;   m[7] = w;
     m[8] = p;   m[9] = p;
+    Real nu_tilde = d_q[idx * nvar + 5] * (1.0f / rho);
+    m[10] = nu_tilde; m[11] = nu_tilde;
 }
 
 __global__ void update_minmax_kernel(
@@ -310,12 +313,16 @@ __global__ void update_minmax_kernel(
         real_atomic_max(max_addr, val);
     };
 
+    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
+    Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
+
     Real* mL = d_minmax + left * kMINMAX_STRIDE;
     update(&mL[0], &mL[1], rhoR);
     update(&mL[2], &mL[3], uR);
     update(&mL[4], &mL[5], vR);
     update(&mL[6], &mL[7], wR);
     update(&mL[8], &mL[9], pR);
+    update(&mL[10], &mL[11], nu_tildeR);
 
     Real* mR = d_minmax + right * kMINMAX_STRIDE;
     update(&mR[0], &mR[1], rhoL);
@@ -323,6 +330,7 @@ __global__ void update_minmax_kernel(
     update(&mR[4], &mR[5], vL);
     update(&mR[6], &mR[7], wL);
     update(&mR[8], &mR[9], pL);
+    update(&mR[10], &mR[11], nu_tildeL);
 }
 
 __device__ Real limiter_theta_device(Real center, Real reconstructed, Real min_val, Real max_val) {
@@ -366,12 +374,15 @@ __global__ void bj_limiter_kernel(
     Real dyL = d_face_cy[idx] - d_cy[left];
     Real dzL = d_face_cz[idx] - d_cz[left];
 
+    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
+
     const Real* gL = d_gradients + left * DeviceMesh::NGRAD;
     Real rec_rho = rhoL + gL[0]*dxL + gL[1]*dyL + gL[2]*dzL;
     Real rec_u = uL + gL[3]*dxL + gL[4]*dyL + gL[5]*dzL;
     Real rec_v = vL + gL[6]*dxL + gL[7]*dyL + gL[8]*dzL;
     Real rec_w = wL + gL[9]*dxL + gL[10]*dyL + gL[11]*dzL;
     Real rec_p = pL + gL[12]*dxL + gL[13]*dyL + gL[14]*dzL;
+    Real rec_nu_tilde = nu_tildeL + gL[15]*dxL + gL[16]*dyL + gL[17]*dzL;
 
     const Real* mL = d_minmax + left * kMINMAX_STRIDE;
     Real t_rho = limiter_theta_device(rhoL, rec_rho, mL[0], mL[1]);
@@ -379,6 +390,7 @@ __global__ void bj_limiter_kernel(
     Real t_v = limiter_theta_device(vL, rec_v, mL[4], mL[5]);
     Real t_w = limiter_theta_device(wL, rec_w, mL[6], mL[7]);
     Real t_p = limiter_theta_device(pL, rec_p, mL[8], mL[9]);
+    Real t_nu = limiter_theta_device(nu_tildeL, rec_nu_tilde, mL[10], mL[11]);
 
     Real* limL = d_limiters + left * 6;
     real_atomic_min(&limL[0], t_rho);
@@ -386,6 +398,7 @@ __global__ void bj_limiter_kernel(
     real_atomic_min(&limL[2], t_v);
     real_atomic_min(&limL[3], t_w);
     real_atomic_min(&limL[4], t_p);
+    real_atomic_min(&limL[5], t_nu);
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
@@ -400,12 +413,15 @@ __global__ void bj_limiter_kernel(
         Real dyR = d_face_cy[idx] - d_cy[right];
         Real dzR = d_face_cz[idx] - d_cz[right];
 
+        Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
+
         const Real* gR = d_gradients + right * DeviceMesh::NGRAD;
         rec_rho = rhoR + gR[0]*dxR + gR[1]*dyR + gR[2]*dzR;
         rec_u = uR + gR[3]*dxR + gR[4]*dyR + gR[5]*dzR;
         rec_v = vR + gR[6]*dxR + gR[7]*dyR + gR[8]*dzR;
         rec_w = wR + gR[9]*dxR + gR[10]*dyR + gR[11]*dzR;
         rec_p = pR + gR[12]*dxR + gR[13]*dyR + gR[14]*dzR;
+        rec_nu_tilde = nu_tildeR + gR[15]*dxR + gR[16]*dyR + gR[17]*dzR;
 
         const Real* mR = d_minmax + right * kMINMAX_STRIDE;
         t_rho = limiter_theta_device(rhoR, rec_rho, mR[0], mR[1]);
@@ -413,6 +429,7 @@ __global__ void bj_limiter_kernel(
         t_v = limiter_theta_device(vR, rec_v, mR[4], mR[5]);
         t_w = limiter_theta_device(wR, rec_w, mR[6], mR[7]);
         t_p = limiter_theta_device(pR, rec_p, mR[8], mR[9]);
+        t_nu = limiter_theta_device(nu_tildeR, rec_nu_tilde, mR[10], mR[11]);
 
         Real* limR = d_limiters + right * 6;
         real_atomic_min(&limR[0], t_rho);
@@ -420,6 +437,7 @@ __global__ void bj_limiter_kernel(
         real_atomic_min(&limR[2], t_v);
         real_atomic_min(&limR[3], t_w);
         real_atomic_min(&limR[4], t_p);
+        real_atomic_min(&limR[5], t_nu);
     }
 }
 
@@ -505,15 +523,31 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
     int cell_grid = (nc + block - 1) / block;
     int face_grid = (nf + block - 1) / block;
 
+    auto check_failed = [&]() -> bool {
+        if (!d_failed) return true;
+        int host_failed = 0;
+        if (!cuda_check(cudaDeviceSynchronize(), "limiter sync", error)) return false;
+        if (!cuda_check(cudaMemcpy(&host_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost),
+                "limiter read d_failed", error)) return false;
+        if (host_failed) {
+            if (error) *error = "invalid cell state detected in limiter computation";
+            return false;
+        }
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset d_failed", error)) return false;
+        return true;
+    };
+
     init_minmax_kernel<<<cell_grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, nc, gamma, d_minmax, d_failed);
     if (!cuda_check(cudaGetLastError(), "init_minmax_kernel", error)) { cuda_free_safe(d_minmax); return false; }
+    if (!check_failed()) { cuda_free_safe(d_minmax); return false; }
 
     update_minmax_kernel<<<face_grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, nc, nf,
         mesh.face_data().left_cell, mesh.face_data().right_cell, mesh.face_data().boundary,
         gamma, d_minmax, d_failed);
     if (!cuda_check(cudaGetLastError(), "update_minmax_kernel", error)) { cuda_free_safe(d_minmax); return false; }
+    if (!check_failed()) { cuda_free_safe(d_minmax); return false; }
 
     int limiter_grid = (nc * 6 + block - 1) / block;
     init_float_one_kernel<<<limiter_grid, block>>>(mesh.limiters_device(), nc * 6);
@@ -528,17 +562,8 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
         mesh.gradients_device(), d_minmax,
         mesh.limiters_device(), d_failed);
     if (!cuda_check(cudaGetLastError(), "bj_limiter_kernel", error)) { cuda_free_safe(d_minmax); return false; }
+    if (!check_failed()) { cuda_free_safe(d_minmax); return false; }
     cuda_free_safe(d_minmax);
-
-    if (d_failed) {
-        int host_failed = 0;
-        if (!cuda_check(cudaMemcpy(&host_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost),
-                "limiter read d_failed", error)) return false;
-        if (host_failed) {
-            if (error) *error = "invalid cell state detected in limiter computation";
-            return false;
-        }
-    }
     return true;
 }
 
