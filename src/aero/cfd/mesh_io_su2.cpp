@@ -1,0 +1,414 @@
+#include "aero/cfd/mesh_io.hpp"
+#include "aero/cfd/cfd_mesh.hpp"
+#include "aero/cfd/element_types.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace aerosp {
+namespace aero {
+namespace cfd {
+namespace {
+
+// SU2 element type → our ElementType
+// SU2: 3=TETRA, 5=TRI, 9=HEXA, 12=WEDGE, 13=QUAD, 14=PYRAMID
+struct Su2ElemInfo {
+    ElementType type;
+    int n_nodes;
+};
+
+Su2ElemInfo su2_to_elem(int su2_type) {
+    switch (su2_type) {
+        case 3:  return {ElementType::TET4, 4};
+        case 5:  return {ElementType::TET4, 3};  // TRI face element
+        case 9:  return {ElementType::HEX8, 8};
+        case 12: return {ElementType::PENTA6, 6};
+        case 13: return {ElementType::TET4, 4};  // QUAD face element
+        case 14: return {ElementType::PYRAMID5, 5};
+        default: return {ElementType::TET4, 0};   // unsupported
+    }
+}
+
+int elem_to_su2(ElementType type) {
+    switch (type) {
+        case ElementType::TET4:     return 3;
+        case ElementType::HEX8:     return 9;
+        case ElementType::PENTA6:   return 12;
+        case ElementType::PYRAMID5: return 14;
+        default: return 0;
+    }
+}
+
+BoundaryKind tag_to_boundary(const std::string& tag) {
+    std::string low = tag;
+    for (auto& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (low == "wall" || low == "noslipwall")    return BoundaryKind::NoSlipWall;
+    if (low == "farfield")                        return BoundaryKind::Farfield;
+    if (low == "symmetry")                        return BoundaryKind::Symmetry;
+    if (low == "inflow" || low == "inlet")        return BoundaryKind::Farfield;
+    if (low == "outflow" || low == "outlet")      return BoundaryKind::Farfield;
+    return BoundaryKind::Farfield;
+}
+
+std::string boundary_to_tag(BoundaryKind b) {
+    switch (b) {
+        case BoundaryKind::NoSlipWall: return "wall";
+        case BoundaryKind::SlipWall:   return "slipwall";
+        case BoundaryKind::Farfield:   return "farfield";
+        case BoundaryKind::Symmetry:   return "symmetry";
+        default:                       return "farfield";
+    }
+}
+
+// Trim whitespace from both ends
+std::string trim(const std::string& s) {
+    std::size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) ++start;
+    std::size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) --end;
+    return s.substr(start, end - start);
+}
+
+// Parse a line into tokens, handling both space and tab separators
+std::vector<std::string> tokenize(const std::string& line) {
+    std::vector<std::string> tokens;
+    std::string current;
+    for (std::size_t i = 0; i < line.size(); ++i) {
+        char c = line[i];
+        if (c == '%') break;  // comment
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) tokens.push_back(current);
+    return tokens;
+}
+
+// Match a face by sorted node set against a list of marker faces
+struct MarkerFace {
+    BoundaryKind boundary;
+    std::vector<int> sorted_nodes;
+};
+
+int find_marker_face(const std::vector<int>& face_nodes, int face_node_count,
+                     const std::vector<MarkerFace>& markers) {
+    std::vector<int> sorted(face_nodes.begin(), face_nodes.begin() + face_node_count);
+    std::sort(sorted.begin(), sorted.end());
+    for (std::size_t m = 0; m < markers.size(); ++m) {
+        if (markers[m].sorted_nodes == sorted) return static_cast<int>(m);
+    }
+    return -1;
+}
+
+// Face building helpers (mirrors mesh_metrics.cpp)
+struct FaceKey {
+    int n;
+    int v[4];
+    FaceKey(int count, int a, int b, int c, int d = -1) : n(count) {
+        v[0] = a; v[1] = b; v[2] = c; v[3] = d;
+        if (n == 3) {
+            if (v[0] > v[1]) std::swap(v[0], v[1]);
+            if (v[1] > v[2]) std::swap(v[1], v[2]);
+            if (v[0] > v[1]) std::swap(v[0], v[1]);
+            v[3] = -1;
+        } else {
+            std::sort(v, v + 4);
+        }
+    }
+    bool operator==(const FaceKey& o) const {
+        if (n != o.n) return false;
+        return v[0] == o.v[0] && v[1] == o.v[1] && v[2] == o.v[2] && v[3] == o.v[3];
+    }
+};
+struct FaceKeyHash {
+    std::size_t operator()(const FaceKey& key) const {
+        std::uint64_t h = static_cast<std::uint64_t>(key.n);
+        for (int i = 0; i < 4; ++i) h ^= static_cast<std::uint64_t>(key.v[i]) << (i * 11);
+        return static_cast<std::size_t>(h);
+    }
+};
+struct PendingFace {
+    int cell;
+    int local_face;
+};
+
+void cell_face_nodes_local(const CfdCell& cell, int local_face, int out[4], int& n_out) {
+    const int* fn = get_face_nodes(cell.type, local_face);
+    n_out = FACE_NODES_PER_ELEMENT[static_cast<int>(cell.type)][local_face];
+    for (int i = 0; i < n_out; ++i) out[i] = cell.node[fn[i]];
+    for (int i = n_out; i < 4; ++i) out[i] = -1;
+}
+
+void build_faces_from_cells(CfdMesh& mesh) {
+    mesh.faces.clear();
+    for (auto& cell : mesh.cells) {
+        cell.first_face = 0;
+        cell.face_count = 0;
+    }
+    std::unordered_map<FaceKey, PendingFace, FaceKeyHash> face_map;
+    for (int ci = 0; ci < static_cast<int>(mesh.cells.size()); ++ci) {
+        const auto& cell = mesh.cells[ci];
+        int nfaces = ELEMENT_FACES[static_cast<int>(cell.type)];
+        for (int lf = 0; lf < nfaces; ++lf) {
+            int nodes[4];
+            int nn;
+            cell_face_nodes_local(cell, lf, nodes, nn);
+            FaceKey key(nn, nodes[0], nodes[1], nodes[2], nn == 4 ? nodes[3] : -1);
+            auto it = face_map.find(key);
+            if (it == face_map.end()) {
+                face_map[key] = {ci, lf};
+            } else {
+                CfdFace face;
+                face.left_cell = it->second.cell;
+                face.right_cell = ci;
+                face.boundary = BoundaryKind::Interior;
+                face.node_count = nn;
+                int left_nodes[4];
+                int left_nn;
+                cell_face_nodes_local(mesh.cells[face.left_cell], it->second.local_face, left_nodes, left_nn);
+                for (int i = 0; i < left_nn; ++i) face.node[i] = left_nodes[i];
+                mesh.faces.push_back(face);
+                face_map.erase(it);
+            }
+        }
+    }
+    for (const auto& item : face_map) {
+        CfdFace face;
+        face.left_cell = item.second.cell;
+        face.right_cell = -1;
+        int fn[4];
+        int fn_n;
+        cell_face_nodes_local(mesh.cells[face.left_cell], item.second.local_face, fn, fn_n);
+        face.node_count = fn_n;
+        for (int i = 0; i < fn_n; ++i) face.node[i] = fn[i];
+        face.boundary = BoundaryKind::Farfield;
+        mesh.faces.push_back(face);
+    }
+    compute_mesh_metrics(mesh);
+}
+
+} // anonymous namespace
+
+bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        if (err) *err = "cannot open file: " + path;
+        return false;
+    }
+
+    mesh = CfdMesh{};
+    int ndime = 0, npoin = 0, nelem = 0, nmark = 0;
+    std::vector<MarkerFace> marker_faces;
+
+    std::string line;
+    int section = 0;  // 0=none, 1=points, 2=elements, 3=markers
+    std::string current_marker_tag;
+    int current_marker_count = 0;
+    int expected_marker_count = 0;
+
+    while (std::getline(file, line)) {
+        std::string trimmed = trim(line);
+        if (trimmed.empty()) continue;
+
+        auto tokens = tokenize(line);
+        if (tokens.empty()) continue;
+
+        // Handle key = value (SU2 format: "NDIME= 3" or "NDIME=3" or "NDIME 3")
+        auto split_kv = [](const std::string& s) -> std::pair<std::string, std::string> {
+            auto eq = s.find('=');
+            if (eq != std::string::npos)
+                return {s.substr(0, eq), s.substr(eq + 1)};
+            return {s, ""};
+        };
+        auto [kw, val] = split_kv(tokens[0]);
+        if (tokens.size() > 1 && val.empty()) val = tokens[1];
+
+        if (kw == "NDIME") { ndime = std::stoi(val); continue; }
+        if (kw == "NPOIN") {
+            npoin = std::stoi(val);
+            mesh.nodes.reserve(static_cast<std::size_t>(npoin));
+            section = 1;
+            continue;
+        }
+        if (kw == "NELEM") {
+            nelem = std::stoi(val);
+            mesh.cells.reserve(static_cast<std::size_t>(nelem));
+            section = 2;
+            continue;
+        }
+        if (kw == "NMARK") {
+            nmark = std::stoi(val);
+            section = 3;
+            continue;
+        }
+        if (kw == "MARKER_TAG") {
+            current_marker_tag = val;
+            if (current_marker_tag.empty() && tokens.size() > 1) current_marker_tag = tokens[1];
+            if (current_marker_tag.empty()) {
+                if (err) *err = "MARKER_TAG without value";
+                return false;
+            }
+            expected_marker_count = 0;
+            continue;
+        }
+        if (kw == "MARKER_ELEMS") {
+            if (val.empty() && tokens.size() > 1) val = tokens[1];
+            if (val.empty()) {
+                if (err) *err = "MARKER_ELEMS without value";
+                return false;
+            }
+            expected_marker_count = std::stoi(val);
+            current_marker_count = 0;
+            continue;
+        }
+
+        // Parse data lines based on section
+        if (section == 1) {
+            // NPOIN: <id> <x> <y> [<z>]
+            if (tokens.size() < 4) continue;
+            CfdNode node;
+            node.x = static_cast<Real>(std::stod(tokens[1]));
+            node.y = static_cast<Real>(std::stod(tokens[2]));
+            node.z = static_cast<Real>(std::stod(tokens[3]));
+            mesh.nodes.push_back(node);
+        } else if (section == 2) {
+            // NELEM: <su2_type> <tag> <node1> <node2> ...
+            if (tokens.size() < 3) continue;
+            int su2_type = std::stoi(tokens[0]);
+            auto info = su2_to_elem(su2_type);
+            if (info.n_nodes == 0) {
+                if (err) *err = "unsupported SU2 element type: " + std::to_string(su2_type);
+                return false;
+            }
+            if (static_cast<int>(tokens.size()) < 2 + info.n_nodes) {
+                if (err) *err = "truncated element line";
+                return false;
+            }
+            CfdCell cell;
+            cell.type = info.type;
+            for (int i = 0; i < info.n_nodes; ++i) {
+                cell.node[i] = std::stoi(tokens[2 + i]);
+            }
+            mesh.cells.push_back(cell);
+        } else if (section == 3) {
+            // NMARK data: each line is a boundary face
+            // <su2_face_type> <tag> <n1> <n2> [<n3> [<n4>]]
+            if (tokens.size() < 4) continue;
+            int face_type = std::stoi(tokens[0]);
+            int fn = (face_type == 5) ? 3 : (face_type == 13) ? 4 : 0;
+            if (fn == 0) continue;
+            if (static_cast<int>(tokens.size()) < 2 + fn) continue;
+
+            MarkerFace mf;
+            mf.boundary = tag_to_boundary(current_marker_tag);
+            for (int i = 0; i < fn; ++i) {
+                mf.sorted_nodes.push_back(std::stoi(tokens[2 + i]));
+            }
+            std::sort(mf.sorted_nodes.begin(), mf.sorted_nodes.end());
+            marker_faces.push_back(mf);
+            current_marker_count++;
+        }
+    }
+
+    if (ndime != 3) {
+        if (err) *err = "only 3D meshes supported (NDIME=" + std::to_string(ndime) + ")";
+        return false;
+    }
+    if (mesh.nodes.empty() || mesh.cells.empty()) {
+        if (err) *err = "no nodes or cells read";
+        return false;
+    }
+
+    // Build faces from volume elements
+    build_faces_from_cells(mesh);
+
+    // Match boundary faces to marker faces
+    for (auto& face : mesh.faces) {
+        if (face.right_cell >= 0) continue;  // interior face
+        int m = find_marker_face({face.node[0], face.node[1], face.node[2], face.node[3]},
+                                 face.node_count, marker_faces);
+        if (m >= 0) {
+            face.boundary = marker_faces[static_cast<std::size_t>(m)].boundary;
+        }
+    }
+
+    return true;
+}
+
+bool write_mesh_su2(const CfdMesh& mesh, const std::string& path, std::string* err) {
+    std::FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) {
+        if (err) *err = "cannot open file for writing: " + path;
+        return false;
+    }
+
+    std::fprintf(f, "NDIME= 3\n");
+    std::fprintf(f, "NPOIN= %zu\n", mesh.nodes.size());
+    for (std::size_t i = 0; i < mesh.nodes.size(); ++i) {
+        std::fprintf(f, "%zu  %.15g  %.15g  %.15g\n", i,
+                     static_cast<double>(mesh.nodes[i].x),
+                     static_cast<double>(mesh.nodes[i].y),
+                     static_cast<double>(mesh.nodes[i].z));
+    }
+
+    std::fprintf(f, "NELEM= %zu\n", mesh.cells.size());
+    for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+        const auto& cell = mesh.cells[i];
+        int su2_type = elem_to_su2(cell.type);
+        if (su2_type == 0) {
+            std::fclose(f);
+            if (err) *err = "unsupported cell type at cell " + std::to_string(i);
+            return false;
+        }
+        int nn = ELEMENT_NODES[static_cast<int>(cell.type)];
+        std::fprintf(f, "%d %zu", su2_type, i);
+        for (int j = 0; j < nn; ++j) {
+            std::fprintf(f, " %d", cell.node[j]);
+        }
+        std::fprintf(f, "\n");
+    }
+
+    // Collect boundary faces by kind
+    std::unordered_map<int, std::vector<std::size_t>> boundary_groups;
+    for (std::size_t i = 0; i < mesh.faces.size(); ++i) {
+        const auto& face = mesh.faces[i];
+        if (face.boundary == BoundaryKind::Interior) continue;
+        int bk = static_cast<int>(face.boundary);
+        boundary_groups[bk].push_back(i);
+    }
+
+    std::fprintf(f, "NMARK= %zu\n", boundary_groups.size());
+    for (const auto& [bk_int, face_indices] : boundary_groups) {
+        auto bk = static_cast<BoundaryKind>(bk_int);
+        std::fprintf(f, "MARKER_TAG= %s\n", boundary_to_tag(bk).c_str());
+        std::fprintf(f, "MARKER_ELEMS= %zu\n", face_indices.size());
+        for (std::size_t fi : face_indices) {
+            const auto& face = mesh.faces[fi];
+            int face_type = (face.node_count == 4) ? 13 : 5;  // QUAD or TRI
+            std::fprintf(f, "%d 0", face_type);
+            for (int j = 0; j < face.node_count; ++j) {
+                std::fprintf(f, " %d", face.node[j]);
+            }
+            std::fprintf(f, "\n");
+        }
+    }
+
+    std::fclose(f);
+    return true;
+}
+
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

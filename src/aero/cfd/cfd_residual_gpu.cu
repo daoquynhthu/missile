@@ -19,7 +19,7 @@ __device__ bool d_conservative_to_primitive(const Real* q, int cell, int nvar, R
     Real kinetic = 0.5f * (u*u + v*v + w*w);
     p = (gamma - 1.0f) * (q[cell * nvar + 4] - rho * kinetic);
     nu_tilde = q[cell * nvar + 5] * inv_rho;
-    return real_isfinite(u) && real_isfinite(v) && real_isfinite(w) && real_isfinite(p) && p > 0.0f;
+    return real_isfinite(u) && real_isfinite(v) && real_isfinite(w) && real_isfinite(p) && real_isfinite(nu_tilde) && p > 0.0f;
 }
 
 __device__ Real d_speed_of_sound(Real rho, Real p, Real gamma) {
@@ -91,7 +91,9 @@ __device__ void d_hllc_flux(
     Real s_m = (pR - pL + rhoL*vn_l*(s_l - vn_l) - rhoR*vn_r*(s_r - vn_r)) / denom;
 
     if (s_m >= 0.0f) {
-        Real rho_star = rhoL * (s_l - vn_l) / (s_l - s_m);
+        Real s_l_minus_sm = s_l - s_m;
+        if (real_fabs(s_l_minus_sm) < 1e-30f) s_l_minus_sm = real_copysign(1e-30f, s_l_minus_sm);
+        Real rho_star = rhoL * (s_l - vn_l) / s_l_minus_sm;
         Real kineticL = 0.5f * (uL*uL + vL*vL + wL*wL);
         Real e_l = pL / ((gamma - 1.0f) * rhoL) + kineticL;
         Real sld_l = s_l - vn_l;
@@ -109,7 +111,7 @@ __device__ void d_hllc_flux(
         Real qs_rhov = rho_star * (vL + (s_m - vn_l) * ny);
         Real qs_rhow = rho_star * (wL + (s_m - vn_l) * nz);
         Real qs_rhoE = rho_star * e_star;
-        Real qs_nu = qL_nu * (s_l - vn_l) / (s_l - s_m);
+        Real qs_nu = qL_nu * (s_l - vn_l) / s_l_minus_sm;
 
         mass = fL_mass + s_l * (qs_rho - qL_rho);
         mom_x = fL_mx + s_l * (qs_rhou - qL_rhou);
@@ -118,7 +120,9 @@ __device__ void d_hllc_flux(
         energy = fL_en + s_l * (qs_rhoE - qL_rhoE);
         turbulence = fL_turb + s_l * (qs_nu - qL_nu);
     } else {
-        Real rho_star = rhoR * (s_r - vn_r) / (s_r - s_m);
+        Real s_r_minus_sm = s_r - s_m;
+        if (real_fabs(s_r_minus_sm) < 1e-30f) s_r_minus_sm = real_copysign(1e-30f, s_r_minus_sm);
+        Real rho_star = rhoR * (s_r - vn_r) / s_r_minus_sm;
         Real kineticR = 0.5f * (uR*uR + vR*vR + wR*wR);
         Real e_r = pR / ((gamma - 1.0f) * rhoR) + kineticR;
         Real sld_r = s_r - vn_r;
@@ -136,7 +140,7 @@ __device__ void d_hllc_flux(
         Real qs_rhov = rho_star * (vR + (s_m - vn_r) * ny);
         Real qs_rhow = rho_star * (wR + (s_m - vn_r) * nz);
         Real qs_rhoE = rho_star * e_star;
-        Real qs_nu = qR_nu * (s_r - vn_r) / (s_r - s_m);
+        Real qs_nu = qR_nu * (s_r - vn_r) / s_r_minus_sm;
 
         mass = fR_mass + s_r * (qs_rho - qR_rho);
         mom_x = fR_mx + s_r * (qs_rhou - qR_rhou);

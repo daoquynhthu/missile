@@ -380,7 +380,7 @@ __global__ void bj_limiter_kernel(
     Real t_w = limiter_theta_device(wL, rec_w, mL[6], mL[7]);
     Real t_p = limiter_theta_device(pL, rec_p, mL[8], mL[9]);
 
-    Real* limL = d_limiters + left * 5;
+    Real* limL = d_limiters + left * 6;
     real_atomic_min(&limL[0], t_rho);
     real_atomic_min(&limL[1], t_u);
     real_atomic_min(&limL[2], t_v);
@@ -414,7 +414,7 @@ __global__ void bj_limiter_kernel(
         t_w = limiter_theta_device(wR, rec_w, mR[6], mR[7]);
         t_p = limiter_theta_device(pR, rec_p, mR[8], mR[9]);
 
-        Real* limR = d_limiters + right * 5;
+        Real* limR = d_limiters + right * 6;
         real_atomic_min(&limR[0], t_rho);
         real_atomic_min(&limR[1], t_u);
         real_atomic_min(&limR[2], t_v);

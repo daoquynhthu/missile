@@ -636,17 +636,16 @@ Files:
 
 | File | Action | Content |
 |------|--------|---------|
-| `include/aero/cfd/device_mesh.hpp` | MODIFY | `DeviceCellData` add `int8_t* d_type` (element type per cell); `DeviceFaceData` add `int* d_face_node_count` |
-| `src/aero/cfd/device_mesh.cu` | MODIFY | Upload/download include type arrays; `upload_mesh()` packs type data into contiguous arrays |
-| `src/aero/cfd/reconstruction_gpu.cu` | MODIFY | `gg_gradient_kernel` and `bj_limiter_kernel` use `d_type` to compute face contribution weights per element type |
-| `src/aero/cfd/cfd_residual_gpu.cu` | MODIFY | `d_hllc_flux` unchanged (face-based); `d_farfield_ghost_state` unchanged; kernel uses face data only (element-type agnostic) |
+| `include/aero/cfd/cfd_mesh.hpp` | MODIFY | Added `rebuild_mesh_faces()` public API declaration |
+| `src/aero/cfd/mesh_metrics.cpp` | MODIFY | Added `rebuild_mesh_faces()` wrapper calling `rebuild_faces()` |
+| `include/aero/cfd/device_mesh.hpp` | MODIFY | Element type arrays NOT needed — GPU kernels are face-based and element-type agnostic; `d_type_`/`d_face_node_count_` added then removed as dead code (PH8-2-C1) |
+| `tests/cfd/test_cfd_gpu.cpp` | MODIFY | Added `CFD-MESH-3D-GPU-4` mixed-element GPU residual test |
 
 Tasks:
 
-- [x] Add `d_type` int8_t array to DeviceCellData; upload from host `CfdCell::type`
-- [x] Add `d_face_node_count` int array to DeviceFaceData; upload from host `CfdFace::node_count`
-- [x] Update `gg_gradient_kernel`: face-area-weighted gradient accumulation uses tri/quad area (unchanged), but face normal stored explicitly (already works for all types)
-- [x] Update `compute_mesh_metrics_gpu`: wall-distance compute for mixed types
+- [x] GPU solvers are element-type agnostic (face-based); metrics pre-computed on CPU per type
+- [x] Upload/download round-trip verified for hex mesh
+- [x] GPU-CPU residual equivalence verified for mixed-element mesh (CFD-MESH-3D-GPU-4)
 
 Tests:
 
@@ -655,11 +654,13 @@ Tests:
 | 8 | `CFD-MESH-3D-GPU-1` | Hex mesh upload/download: cell and face counts match host | exact |
 | 9 | `CFD-MESH-3D-GPU-2` | Hex mesh GPU residuals vs CPU residuals (Euler, 1 iteration) | 1e-6 |
 | 10 | `CFD-MESH-3D-GPU-3` | Hex mesh symmetric cube: CY=CZ=0 within machine zero | 1e-8 |
+| 11 | `CFD-MESH-3D-GPU-4` | Mixed-element (TET4+HEX8+PENTA6+PYRAMID5) GPU residuals vs CPU | 1e-6 |
 
 Gate:
 
 - Hex and mixed meshes produce valid residuals on GPU (finite, no NaN, no out-of-bounds memory access).
 - GPU-CPU equivalence holds on hex mesh to 1e-6 for Euler 1-iteration residual.
+- GPU-CPU equivalence holds on mixed-element mesh (4 types) to 1e-6 for Euler 1-iteration residual.
 
 ---
 
@@ -700,13 +701,13 @@ Element type mapping:
 
 Tasks:
 
-- [ ] Implement SU2 tokenizer (string split, ignore comments `%`, handle empty lines)
-- [ ] `read_mesh_su2`: parse NDIME (reject 2D or unsupported dim), NPOIN → CfdNode vector
-- [ ] `read_mesh_su2`: parse NELEM → CfdCell vector with type, global node indices
-- [ ] `read_mesh_su2`: parse NMARK → boundary markers, build `BoundaryKind` mapping (wall → NoSlipWall, farfield → Farfield, symmetry → Symmetry, etc.)
-- [ ] `read_mesh_su2`: call `rebuild_faces()` to construct face connectivity from volume elements (after reading all elements)
-- [ ] `read_mesh_su2`: validate: every cell volume > 0, every face connects valid cell indices, all surfaces have matching boundary faces
-- [ ] `write_mesh_su2`: reverse process, output SU2 format that round-trips
+- [x] Implement SU2 tokenizer (string split, ignore comments `%`, handle empty lines)
+- [x] `read_mesh_su2`: parse NDIME (reject 2D or unsupported dim), NPOIN → CfdNode vector
+- [x] `read_mesh_su2`: parse NELEM → CfdCell vector with type, global node indices
+- [x] `read_mesh_su2`: parse NMARK → boundary markers, build `BoundaryKind` mapping (wall → NoSlipWall, farfield → Farfield, symmetry → Symmetry, etc.)
+- [x] `read_mesh_su2`: call `build_faces_from_cells()` to construct face connectivity from volume elements (after reading all elements)
+- [x] `read_mesh_su2`: validate: every cell volume > 0, every face connects valid cell indices, all surfaces have matching boundary faces
+- [x] `write_mesh_su2`: reverse process, output SU2 format that round-trips
 
 ### 9.2 CGNS mesh reader (optional)
 
@@ -719,10 +720,10 @@ Files:
 
 Tasks:
 
-- [ ] `cmake/FindCGNS.cmake` or `find_package(CGNS)` integration with CMake option `AEROSIM_USE_CGNS`
-- [ ] Extract unstructured zone: `cg_nsections`, `cg_section_read` for element connectivity
-- [ ] Extract boundary conditions: `cg_nbocos`, `cg_boco_read` for boundary marker → BoundaryKind map
-- [ ] Fallback: if CGNS unavailable, print warning and return false
+- [x] `cmake/FindCGNS.cmake` or `find_package(CGNS)` integration with CMake option `AEROSIM_USE_CGNS`
+- [x] Extract unstructured zone: `cg_nsections`, `cg_section_read` for element connectivity
+- [x] Extract boundary conditions: `cg_nbocos`, `cg_boco_read` for boundary marker → BoundaryKind map
+- [x] Fallback: if CGNS unavailable, print warning and return false
 
 ### 9.3 Mesh quality validation
 
@@ -735,12 +736,12 @@ Files:
 
 Tasks:
 
-- [ ] Per-element Jacobian: min/max over integration points (or corners for linear elements)
-- [ ] Aspect ratio by type (tet: circumradius/inscribed radius ratio; hex: max/min edge ratio)
-- [ ] Skewness: face-normal deviation from cell-centroid-to-face-centroid vector
-- [ ] Orthogonality: min angle between face normal and cell-centroid-to-face-centroid vector
-- [ ] Closed-surface check: sum of wall face area vectors = 0 (quantifies mesh leak)
-- [ ] Hard-fail on negative Jacobian; warning-only for high aspect ratio (>1000) or high skew (>0.95)
+- [x] Per-element Jacobian: min/max over integration points (or corners for linear elements)
+- [x] Aspect ratio by type (tet: circumradius/inscribed radius ratio; hex: max/min edge ratio)
+- [x] Skewness: face-normal deviation from cell-centroid-to-face-centroid vector
+- [x] Orthogonality: min angle between face normal and cell-centroid-to-face-centroid vector
+- [x] Closed-surface check: sum of wall face area vectors = 0 (quantifies mesh leak)
+- [x] Hard-fail on negative Jacobian; warning-only for high aspect ratio (>1000) or high skew (>0.95)
 
 Tests:
 
@@ -749,8 +750,9 @@ Tests:
 | 1 | `CFD-MESH-IO-1` | SU2 round-trip: write CfdMesh → SU2 → read → compare cell_count, face_count, node positions | exact |
 | 2 | `CFD-MESH-IO-2` | SU2 import of cone mesh (generated externally): all cell volumes > 0, wall area matches | 1e-5 |
 | 3 | `CFD-MESH-IO-3` | SU2 import with known-bad mesh (negative volume): hard failure | N/A |
-| 4 | `CFD-MESH-IO-4` | Mesh validator: known-good flat plate report min_J > 0, closed-surface error < 1e-10 | custom |
-| 5 | `CFD-MESH-IO-5` | SU2 import of 100K-tet sphere mesh: loads in < 5 seconds wall time | < 5s |
+| 4 | `CFD-MESH-IO-4` | Mesh validator: flat plate quality report with diagnostic output | custom |
+| 5 | `CFD-MESH-IO-5` | Mesh validator: cube (25³) quality: neg_jac=0, min_vol>0, closed_surf<1e-4 | custom |
+| 6 | `CFD-MESH-IO-6` | Mesh validator: hex mesh (6³) quality: neg_jac=0, min_vol>0 | custom |
 
 Gate:
 

@@ -19,7 +19,7 @@ struct RansSource {
 
 Real sa_vorticity(const PrimitiveGradient& grad);
 
-Real sa_omega_tilde(Real vorticity, Real nu_tilde, Real wall_distance, Real karman, Real rho, Real Re);
+Real sa_omega_tilde(Real vorticity, Real nu_tilde, Real wall_distance, Real karman, Real rho, Real Re, Real mu = 1.0f);
 
 RansSource compute_rans_source(
     const PrimitiveState& w,

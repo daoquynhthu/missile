@@ -16,6 +16,9 @@ target_sources(missile_lib PRIVATE
     cfd/gpu_viscous.cu
     cfd/gpu_wall.cu
     cfd/mesh_metrics.cpp
+    cfd/mesh_io_su2.cpp
+    cfd/mesh_io_cgns.cpp
+    cfd/mesh_validator.cpp
     cfd/rans.cpp
     cfd/reconstruction.cpp
     cfd/reconstruction_gpu.cu

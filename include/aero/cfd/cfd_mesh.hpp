@@ -73,6 +73,19 @@ struct MeshQualityReport {
     Real min_h = 0.0f;
     Real max_h = 0.0f;
     Real min_wall_distance = 0.0f;
+    Real min_aspect_ratio = 0.0f;
+    Real max_aspect_ratio = 0.0f;
+    Real avg_aspect_ratio = 0.0f;
+    Real min_skewness = 0.0f;
+    Real max_skewness = 0.0f;
+    Real avg_skewness = 0.0f;
+    Real min_orthogonality = 0.0f;
+    Real max_orthogonality = 0.0f;
+    Real avg_orthogonality = 0.0f;
+    Real closed_surface_error = 0.0f;
+    int negative_jacobian_count = 0;
+    int high_aspect_ratio_count = 0;
+    int high_skew_count = 0;
     bool valid = false;
     std::string message;
 };
@@ -96,6 +109,7 @@ CfdMesh generate_prism_boundary_layer_mesh(
     Real length = 0.5f, Real width = 0.05f,
     Real first_height = 1e-5f, Real growth_ratio = 1.12f);
 
+void rebuild_mesh_faces(CfdMesh& mesh);
 MeshQualityReport compute_mesh_metrics(CfdMesh& mesh);
 
 bool validate_mesh(const CfdMesh& mesh, MeshQualityReport* report = nullptr);

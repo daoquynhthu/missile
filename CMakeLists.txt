@@ -11,6 +11,8 @@ if(AEROSIM_REAL_DOUBLE)
     add_compile_definitions(AEROSIM_REAL_DOUBLE)
 endif()
 
+option(AEROSIM_USE_CGNS "Enable CGNS mesh import" OFF)
+
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 set(CMAKE_CUDA_RUNTIME_LIBRARY "Hybrid")
@@ -74,6 +76,18 @@ else()
 endif()
 
 target_link_libraries(missile_lib PUBLIC CUDA::cudart)
+
+if(AEROSIM_USE_CGNS)
+    find_package(CGNS)
+    if(CGNS_FOUND)
+        add_compile_definitions(WITH_CGNS)
+        target_include_directories(missile_lib PUBLIC ${CGNS_INCLUDE_DIRS})
+        target_link_libraries(missile_lib PUBLIC ${CGNS_LIBRARIES})
+        message(STATUS "CGNS found: ${CGNS_INCLUDE_DIRS}")
+    else()
+        message(WARNING "AEROSIM_USE_CGNS is ON but CGNS not found — CGNS reader disabled")
+    endif()
+endif()
 
 if(MSVC)
     target_compile_options(missile_lib PUBLIC

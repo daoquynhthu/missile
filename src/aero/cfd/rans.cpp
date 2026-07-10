@@ -17,9 +17,9 @@ Real sa_vorticity(const PrimitiveGradient& grad) {
     return std::sqrt(vort_x*vort_x + vort_y*vort_y + vort_z*vort_z);
 }
 
-Real sa_omega_tilde(Real vorticity, Real nu_tilde, Real wall_distance, Real karman, Real rho, Real Re) {
+Real sa_omega_tilde(Real vorticity, Real nu_tilde, Real wall_distance, Real karman, Real rho, Real Re, Real mu) {
     constexpr Real cv1 = 7.1f;
-    Real chi = rho * Re * nu_tilde + 1e-30f;
+    Real chi = rho * Re * nu_tilde / (mu + 1e-30f) + 1e-30f;
     Real chi3 = chi*chi*chi;
     Real cv13 = cv1*cv1*cv1;
     Real fv1 = chi3 / (chi3 + cv13);
@@ -50,7 +50,7 @@ RansSource compute_rans_source(
     constexpr Real ct3 = 1.2f;
     constexpr Real ct4 = 0.5f;
 
-    Real chi = rho * Re * w.nu_tilde + 1e-30f;
+    Real chi = rho * Re * w.nu_tilde / (mu + 1e-30f) + 1e-30f;
     Real vort = sa_vorticity(grad);
 
     Real grad_nu2 = grad.dnu_tilde_dx * grad.dnu_tilde_dx
@@ -73,6 +73,7 @@ Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
         Real production = cb1 * omega_tilde * w.nu_tilde;
 
         Real r = w.nu_tilde / (omega_tilde * karman * karman * wall_distance * wall_distance + 1e-30f);
+        if (r > 10.0f) r = 10.0f;
         Real r6 = r*r*r*r*r*r;
         Real fw_g = r + cw2 * (r6 - r);
         Real fw_num = 1.0f + cw3*cw3*cw3*cw3*cw3*cw3;
@@ -104,11 +105,18 @@ std::vector<RansSource> compute_rans_sources(
     const std::vector<PrimitiveGradient>& gradients,
     Real gamma,
     Real Re) {
+    constexpr Real T_ref = 288.15f;
+    constexpr Real S = 110.4f;
     std::vector<RansSource> sources(mesh.cells.size());
     for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
         PrimitiveState w;
-        if (!conservative_to_primitive(q[i], gamma, w)) continue;
-        Real mu = 1.0f;
+        if (!conservative_to_primitive(q[i], gamma, w)) {
+            sources[i].total_source = std::numeric_limits<Real>::quiet_NaN();
+            continue;
+        }
+        Real T = w.p / std::max(w.rho, 1e-30f);
+        Real mu = sutherland_viscosity(T, T_ref, S);
+        if (mu <= 0.0f) mu = 1.0f;
         sources[i] = compute_rans_source(
             w, gradients[i], mesh.cells[i].wall_distance, mu, q[i].rho, Re);
     }

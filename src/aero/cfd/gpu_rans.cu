@@ -16,6 +16,11 @@ __device__ Real d_sa_vorticity(const PrimitiveGradient& g) {
     return real_sqrt(vx*vx + vy*vy + vz*vz);
 }
 
+__device__ Real d_sutherland_mu(Real T, Real T_ref, Real S) {
+    Real t_ratio = T / T_ref;
+    return t_ratio * real_sqrt(t_ratio) * (T_ref + S) / (T + S);
+}
+
 __global__ void rans_source_kernel(
     Real* d_q,
     Real* d_residual,
@@ -24,6 +29,7 @@ __global__ void rans_source_kernel(
     const Real* d_wall_distance,
     int n_cells, int nvar,
     Real gamma, Real Re,
+    Real mu_ref, Real T_ref, Real sutherland_T,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
@@ -43,6 +49,10 @@ __global__ void rans_source_kernel(
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
+
+    Real T = p * inv_rho;
+    Real mu = d_sutherland_mu(T, T_ref, sutherland_T);
+    if (mu <= 0.0f) mu = 1.0f;
 
     Real wall_distance = d_wall_distance[idx];
     if (wall_distance <= 0.0f || !real_isfinite(wall_distance)) {
@@ -73,7 +83,7 @@ __global__ void rans_source_kernel(
                  + 1e-30f;
     Real diffusion = (cb2 / sigma) * grad_nu2;
 
-    Real chi = Re * rho * nu_tilde + 1e-30f;
+    Real chi = Re * rho * nu_tilde / (mu + 1e-30f) + 1e-30f;
 
     Real source;
     if (chi >= 0.0f) {
@@ -90,6 +100,7 @@ __global__ void rans_source_kernel(
         Real production = cb1 * omega_tilde * nu_tilde;
 
         Real r = nu_tilde / (omega_tilde * karman * karman * wall_distance * wall_distance + 1e-30f);
+        if (r > 10.0f) r = 10.0f;
         Real r6 = r*r*r*r*r*r;
         Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
         Real fw_g = r + cw2 * (r6 - r);
@@ -174,7 +185,7 @@ bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
     return true;
 }
 
-bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, int* d_failed, std::string* error) {
+bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref, Real T_ref, Real sutherland_T, int* d_failed, std::string* error) {
     if (mesh.cell_count() == 0) return true;
     if (!mesh.gradients_device()) {
         if (error) *error = "gradients not allocated for RANS source";
@@ -192,8 +203,16 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, int* d_faile
         mesh.gradients_device(),
         cd.volume, cd.wall_distance,
         nc, DeviceMesh::NVAR, gamma, Re,
+        mu_ref, T_ref, sutherland_T,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "rans_source_kernel launch")) return false;
+    if (!cuda_check(cudaDeviceSynchronize(), "rans_source_kernel sync")) return false;
+    int host_failed = 0;
+    if (!cuda_check(cudaMemcpy(&host_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "rans_source d_failed")) return false;
+    if (host_failed) {
+        if (error) *error = "RANS source kernel detected invalid state";
+        return false;
+    }
     return true;
 }
 

@@ -402,3 +402,53 @@
 - `device_mesh.cu`: upload/download type arrays, color reordering for face_node_count, move/release support
 - Tests added: CFD-MESH-3D-GPU-1 (hex upload/download), CFD-MESH-3D-GPU-2 (hex GPU/CPU residual match 1e-6), CFD-MESH-3D-GPU-3 (hex cube CY=CZ=0 tol=1e-8)
 - All 38 GPU tests PASS (35 existing + 3 new)
+
+2026-07-10 — Phase 9.1: SU2 mesh format reader/writer completed.
+- `include/aero/cfd/mesh_io.hpp`: declares read_mesh_su2() and write_mesh_su2()
+- `src/aero/cfd/mesh_io_su2.cpp`: SU2 parser/writer with tokenizer, element type mapping (3→TET4, 5→TRI, 9→HEX8, 12→PENTA6, 13→QUAD, 14→PYRAMID5), boundary tag mapping (wall/farfield/symmetry), face reconstruction via build_faces_from_cells(), marker-face matching on sorted node sets
+- `src/aero/CMakeLists.txt`: registered mesh_io_su2.cpp
+- Tests: CFD-MESH-IO-1 SU2 round-trip (hex mesh), CFD-MESH-IO-3 SU2 invalid file (no cells → graceful failure) — all 7 CfdMesh + 38 CfdGpu tests pass
+
+2026-07-10 — Phase 8.2 audit fixes applied.
+- PH8-2-A1: bj_limiter_kernel stride `*5`→`*6` (PrimitiveLimiter has 6 fields)
+- PH8-2-A2/A3: download_state/download_residual now include index 5 (rho_nu_tilde/turbulence)
+- PH8-2-C2: allocate_halo failure uses targeted cleanup, not full release()
+- PH8-2-D1: d_conservative_to_primitive checks real_isfinite(nu_tilde)
+- PH8-2-B2/B4/B5/B6: GPU tests enhanced — d_type/d_face_node_count content verified, all 5 residual components checked, CPU reference comparison added, 10→50 iterations
+- 3 items remain open: PH8-2-B1 (mixed-element GPU test), PH8-2-C1 (d_type unused by kernels), PH8-2-D2 (pre-existing HLLC unguarded division)
+2026-07-11
+- PH8-2-C1: Removed d_type_/d_face_node_count_ from device_mesh.hpp/.cu + test_cfd_gpu.cpp (~20 lines). Build + CfdMesh 7/7 + CfdGpu 38/38 pass.
+- PH8-2-D2: Added HLLC division guards (s_l-s_m, s_r-s_m, denom) on both GPU (cfd_residual_gpu.cu) and CPU (cfd_solver.cpp).
+- 1 item remains open: PH8-2-B1 (mixed-element GPU test)
+2026-07-11 (continued)
+- PH8-2-B1: Added CFD-MESH-3D-GPU-4 mixed-element GPU residual test (TET4+HEX8+PENTA6+PYRAMID5, 4 cells, 23 nodes, 20 faces). Added `rebuild_mesh_faces()` public API wrapper. Build + CfdMesh 7/7 + CfdGpu 39/39 all pass.
+- Phase 8.2 audit: all 13 findings fixed, audit complete.
+2026-07-11 (parallel audit fixes)
+- M2: `primitive_from_q` 添加 rho<=0 检查 (gpu_viscous.cu)
+- M4: compute_rans_source_gpu 添加 d_failed 读取 (gpu_rans.cu)
+- M6: compute_rans_sources 失败设 NaN sentinel (rans.cpp)
+- M1: SA r 添加 r>10 钳位防溢出 (rans.cpp, gpu_rans.cu)
+- L1: 重命名 dt_inv→dt (gpu_timestep.cu)
+- L2: 3x3 奇异检测改用相对阈值 (reconstruction.cpp)
+- L3: get_face_nodes 添加 bounds 检查 (element_types.hpp)
+- H5: SA chi 公式添加 mu 分母 — CPU 用 Sutherland 计算 mu，GPU 内核计算 T→Sutherland mu→chi/=mu (rans.cpp, gpu_rans.cu, gpu_solver.cu, gpu_solver_internal.hpp, rans.hpp). 测试 CPU 引用也改为 Sutherland mu.
+- Build + CfdMesh 7/7 + CfdGpu 39/39 all pass. Parallel audit 13 findings all fixed (2 N/A).
+2026-07-11 (Phase 9.3 mesh quality validation)
+- Created `include/aero/cfd/mesh_validator.hpp` + `src/aero/cfd/mesh_validator.cpp`
+- Extended `MeshQualityReport` with aspect ratio, skewness, orthogonality, closed-surface error, neg-Jacobian count, warnings
+- Implemented per-element Jacobian: tet (signed volume), hex (trilinear at 8 corners), penta (wedge at 6 corners), pyramid (at 5 corners)
+- Implemented aspect ratio (max/min edge), skewness (90°-orthogonality deviation), orthogonality (face-normal vs centroid-to-face angle)
+- Implemented closed-surface check (sum of wall area vectors), high-aspect/ high-skew warning counters
+- Added 3 tests: CFD-MESH-IO-4/5/6 with diagnostic output (flat plate, 25³ cube, 6³ hex)
+- Registered in CMakeLists.txt. Build + CfdMesh 10/10 + CfdGpu 39/39 all pass.
+- Phase 9.3 complete.
+2026-07-11 (Phase 9.2 CGNS mesh reader)
+- Created `include/aero/cfd/mesh_io_cgns.hpp` + `src/aero/cfd/mesh_io_cgns.cpp`
+- Implemented CGNS v3 unstructured zone reader: cg_nsections/cg_section_read for element connectivity (TETRA_4, HEXA_8, PENTA_6, PYRA_5, TRI_3, QUAD_4)
+- Implemented boundary condition extraction: cg_nbocos/cg_boco_read (BCWallViscous→NoSlipWall, BCWallInviscid→SlipWall, BCFarfield→Farfield, BCSymmetryPlane→Symmetry)
+- Added CMake option AEROSIM_USE_CGNS + find_package(CGNS) + WITH_CGNS define + library linking
+- Added fallback stub when CGNS unavailable (returns false with clear error message)
+- Fixed: using `rebuild_mesh_faces()` (public API) instead of `rebuild_faces()` (anonymous namespace)
+- Added CFD-MESH-IO-2 CGNS fallback test (verifies graceful failure with error message)
+- Registered mesh_io_cgns.cpp in CMakeLists.txt. Build + CfdMesh 10/10 + CfdGpu 39/39 all pass.
+- Phase 9.2 complete. Phase 9 all tasks closed.

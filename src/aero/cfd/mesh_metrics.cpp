@@ -579,6 +579,10 @@ CfdMesh generate_prism_boundary_layer_mesh(
     return mesh;
 }
 
+void rebuild_mesh_faces(CfdMesh& mesh) {
+    rebuild_faces(mesh);
+}
+
 MeshQualityReport compute_mesh_metrics(CfdMesh& mesh) {
     MeshQualityReport report;
     report.nodes = static_cast<int>(mesh.nodes.size());

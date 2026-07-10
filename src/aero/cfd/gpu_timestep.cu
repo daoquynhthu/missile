@@ -37,9 +37,8 @@ __global__ void timestep_kernel(
     Real vmag = real_sqrt(u*u + v*v + w*w);
     Real a = real_sqrt(gamma * p / rho);
     Real denom = vmag + a;
-    Real dt_inv = cfl * h / (denom > 1e-30f ? denom : 1e-30f);
+    Real dt = cfl * h / (denom > 1e-30f ? denom : 1e-30f);
 
-    Real dt = dt_inv;
     if (viscous && d_mu != nullptr) {
         Real mu_cell = d_mu[idx];
         if (mu_cell > 0.0f) {

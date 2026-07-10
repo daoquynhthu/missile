@@ -12,6 +12,7 @@ namespace {
 __device__ void primitive_from_q(const Real* d_q, int idx, int nvar, Real gamma,
     Real& rho, Real& u, Real& v, Real& w, Real& p) {
     rho = d_q[idx * nvar + 0];
+    if (rho <= 0.0f || !real_isfinite(rho)) { rho = -1.0f; return; }
     Real inv_rho = 1.0f / rho;
     u = d_q[idx * nvar + 1] * inv_rho;
     v = d_q[idx * nvar + 2] * inv_rho;
@@ -315,10 +316,9 @@ __global__ void viscous_flux_kernel_atomic(
 } // namespace
 
 bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
-    Real mu_ref, Real T_ref, Real sutherland_T, Real Re, int turbulence,
-    int* d_failed) {
+    Real mu_ref, Real T_ref, Real sutherland_T, Real Re, Real wall_T,
+    int turbulence, int* d_failed) {
     Real inv_Re = 1.0f / (Re > 0.0f ? Re : 1e6f);
-    Real wall_T = 300.0f;
 
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());

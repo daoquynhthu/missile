@@ -45,6 +45,7 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeSt
 
     for (const auto& face : mesh.faces) {
         if (face.boundary != BoundaryKind::SlipWall && face.boundary != BoundaryKind::NoSlipWall) continue;
+        if (face.left_cell < 0 || static_cast<std::size_t>(face.left_cell) >= q.size()) continue;
         PrimitiveState w;
         if (!conservative_to_primitive(q[face.left_cell], config.gamma, w)) continue;
 
@@ -120,10 +121,13 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
     if (s_r <= 0.0f) return f_r;
 
     Real denom = left.rho * (s_l - vn_l) - right.rho * (s_r - vn_r);
+    if (std::fabs(denom) < 1e-30f) denom = std::copysign(1e-30f, denom);
     Real s_m = (right.p - left.p + left.rho*vn_l*(s_l - vn_l) - right.rho*vn_r*(s_r - vn_r)) / denom;
 
     if (s_m >= 0.0f) {
-        Real rho_star = left.rho * (s_l - vn_l) / (s_l - s_m);
+        Real s_l_minus_sm = s_l - s_m;
+        if (std::fabs(s_l_minus_sm) < 1e-30f) s_l_minus_sm = std::copysign(1e-30f, s_l_minus_sm);
+        Real rho_star = left.rho * (s_l - vn_l) / s_l_minus_sm;
         Real e_l = q_l.rho_E / left.rho;
         Real p_star = left.p + left.rho * (s_l - vn_l) * (s_m - vn_l);
         Real e_star = e_l + (s_m - vn_l) * (s_m + left.p / (left.rho * (s_l - vn_l)));
@@ -133,7 +137,7 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
         q_star.rho_v = rho_star * (left.v + (s_m - vn_l) * ny);
         q_star.rho_w = rho_star * (left.w + (s_m - vn_l) * nz);
         q_star.rho_E = rho_star * e_star;
-        q_star.rho_nu_tilde = q_l.rho_nu_tilde * (s_l - vn_l) / (s_l - s_m);
+        q_star.rho_nu_tilde = q_l.rho_nu_tilde * (s_l - vn_l) / s_l_minus_sm;
 
         EulerFlux f = f_l;
         f.mass += s_l * (q_star.rho - q_l.rho);
@@ -146,7 +150,9 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
         return f;
     }
 
-    Real rho_star = right.rho * (s_r - vn_r) / (s_r - s_m);
+    Real s_r_minus_sm = s_r - s_m;
+    if (std::fabs(s_r_minus_sm) < 1e-30f) s_r_minus_sm = std::copysign(1e-30f, s_r_minus_sm);
+    Real rho_star = right.rho * (s_r - vn_r) / s_r_minus_sm;
     Real e_r = q_r.rho_E / right.rho;
     Real e_star = e_r + (s_m - vn_r) * (s_m + right.p / (right.rho * (s_r - vn_r)));
     ConservativeState q_star;
@@ -155,7 +161,7 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
     q_star.rho_v = rho_star * (right.v + (s_m - vn_r) * ny);
     q_star.rho_w = rho_star * (right.w + (s_m - vn_r) * nz);
     q_star.rho_E = rho_star * e_star;
-    q_star.rho_nu_tilde = q_r.rho_nu_tilde * (s_r - vn_r) / (s_r - s_m);
+    q_star.rho_nu_tilde = q_r.rho_nu_tilde * (s_r - vn_r) / s_r_minus_sm;
 
     EulerFlux f = f_r;
     f.mass += s_r * (q_star.rho - q_r.rho);
@@ -271,7 +277,9 @@ CfdSolveSummary CfdSolver::solve_from_state(
             }
             Real vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
             Real signal_speed = vmag + speed_of_sound(w, config.gamma);
-            Real dt = config.cfl * mesh_.cells[i].h_min / signal_speed;
+            Real h_min_val = mesh_.cells[i].h_min;
+            if (h_min_val <= 0.0f) h_min_val = 1e-10f;
+            Real dt = config.cfl * h_min_val / signal_speed;
             if (dt < min_dt) {
                 min_dt = dt;
                 dt_limiter.cell = static_cast<int>(i);

@@ -1,4 +1,8 @@
 #include "aero/cfd/cfd_mesh.hpp"
+#include "aero/cfd/element_types.hpp"
+#include "aero/cfd/mesh_io.hpp"
+#include "aero/cfd/mesh_io_cgns.hpp"
+#include "aero/cfd/mesh_validator.hpp"
 #include "aero/cfd/real.hpp"
 
 #include <cmath>
@@ -96,10 +100,133 @@ static int test_flat_plate_mesh() {
     return 0;
 }
 
+static int test_su2_round_trip() {
+    TEST("CFD-MESH-IO-1 SU2 round-trip: hex mesh read/write/read matches");
+    {
+        CfdMesh original = generate_structured_hex_mesh(6);
+        compute_mesh_metrics(original);
+
+        const char* tmp_path = "test_mesh_su2_temp.su2";
+        std::string err;
+        if (!write_mesh_su2(original, tmp_path, &err)) FAIL("write: %s", err.c_str());
+
+        CfdMesh reloaded;
+        if (!read_mesh_su2(tmp_path, reloaded, &err)) FAIL("read: %s", err.c_str());
+        compute_mesh_metrics(reloaded);
+
+        if (reloaded.nodes.size() != original.nodes.size()) FAIL("node count: %zu vs %zu", reloaded.nodes.size(), original.nodes.size());
+        if (reloaded.cells.size() != original.cells.size()) FAIL("cell count: %zu vs %zu", reloaded.cells.size(), original.cells.size());
+
+        for (std::size_t i = 0; i < reloaded.cells.size(); ++i) {
+            if (reloaded.cells[i].type != original.cells[i].type) FAIL("cell %zu type mismatch", i);
+        }
+
+        std::remove(tmp_path);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_su2_invalid_file() {
+    TEST("CFD-MESH-IO-3 SU2 import with missing NELEM: read fails gracefully");
+    {
+        const char* tmp_path = "test_mesh_su2_bad.su2";
+        std::FILE* f = std::fopen(tmp_path, "w");
+        if (!f) FAIL("cannot create temp file");
+        std::fprintf(f, "NDIME= 3\n");
+        std::fprintf(f, "NPOIN= 0\n");
+        std::fprintf(f, "NMARK= 0\n");
+        std::fclose(f);
+
+        CfdMesh mesh;
+        std::string err;
+        bool ok = read_mesh_su2(tmp_path, mesh, &err);
+        if (ok) FAIL("expected read to fail, but it succeeded");
+
+        std::remove(tmp_path);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_mesh_quality_detail() {
+    TEST("CFD-MESH-IO-4 mesh quality detail on flat plate");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+        MeshQualityReport r = compute_mesh_quality_detail(mesh);
+        std::printf("\n  flat plate quality report:\n");
+        std::printf("  cells=%d faces=%d\n", r.cells, r.faces);
+        std::printf("  neg_jac=%d | aspect=[%.2f .. %.2f] avg=%.2f\n", r.negative_jacobian_count, r.min_aspect_ratio, r.max_aspect_ratio, r.avg_aspect_ratio);
+        std::printf("  skew=[%.4f .. %.4f] avg=%.4f\n", r.min_skewness, r.max_skewness, r.avg_skewness);
+        std::printf("  ortho=[%.1f .. %.1f] avg=%.1f deg\n", r.min_orthogonality, r.max_orthogonality, r.avg_orthogonality);
+        std::printf("  closed_surf_err=%g\n", r.closed_surface_error);
+        if (!r.valid) FAIL("detail: %s", r.message.c_str());
+        if (r.negative_jacobian_count != 0) FAIL("neg jac=%d", r.negative_jacobian_count);
+        if (r.min_volume <= 0.0f) FAIL("min vol=%g", r.min_volume);
+        PASS;
+    }
+
+    TEST("CFD-MESH-IO-5 mesh quality on cube mesh (25^3)");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 25);
+        compute_mesh_metrics(mesh);
+        MeshQualityReport r = compute_mesh_quality_detail(mesh);
+        std::printf("\n  cube quality report:\n");
+        std::printf("  cells=%d faces=%d\n", r.cells, r.faces);
+        std::printf("  neg_jac=%d | aspect=[%.2f .. %.2f] avg=%.2f\n", r.negative_jacobian_count, r.min_aspect_ratio, r.max_aspect_ratio, r.avg_aspect_ratio);
+        std::printf("  skew=[%.4f .. %.4f] avg=%.4f\n", r.min_skewness, r.max_skewness, r.avg_skewness);
+        std::printf("  ortho=[%.1f .. %.1f] avg=%.1f deg\n", r.min_orthogonality, r.max_orthogonality, r.avg_orthogonality);
+        std::printf("  vol=[%g .. %g]\n", r.min_volume, r.max_volume);
+        std::printf("  closed_surf_err=%g\n", r.closed_surface_error);
+        if (!r.valid) FAIL("detail: %s", r.message.c_str());
+        if (r.negative_jacobian_count != 0) FAIL("neg jac=%d", r.negative_jacobian_count);
+        if (r.min_volume <= 0.0f) FAIL("min vol=%g", r.min_volume);
+        PASS;
+    }
+
+    TEST("CFD-MESH-IO-6 mesh quality on hex mesh");
+    {
+        CfdMesh mesh = generate_structured_hex_mesh(6);
+        compute_mesh_metrics(mesh);
+        MeshQualityReport r = compute_mesh_quality_detail(mesh);
+        std::printf("\n  hex quality report:\n");
+        std::printf("  cells=%d faces=%d\n", r.cells, r.faces);
+        std::printf("  neg_jac=%d | aspect=[%.2f .. %.2f] avg=%.2f\n", r.negative_jacobian_count, r.min_aspect_ratio, r.max_aspect_ratio, r.avg_aspect_ratio);
+        std::printf("  skew=[%.4f .. %.4f] avg=%.4f\n", r.min_skewness, r.max_skewness, r.avg_skewness);
+        std::printf("  ortho=[%.1f .. %.1f] avg=%.1f deg\n", r.min_orthogonality, r.max_orthogonality, r.avg_orthogonality);
+        std::printf("  closed_surf_err=%g\n", r.closed_surface_error);
+        if (!r.valid) FAIL("detail: %s", r.message.c_str());
+        if (r.negative_jacobian_count != 0) FAIL("neg jac=%d", r.negative_jacobian_count);
+        if (r.min_volume <= 0.0f) FAIL("min vol=%g", r.min_volume);
+        PASS;
+    }
+
+    return 0;
+}
+
+static int test_cgns_fallback() {
+    TEST("CFD-MESH-IO-2 CGNS fallback when library unavailable");
+    {
+        CfdMesh mesh;
+        std::string err;
+        bool ok = read_mesh_cgns("nonexistent.cgns", mesh, &err);
+        if (ok) FAIL("expected CGNS read to fail but it succeeded");
+        if (err.empty()) FAIL("expected non-empty error message");
+        std::printf("  CGNS fallback message: \"%s\"\n", err.c_str());
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_cube_mesh();
     result |= test_flat_plate_mesh();
+    result |= test_su2_round_trip();
+    result |= test_su2_invalid_file();
+    result |= test_cgns_fallback();
+    result |= test_mesh_quality_detail();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

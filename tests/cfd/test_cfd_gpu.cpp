@@ -11,6 +11,7 @@
 #include "aero/cfd/gpu_solver.hpp"
 #include "aero/cfd/gpu_solver_internal.hpp"
 #include "aero/cfd/rans.hpp"
+#include "aero/cfd/viscous.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1299,6 +1300,82 @@ static int test_rans_zero_nu_tilde() {
     return 0;
 }
 
+static int test_mixed_element_gpu_residual() {
+    TEST("CFD-MESH-3D-GPU-4 Mixed-element GPU residuals vs CPU (TET4+HEX8+PENTA6+PYRAMID5)");
+    {
+        CfdMesh mesh;
+        mesh.nodes = {
+            {0,0,0}, {1,0,0}, {0,1,0}, {0,0,1},             // 0-3: TET4
+            {2,0,0}, {4,0,0}, {4,2,0}, {2,2,0},             // 4-7: HEX8 bottom
+            {2,0,2}, {4,0,2}, {4,2,2}, {2,2,2},             // 8-11: HEX8 top
+            {5,0,0}, {6,0,0}, {5,1,0},                       // 12-14: PENTA6 bottom
+            {5,0,1}, {6,0,1}, {5,1,1},                       // 15-17: PENTA6 top
+            {7,0,0}, {8,0,0}, {8,1,0}, {7,1,0},             // 18-21: PYRAMID5 base
+            {7.5f,0.5f,1}                                     // 22: PYRAMID5 apex
+        };
+
+        CfdCell tet;
+        tet.type = ElementType::TET4;
+        tet.node[0] = 0; tet.node[1] = 1; tet.node[2] = 2; tet.node[3] = 3;
+        mesh.cells.push_back(tet);
+
+        CfdCell hex;
+        hex.type = ElementType::HEX8;
+        hex.node[0] = 4; hex.node[1] = 5; hex.node[2] = 6; hex.node[3] = 7;
+        hex.node[4] = 8; hex.node[5] = 9; hex.node[6] = 10; hex.node[7] = 11;
+        mesh.cells.push_back(hex);
+
+        CfdCell prism;
+        prism.type = ElementType::PENTA6;
+        prism.node[0] = 12; prism.node[1] = 13; prism.node[2] = 14;
+        prism.node[3] = 15; prism.node[4] = 16; prism.node[5] = 17;
+        mesh.cells.push_back(prism);
+
+        CfdCell pyr;
+        pyr.type = ElementType::PYRAMID5;
+        pyr.node[0] = 18; pyr.node[1] = 19; pyr.node[2] = 20; pyr.node[3] = 21; pyr.node[4] = 22;
+        mesh.cells.push_back(pyr);
+
+        rebuild_mesh_faces(mesh);
+
+        auto w = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        std::vector<EulerFlux> cpu_res;
+        if (!compute_euler_residual_cpu(mesh, q, w, 1.4f, cpu_res)) FAIL("CPU residual failed");
+
+        std::vector<EulerFlux> gpu_res;
+        std::string error;
+        if (!compute_euler_residual_gpu(mesh, q, w, 1.4f, gpu_res, &error)) FAIL("GPU residual failed: %s", error.c_str());
+
+        if (gpu_res.size() != cpu_res.size()) FAIL("size mismatch gpu=%zu cpu=%zu", gpu_res.size(), cpu_res.size());
+
+        Real max_rel = 0.0f;
+        int bad_cell = -1;
+        std::string comp;
+        auto rel_diff = [](Real a, Real b) -> Real {
+            return std::fabs(a - b) / (1.0f + std::max(std::fabs(a), std::fabs(b)));
+        };
+        for (std::size_t i = 0; i < cpu_res.size(); ++i) {
+            Real d = rel_diff(gpu_res[i].mass, cpu_res[i].mass);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "mass"; }
+            d = rel_diff(gpu_res[i].mom_x, cpu_res[i].mom_x);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "mom_x"; }
+            d = rel_diff(gpu_res[i].mom_y, cpu_res[i].mom_y);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "mom_y"; }
+            d = rel_diff(gpu_res[i].mom_z, cpu_res[i].mom_z);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "mom_z"; }
+            d = rel_diff(gpu_res[i].energy, cpu_res[i].energy);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "energy"; }
+            d = rel_diff(gpu_res[i].turbulence, cpu_res[i].turbulence);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "turbulence"; }
+        }
+        if (max_rel > 1e-6f) FAIL("max relative diff=%g at cell=%d (%s)", max_rel, bad_cell, comp.c_str());
+        PASS;
+    }
+    return 0;
+}
+
 static int test_mixed_mesh_gpu_upload() {
     TEST("CFD-MESH-3D-GPU-1 Hex mesh upload/download: cell and face counts match host");
     {
@@ -1311,9 +1388,6 @@ static int test_mixed_mesh_gpu_upload() {
 
         if (d_mesh.cell_count() != mesh.cells.size()) FAIL("cell_count: device=%zu host=%zu", d_mesh.cell_count(), mesh.cells.size());
         if (d_mesh.face_count() != mesh.faces.size()) FAIL("face_count: device=%zu host=%zu", d_mesh.face_count(), mesh.faces.size());
-
-        if (!d_mesh.type_device()) FAIL("type_device() returned null");
-        if (!d_mesh.face_node_count_device()) FAIL("face_node_count_device() returned null");
 
         std::vector<ConservativeState> q(mesh.cells.size());
         for (auto& s : q) s = primitive_to_conservative({1.0f, 0.0f, 0.0f, 1.0f, 1.4f}, 1.4f);
@@ -1349,13 +1423,23 @@ static int test_hex_mesh_gpu_residual() {
 
         Real max_rel = 0.0f;
         int bad_cell = -1;
+        std::string comp;
+        auto rel_diff = [](Real a, Real b) -> Real {
+            return std::fabs(a - b) / (1.0f + std::max(std::fabs(a), std::fabs(b)));
+        };
         for (std::size_t i = 0; i < cpu_res.size(); ++i) {
-            Real dm = std::fabs(gpu_res[i].mass - cpu_res[i].mass) / (1.0f + std::max(std::fabs(gpu_res[i].mass), std::fabs(cpu_res[i].mass)));
-            Real de = std::fabs(gpu_res[i].energy - cpu_res[i].energy) / (1.0f + std::max(std::fabs(gpu_res[i].energy), std::fabs(cpu_res[i].energy)));
-            Real d = std::max(dm, de);
-            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); }
+            Real d = rel_diff(gpu_res[i].mass, cpu_res[i].mass);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "mass"; }
+            d = rel_diff(gpu_res[i].mom_x, cpu_res[i].mom_x);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "mom_x"; }
+            d = rel_diff(gpu_res[i].mom_y, cpu_res[i].mom_y);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "mom_y"; }
+            d = rel_diff(gpu_res[i].mom_z, cpu_res[i].mom_z);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "mom_z"; }
+            d = rel_diff(gpu_res[i].energy, cpu_res[i].energy);
+            if (d > max_rel) { max_rel = d; bad_cell = static_cast<int>(i); comp = "energy"; }
         }
-        if (max_rel > 1e-6f) FAIL("max relative diff=%g at cell=%d", max_rel, bad_cell);
+        if (max_rel > 1e-6f) FAIL("max relative diff=%g at cell=%d (%s)", max_rel, bad_cell, comp.c_str());
         PASS;
     }
     return 0;
@@ -1374,19 +1458,34 @@ static int test_hex_mesh_symmetric_forces() {
 
         CfdConfig cfg;
         cfg.use_gpu = true;
-        cfg.max_iter = 10;
+        cfg.max_iter = 50;
         cfg.cfl = 0.5f;
         cfg.convergence_tol = 1e-12f;
 
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary s = solver.solve(cond, cfg);
-        if (s.failed) FAIL("GPU solve failed");
+        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        if (gpu.failed) FAIL("GPU solve failed");
 
-        if (std::fabs(s.forces.CY) > 1e-8f) FAIL("CY=%g not zero", s.forces.CY);
-        if (std::fabs(s.forces.CZ) > 1e-8f) FAIL("CZ=%g not zero", s.forces.CZ);
-        if (!std::isfinite(s.forces.CX)) FAIL("CX not finite: %g", s.forces.CX);
+        if (std::fabs(gpu.forces.CY) > 1e-8f) FAIL("CY=%g not zero", gpu.forces.CY);
+        if (std::fabs(gpu.forces.CZ) > 1e-8f) FAIL("CZ=%g not zero", gpu.forces.CZ);
+        if (!std::isfinite(gpu.forces.CX)) FAIL("CX not finite: %g", gpu.forces.CX);
+
+        cfg.use_gpu = false;
+        cfg.cpu_oracle = false;
+        CfdSolveSummary cpu = solver.solve(cond, cfg);
+        if (cpu.failed) FAIL("CPU solve failed");
+
+        auto rel = [](Real a, Real b) -> Real {
+            return std::fabs(a - b) / (1.0f + std::max(std::fabs(a), std::fabs(b)));
+        };
+        if (rel(gpu.forces.CX, cpu.forces.CX) > 1e-6f)
+            FAIL("CX mismatch: GPU=%g CPU=%g rel=%g", gpu.forces.CX, cpu.forces.CX, rel(gpu.forces.CX, cpu.forces.CX));
+        if (rel(gpu.forces.CY, cpu.forces.CY) > 1e-6f)
+            FAIL("CY mismatch: GPU=%g CPU=%g rel=%g", gpu.forces.CY, cpu.forces.CY, rel(gpu.forces.CY, cpu.forces.CY));
+        if (rel(gpu.forces.CZ, cpu.forces.CZ) > 1e-6f)
+            FAIL("CZ mismatch: GPU=%g CPU=%g rel=%g", gpu.forces.CZ, cpu.forces.CZ, rel(gpu.forces.CZ, cpu.forces.CZ));
 
         PASS;
     }
@@ -1413,12 +1512,16 @@ static int test_rans_cpu_gpu_source_match() {
         for (std::size_t i = 0; i < grads.size(); ++i)
             limited[i] = apply_limiter(grads[i], limiters[i]);
 
+        constexpr Real T_ref = 288.15f;
+        constexpr Real S = 110.4f;
         std::vector<Real> cpu_delta(q.size(), 0.0f);
         for (std::size_t i = 0; i < q.size(); ++i) {
             PrimitiveState wc;
             conservative_to_primitive(q[i], 1.4f, wc);
             Real wall_d = mesh.cells[i].wall_distance;
-            Real mu = 1.0f;
+            Real T = wc.p / std::max(wc.rho, 1e-30f);
+            Real mu = sutherland_viscosity(T, T_ref, S);
+            if (mu <= 0.0f) mu = 1.0f;
             RansSource rs = compute_rans_source(wc, limited[i], wall_d, mu, q[i].rho, 1e5f);
             cpu_delta[i] = rs.total_source;
         }
@@ -1437,7 +1540,7 @@ static int test_rans_cpu_gpu_source_match() {
         if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed", &error)) FAIL("%s", error.c_str());
         if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "memset d_failed", &error)) FAIL("%s", error.c_str());
 
-        if (!compute_rans_source_gpu(d_mesh, gamma, 1e5f, d_failed, &error))
+        if (!compute_rans_source_gpu(d_mesh, gamma, 1e5f, 1.0f, 288.15f, 110.4f, d_failed, &error))
             FAIL("GPU RANS source: %s", error.c_str());
 
         std::vector<Real> gpu_res(mesh.cells.size() * 6);
@@ -1585,6 +1688,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_rans_turbulent_flat_plate();
     result |= test_rans_negative_nu_tilde();
     result |= test_rans_cpu_gpu_source_match();
+    result |= test_mixed_element_gpu_residual();
     result |= test_mixed_mesh_gpu_upload();
     result |= test_hex_mesh_gpu_residual();
     result |= test_hex_mesh_symmetric_forces();

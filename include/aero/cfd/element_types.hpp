@@ -64,10 +64,18 @@ constexpr int PYRAMID5_FACE_NODES[5][4] = {
 // Returns: pointer to 4 ints (unused entries are -1)
 inline const int* get_face_nodes(ElementType type, int local_face) {
     switch (type) {
-        case ElementType::TET4:     return TET4_FACE_NODES[local_face];
-        case ElementType::HEX8:     return HEX8_FACE_NODES[local_face];
-        case ElementType::PENTA6:   return PENTA6_FACE_NODES[local_face];
-        case ElementType::PYRAMID5: return PYRAMID5_FACE_NODES[local_face];
+        case ElementType::TET4:
+            if (local_face < 0 || local_face >= 4) return nullptr;
+            return TET4_FACE_NODES[local_face];
+        case ElementType::HEX8:
+            if (local_face < 0 || local_face >= 6) return nullptr;
+            return HEX8_FACE_NODES[local_face];
+        case ElementType::PENTA6:
+            if (local_face < 0 || local_face >= 5) return nullptr;
+            return PENTA6_FACE_NODES[local_face];
+        case ElementType::PYRAMID5:
+            if (local_face < 0 || local_face >= 5) return nullptr;
+            return PYRAMID5_FACE_NODES[local_face];
         default: return nullptr;
     }
 }
