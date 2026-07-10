@@ -377,7 +377,16 @@
   - Build: 0 errors, 98 targets. Tests: 13/15 pass (same 2 STL-not-found).
 
 2026-07-09
-- Moved all .md files except AGENTS.md to docs/ directory.
+2026-07-10 — Phase 8.1: 3D mixed-element mesh foundation completed.
+- Created `include/aero/cfd/element_types.hpp`: ElementType enum, static property tables (node count, face count, face-node-count), face-node index maps for tet/hex/prism/pyramid.
+- Updated `cfd_mesh.hpp`: CfdCell gains `ElementType type` (default TET4) and `node[8]`; CfdFace gains `int node_count` and `node[4]`.
+- Refactored `mesh_metrics.cpp`: volume_tet/hex/prism/pyramid, area_tri/quad, centroid per type; FaceKey includes node count for tri vs quad; rebuild_faces dispatches per element type; compute_mesh_metrics calls per-type compute_cell_metrics.
+- Added `generate_structured_hex_mesh()` (real hex cells, 10×10×10 → 1000 cells, 3300 faces).
+- Added `generate_prism_boundary_layer_mesh()` (penta6 extrusion from triangulated surface).
+- Updated `diagnostics.cpp` VTK output: per-type cell size + VTK type (10/12/13/14).
+- All 15 existing tests pass unchanged (backward compat with TET4 default).
+
+2026-07-11 — Moved all .md files except AGENTS.md to docs/ directory.
 - Updated all cross-references in docs (AGENTS.md, AERO_ACCURACY_UPGRADE.md, REPO_SPEC.md, PLAN.md, ISSUES.md, ARCH_STABILIZE.md, progress.md) from root paths to docs/ paths.
 - Removed stale `aerodynamics_table.csv.INVALID` from root.
 - Wrote GPL 3.0 LICENSE at root.
