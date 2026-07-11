@@ -3,6 +3,13 @@ target_sources(missile_lib PRIVATE
     panel/aero_table_gen.cpp
     cfd/cfd_residual.cpp
     cfd/cfd_residual_gpu.cu
+    cfd/exchange_halo.cu
+    cfd/fgmres_gpu.cu
+    cfd/jacobian_free.cu
+    cfd/lusgs_gpu.cu
+    cfd/gpu_communicator.cpp
+    cfd/gpu_topology.cpp
+    cfd/partition.cpp
     cfd/cfd_solver.cpp
     cfd/cuda_utils.cpp
     cfd/device_mesh.cu

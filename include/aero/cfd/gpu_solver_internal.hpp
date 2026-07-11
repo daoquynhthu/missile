@@ -2,12 +2,15 @@
 
 #include "aero/cfd/real.hpp"
 #include "aero/cfd/device_mesh.hpp"
+#include "aero/cfd/partition.hpp"
 
 #include <string>
 
 namespace aerosp {
 namespace aero {
 namespace cfd {
+
+class GpuCommunicator;
 
 bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt);
 bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt,
@@ -43,6 +46,19 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
 
 bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
     const Real* d_min_dt, std::string* error = nullptr);
+
+bool compute_local_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_dt_cell,
+    bool viscous, Real* d_mu, Real Re, std::string* error = nullptr);
+
+// Jacobian-free matrix-vector product for implicit solver
+struct PrimitiveState;
+bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
+    const Real* d_residual, Real epsilon, const CfdConfig& config,
+    const PrimitiveState& w_inf, Real* d_scratch, std::string* error = nullptr);
+
+// Multi-GPU halo exchange
+bool exchange_halo_gpu(DeviceMesh& mesh, const GpuPartition& gpu_part,
+    GpuCommunicator& comm, cudaStream_t stream);
 
 } // namespace cfd
 } // namespace aero

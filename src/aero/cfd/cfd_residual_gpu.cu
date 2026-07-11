@@ -1,6 +1,7 @@
 #include "aero/cfd/cfd_residual.hpp"
 #include "aero/cfd/real.hpp"
 #include "aero/cfd/cuda_utils.hpp"
+#include "aero/cfd/partition.hpp"
 #include <cuda_runtime.h>
 namespace aerosp {
 namespace aero {
@@ -178,12 +179,14 @@ __global__ void euler_residual_kernel_atomic(
     int* d_failed,
     const Real* d_gradients,
     const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
-    const Real* d_cx, const Real* d_cy, const Real* d_cz) {
+    const Real* d_cx, const Real* d_cy, const Real* d_cz,
+    const int* d_partition_owner, int my_rank) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
 
     int left = d_left_cell[idx];
     if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
+    if (d_partition_owner && d_partition_owner[left] != my_rank) return;
     int bnd = d_boundary[idx];
     Real nx = d_nx[idx];
     Real ny = d_ny[idx];
@@ -281,12 +284,14 @@ __global__ void euler_residual_kernel_colored(
     int* d_failed,
     const Real* d_gradients,
     const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
-    const Real* d_cx, const Real* d_cy, const Real* d_cz) {
+    const Real* d_cx, const Real* d_cy, const Real* d_cz,
+    const int* d_partition_owner, int my_rank) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
     if (idx >= face_end) return;
 
     int left = d_left_cell[idx];
     if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
+    if (d_partition_owner && d_partition_owner[left] != my_rank) return;
     int bnd = d_boundary[idx];
     Real nx = d_nx[idx];
     Real ny = d_ny[idx];
@@ -398,6 +403,9 @@ bool launch_euler_residual_kernel(
     int nc = static_cast<int>(mesh.cell_count());
     bool second_order = (reconstruction_order == 2 && mesh.gradients_device() != nullptr);
     int n_colors = mesh.color_count();
+    const GpuPartition* gpu_part = mesh.get_partition();
+    const int* d_partition_owner = gpu_part ? gpu_part->d_partition_owner : nullptr;
+    int my_rank = gpu_part ? gpu_part->my_rank : 0;
 
     if (n_colors > 0) {
         for (int c = 0; c < n_colors; ++c) {
@@ -417,7 +425,8 @@ bool launch_euler_residual_kernel(
                 d_failed,
                 second_order ? mesh.gradients_device() : nullptr,
                 fd.cx, fd.cy, fd.cz,
-                cd.cx, cd.cy, cd.cz);
+                cd.cx, cd.cy, cd.cz,
+                d_partition_owner, my_rank);
             if (!cuda_check(cudaGetLastError(), "euler_residual_kernel_colored", error)) return false;
         }
     } else {
@@ -434,7 +443,8 @@ bool launch_euler_residual_kernel(
             d_failed,
             second_order ? mesh.gradients_device() : nullptr,
             fd.cx, fd.cy, fd.cz,
-            cd.cx, cd.cy, cd.cz);
+            cd.cx, cd.cy, cd.cz,
+            d_partition_owner, my_rank);
         if (!cuda_check(cudaGetLastError(), "euler_residual_kernel_atomic", error)) return false;
     }
     return true;

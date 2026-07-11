@@ -1,6 +1,7 @@
 #include "aero/cfd/cuda_utils.hpp"
 #include "aero/cfd/real.hpp"
 #include "aero/cfd/device_mesh.hpp"
+#include "aero/cfd/partition.hpp"
 #include "aero/cfd/gpu_solver_internal.hpp"
 #include <cuda_runtime.h>
 namespace aerosp {
@@ -27,7 +28,8 @@ __global__ void wall_force_kernel(
     const Real* d_gradients,
     const Real* d_cell_cx, const Real* d_cell_cy, const Real* d_cell_cz,
     bool viscous, Real prandtl, Real mu_ref, Real T_ref, Real sutherland_T,
-    Real inv_Re, Real wall_T) {
+    Real inv_Re, Real wall_T,
+    const int* d_partition_owner, int my_rank) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
 
@@ -37,6 +39,7 @@ __global__ void wall_force_kernel(
 
     int left = d_left_cell[idx];
     if (left < 0 || left >= n_cells) return;
+    if (d_partition_owner && d_partition_owner[left] != my_rank) return;
     Real rho = d_q[left * nvar + 0];
     if (!real_isfinite(rho) || rho <= 0.0f) return;
     Real inv_rho = 1.0f / rho;
@@ -169,6 +172,10 @@ bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces,
     int nc = static_cast<int>(mesh.cell_count());
     Real inv_Re = 1.0f / (Re > 0.0f ? Re : 1e6f);
 
+    const GpuPartition* gpu_part = mesh.get_partition();
+    const int* d_partition_owner = gpu_part ? gpu_part->d_partition_owner : nullptr;
+    int my_rank = gpu_part ? gpu_part->my_rank : 0;
+
     wall_force_kernel<<<grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, gamma,
         fd.nx, fd.ny, fd.nz, fd.area,
@@ -178,7 +185,8 @@ bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces,
         mesh.gradients_device(),
         cd.cx, cd.cy, cd.cz,
         viscous, prandtl, mu_ref, T_ref, sutherland_T,
-        inv_Re, wall_T);
+        inv_Re, wall_T,
+        d_partition_owner, my_rank);
     if (!cuda_check(cudaGetLastError(), "wall_force kernel launch")) return false;
     return true;
 }

@@ -1,0 +1,374 @@
+#include "aero/cfd/cuda_utils.hpp"
+#include "aero/cfd/real.hpp"
+#include "aero/cfd/krylov_ops.hpp"
+#include "aero/cfd/fgmres.hpp"
+
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <cuda_runtime.h>
+#include <limits>
+
+namespace aerosp {
+namespace aero {
+namespace cfd {
+
+namespace {
+
+constexpr int kBlockSize = 256;
+
+__global__ void ddot_kernel(const Real* x, const Real* y, int n, Real* result) {
+    __shared__ Real sdata[kBlockSize];
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + tid;
+    Real sum = 0;
+    for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
+        sum += x[i] * y[i];
+    }
+    sdata[tid] = sum;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+    if (tid == 0) {
+        real_atomic_add(result, sdata[0]);
+    }
+}
+
+__global__ void daxpy_kernel(Real a, const Real* x, Real* y, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
+        y[i] = a * x[i] + y[i];
+    }
+}
+
+__global__ void dscal_kernel(Real a, Real* x, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
+        x[i] = a * x[i];
+    }
+}
+
+__global__ void dcopy_kernel(const Real* src, Real* dst, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
+        dst[i] = src[i];
+    }
+}
+
+__global__ void daxpby_kernel(Real a, const Real* x, Real b, Real* y, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
+        y[i] = a * x[i] + b * y[i];
+    }
+}
+
+int grid_size(int n) {
+    int g = (n + kBlockSize - 1) / kBlockSize;
+    return g < 1 ? 1 : (g > 256 ? 256 : g);
+}
+
+} // namespace
+
+bool ddot_gpu(const Real* x, const Real* y, int n, Real* result, cudaStream_t stream) {
+    if (!cuda_check(cudaMemsetAsync(result, 0, sizeof(Real), stream), "ddot zero result")) return false;
+    int grid = grid_size(n);
+    ddot_kernel<<<grid, kBlockSize, 0, stream>>>(x, y, n, result);
+    return cuda_check(cudaGetLastError(), "ddot kernel");
+}
+
+bool daxpy_gpu(Real a, const Real* x, Real* y, int n, cudaStream_t stream) {
+    int grid = grid_size(n);
+    daxpy_kernel<<<grid, kBlockSize, 0, stream>>>(a, x, y, n);
+    return cuda_check(cudaGetLastError(), "daxpy kernel");
+}
+
+bool dnrm2_gpu(const Real* x, int n, Real* result, cudaStream_t stream) {
+    if (!cuda_check(cudaMemsetAsync(result, 0, sizeof(Real), stream), "dnrm2 zero result")) return false;
+    int grid = grid_size(n);
+    ddot_kernel<<<grid, kBlockSize, 0, stream>>>(x, x, n, result);
+    if (!cuda_check(cudaGetLastError(), "dnrm2 ddot kernel")) return false;
+    Real host_sum = 0;
+    if (!cuda_check(cudaMemcpy(&host_sum, result, sizeof(Real), cudaMemcpyDeviceToHost), "dnrm2 copy")) return false;
+    host_sum = real_sqrt(host_sum);
+    if (!cuda_check(cudaMemcpy(result, &host_sum, sizeof(Real), cudaMemcpyHostToDevice), "dnrm2 copy result")) return false;
+    return true;
+}
+
+bool dscal_gpu(Real a, Real* x, int n, cudaStream_t stream) {
+    int grid = grid_size(n);
+    dscal_kernel<<<grid, kBlockSize, 0, stream>>>(a, x, n);
+    return cuda_check(cudaGetLastError(), "dscal kernel");
+}
+
+bool dcopy_gpu(const Real* src, Real* dst, int n, cudaStream_t stream) {
+    int grid = grid_size(n);
+    dcopy_kernel<<<grid, kBlockSize, 0, stream>>>(src, dst, n);
+    return cuda_check(cudaGetLastError(), "dcopy kernel");
+}
+
+bool daxpby_gpu(Real a, const Real* x, Real b, Real* y, int n, cudaStream_t stream) {
+    int grid = grid_size(n);
+    daxpby_kernel<<<grid, kBlockSize, 0, stream>>>(a, x, b, y, n);
+    return cuda_check(cudaGetLastError(), "daxpby kernel");
+}
+
+// --- FgmresSolver ---
+
+FgmresSolver::FgmresSolver(int n, int restart, int max_iter, Real tol)
+    : n_(n), restart_(restart), max_iter_(max_iter), tol_(tol) {}
+
+FgmresSolver::~FgmresSolver() { release(); }
+
+bool FgmresSolver::allocate(std::string* error) {
+    if (allocated_) return true;
+    if (n_ <= 0 || restart_ <= 0) {
+        if (error) *error = "FgmresSolver: invalid n or restart";
+        return false;
+    }
+    int m = restart_;
+    ldv_ = n_;
+    ldz_ = n_;
+
+    if (!cuda_check(cudaMalloc(&d_v_, (m + 1) * ldv_ * sizeof(Real)), "cudaMalloc d_v", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_z_, m * ldz_ * sizeof(Real)), "cudaMalloc d_z", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_w_, n_ * sizeof(Real)), "cudaMalloc d_w", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_hess_, (m + 1) * m * sizeof(Real)), "cudaMalloc d_hess", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_givens_c_, m * sizeof(Real)), "cudaMalloc d_givens_c", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_givens_s_, m * sizeof(Real)), "cudaMalloc d_givens_s", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_rs_, (m + 1) * sizeof(Real)), "cudaMalloc d_rs", error)) return false;
+
+    allocated_ = true;
+    return true;
+}
+
+void FgmresSolver::release() {
+    cuda_free_safe(d_v_);
+    cuda_free_safe(d_z_);
+    cuda_free_safe(d_w_);
+    cuda_free_safe(d_hess_);
+    cuda_free_safe(d_givens_c_);
+    cuda_free_safe(d_givens_s_);
+    cuda_free_safe(d_rs_);
+    allocated_ = false;
+}
+
+void FgmresSolver::generate_givens_rotation(Real a, Real b, Real& c, Real& s) {
+    Real abs_a = real_fabs(a);
+    Real abs_b = real_fabs(b);
+    if (abs_a < std::numeric_limits<Real>::min() && abs_b < std::numeric_limits<Real>::min()) {
+        c = 1; s = 0;
+        return;
+    }
+    if (abs_a >= abs_b) {
+        Real t = b / a;
+        Real tt = real_sqrt(1 + t * t);
+        c = 1 / tt;
+        s = t * c;
+    } else {
+        Real t = a / b;
+        Real tt = real_sqrt(1 + t * t);
+        s = 1 / tt;
+        c = t * s;
+    }
+}
+
+bool FgmresSolver::apply_givens_rotation(Real* h, int k, Real* rs) {
+    for (int i = 0; i < k; ++i) {
+        Real temp = d_givens_c_[i] * h[i] + d_givens_s_[i] * h[i + 1];
+        h[i + 1] = -d_givens_s_[i] * h[i] + d_givens_c_[i] * h[i + 1];
+        h[i] = temp;
+    }
+    generate_givens_rotation(h[k], h[k + 1], d_givens_c_[k], d_givens_s_[k]);
+    h[k] = d_givens_c_[k] * h[k] + d_givens_s_[k] * h[k + 1];
+    h[k + 1] = 0;
+
+    rs[k + 1] = -d_givens_s_[k] * rs[k];
+    rs[k] = d_givens_c_[k] * rs[k];
+    return real_fabs(rs[k + 1]) <= tol_;
+}
+
+bool FgmresSolver::solve(const MatvecFunc& matvec,
+                          const Real* d_b,
+                          Real* d_x,
+                          std::string* error,
+                          cudaStream_t stream) {
+    if (!allocated_) {
+        if (error) *error = "FgmresSolver not allocated";
+        return false;
+    }
+    iterations_ = 0;
+    converged_ = false;
+    final_residual_ = 0;
+
+    int m = restart_;
+    int n = n_;
+    Real* v = d_v_;
+    Real* z = d_z_;
+    Real* w = d_w_;
+    Real* hess = d_hess_;
+    Real* givens_c = d_givens_c_;
+    Real* givens_s = d_givens_s_;
+    Real* rs = d_rs_;
+
+    auto krylov_ddot = [&](const Real* a, const Real* b, Real& val) -> bool {
+        if (!cuda_check(cudaMemsetAsync(rs, 0, sizeof(Real), stream), "ddot tmp", error)) return false;
+        if (!ddot_gpu(a, b, n, rs, stream)) { if (error) *error = "ddot failed"; return false; }
+        if (!cuda_check(cudaMemcpy(&val, rs, sizeof(Real), cudaMemcpyDeviceToHost), "ddot copy", error)) return false;
+        return true;
+    };
+
+    Real beta = 0;
+    Real* v0 = v;
+
+    if (!daxpy_gpu(-1, d_x, w, n, stream)) { if (error) *error = "w = -x failed"; return false; }
+    if (!daxpy_gpu(1, d_b, w, n, stream)) { if (error) *error = "w = b - Ax0 failed"; return false; }
+
+    if (!krylov_ddot(w, w, beta)) return false;
+    beta = real_sqrt(beta);
+    if (beta < std::numeric_limits<Real>::min()) {
+        converged_ = true;
+        final_residual_ = 0;
+        return true;
+    }
+
+    Real inv_beta = 1.0f / beta;
+    if (!dscal_gpu(inv_beta, w, n, stream)) { if (error) *error = "v0 = r/beta failed"; return false; }
+    if (!dcopy_gpu(w, v0, n, stream)) { if (error) *error = "copy v0 failed"; return false; }
+
+    std::vector<Real> h_host((m + 1) * m, 0);
+    std::vector<Real> givens_c_host(m, 0);
+    std::vector<Real> givens_s_host(m, 0);
+    std::vector<Real> rs_host(m + 1, 0);
+    rs_host[0] = beta;
+
+    iterations_ = 0;
+    int k = 0;
+
+    for (int outer = 0; outer < max_iter_ && !converged_; ++outer) {
+        k = 0;
+        for (int i = 0; i < m + 1; ++i) rs_host[i] = 0;
+        rs_host[0] = beta;
+
+        for (int j = 0; j < m; ++j) {
+            Real* vj = v + j * ldv_;
+
+            Real* zj = z + j * ldz_;
+            if (prec_) {
+                if (!prec_(vj, zj, error)) {
+                    if (error) { std::string e = "FGMRES preconditioner failed: " + *error; *error = e; }
+                    return false;
+                }
+            } else {
+                if (!dcopy_gpu(vj, zj, n, stream)) { if (error) *error = "copy v->z failed"; return false; }
+            }
+
+            if (!matvec(zj, w, error)) {
+                if (error) { std::string e = "FGMRES matvec failed: " + *error; *error = e; }
+                return false;
+            }
+
+            for (int i = 0; i <= j; ++i) {
+                Real* vi = v + i * ldv_;
+                Real h_ij = 0;
+                if (!krylov_ddot(w, vi, h_ij)) return false;
+                h_host[i * m + j] = h_ij;
+                if (!daxpy_gpu(-h_ij, vi, w, n, stream)) { if (error) *error = "MGS axpy failed"; return false; }
+            }
+
+            Real h_j1j = 0;
+            if (!krylov_ddot(w, w, h_j1j)) return false;
+            h_j1j = real_sqrt(h_j1j);
+            h_host[(j + 1) * m + j] = h_j1j;
+
+            if (h_j1j > std::numeric_limits<Real>::min()) {
+                Real inv_h = 1.0f / h_j1j;
+                Real* v_j1 = v + (j + 1) * ldv_;
+                if (!dscal_gpu(inv_h, w, n, stream)) { if (error) *error = "scale v_j+1 failed"; return false; }
+                if (!dcopy_gpu(w, v_j1, n, stream)) { if (error) *error = "copy v_j+1 failed"; return false; }
+            }
+
+            for (int i = 0; i < j; ++i) {
+                Real temp = givens_c_host[i] * h_host[i * m + j] + givens_s_host[i] * h_host[(i + 1) * m + j];
+                h_host[(i + 1) * m + j] = -givens_s_host[i] * h_host[i * m + j] + givens_c_host[i] * h_host[(i + 1) * m + j];
+                h_host[i * m + j] = temp;
+            }
+            {
+                Real a = h_host[j * m + j];
+                Real b = h_host[(j + 1) * m + j];
+                Real c = 1, s = 0;
+                generate_givens_rotation(a, b, c, s);
+                givens_c_host[j] = c;
+                givens_s_host[j] = s;
+                h_host[j * m + j] = c * a + s * b;
+                h_host[(j + 1) * m + j] = 0;
+
+                Real rs_j = rs_host[j];
+                rs_host[j] = c * rs_j;
+                rs_host[j + 1] = -s * rs_j;
+            }
+
+            Real res = real_fabs(rs_host[j + 1]);
+            iterations_++;
+
+            if (res <= tol_) {
+                converged_ = true;
+                k = j;
+                break;
+            }
+            k = j;
+        }
+
+        int k_eff = converged_ ? k : (k);
+        {
+            std::vector<Real> R(k_eff + 1, 0);
+            for (int i = 0; i <= k_eff; ++i) R[i] = rs_host[i];
+
+            for (int i = k_eff; i >= 0; --i) {
+                Real sum = R[i];
+                for (int j = i + 1; j <= k_eff; ++j) {
+                    sum -= h_host[i * m + j] * R[j];
+                }
+                if (real_fabs(h_host[i * m + i]) > std::numeric_limits<Real>::min()) {
+                    R[i] = sum / h_host[i * m + i];
+                } else {
+                    R[i] = 0;
+                }
+            }
+
+            if (!daxpy_gpu(0, nullptr, w, n, stream)) { if (error) *error = "zero w failed"; return false; }
+            if (!daxpy_gpu(R[0], z, w, n, stream)) { if (error) *error = "w = R[0]*z0 failed"; return false; }
+            for (int j = 1; j <= k_eff; ++j) {
+                Real* zj = z + j * ldz_;
+                if (!daxpy_gpu(R[j], zj, w, n, stream)) { if (error) *error = "w += R[j]*zj failed"; return false; }
+            }
+
+            if (!daxpy_gpu(1, w, d_x, n, stream)) { if (error) *error = "x += w failed"; return false; }
+        }
+
+        if (!converged_) {
+            if (!daxpy_gpu(-1, d_x, w, n, stream)) { if (error) *error = "w = -x failed"; return false; }
+            if (!daxpy_gpu(1, d_b, w, n, stream)) { if (error) *error = "w = b - Ax failed"; return false;}
+
+            if (!krylov_ddot(w, w, beta)) return false;
+            beta = real_sqrt(beta);
+            if (beta < std::numeric_limits<Real>::min()) {
+                converged_ = true;
+                final_residual_ = 0;
+                break;
+            }
+
+            Real inv_beta2 = 1.0f / beta;
+            if (!dscal_gpu(inv_beta2, w, n, stream)) { if (error) *error = "v0 = r/beta failed"; return false; }
+            if (!dcopy_gpu(w, v0, n, stream)) { if (error) *error = "copy v0 failed"; return false; }
+        }
+    }
+
+    final_residual_ = real_fabs(rs_host[k + 1]);
+    return true;
+}
+
+} // namespace cfd
+} // namespace aero
+} // namespace aerosp

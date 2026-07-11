@@ -14,6 +14,8 @@ namespace aerosp {
 namespace aero {
 namespace cfd {
 
+struct GpuPartition;
+
 struct DeviceFaceData {
     Real* nx = nullptr;
     Real* ny = nullptr;
@@ -107,6 +109,8 @@ public:
     int* halo_indices_device() const { return d_halo_indices_; }
     Real* halo_send_device() const { return d_halo_send_buf_; }
     Real* halo_recv_device() const { return d_halo_recv_buf_; }
+    void set_partition(const GpuPartition* gpu_part) { gpu_part_ = gpu_part; }
+    const GpuPartition* get_partition() const { return gpu_part_; }
 
     // Viscous buffers
     bool allocate_viscous();
@@ -153,6 +157,8 @@ private:
     Real* d_halo_send_buf_ = nullptr;
     Real* d_halo_recv_buf_ = nullptr;
     int n_halo_cells_ = 0;
+
+    const GpuPartition* gpu_part_ = nullptr;
 };
 
 } // namespace cfd

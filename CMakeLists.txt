@@ -89,6 +89,15 @@ if(AEROSIM_USE_CGNS)
     endif()
 endif()
 
+option(AEROSIM_MPI "Enable MPI distributed memory support" OFF)
+if(AEROSIM_MPI)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+    target_include_directories(missile_lib PUBLIC ${MPI_CXX_INCLUDE_DIRS})
+    target_link_libraries(missile_lib PUBLIC ${MPI_CXX_LIBRARIES})
+    add_compile_definitions(MPI_ENABLED)
+    message(STATUS "MPI found: ${MPI_CXX_INCLUDE_DIRS}")
+endif()
+
 if(MSVC)
     target_compile_options(missile_lib PUBLIC
         $<$<COMPILE_LANGUAGE:CXX>:/wd4819 /wd4068>

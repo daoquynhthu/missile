@@ -7,8 +7,13 @@
 #include "aero/cfd/cfd_state.hpp"
 #include "aero/cfd/cuda_utils.hpp"
 #include "aero/cfd/device_mesh.hpp"
+#include "aero/cfd/fgmres.hpp"
+#include "aero/cfd/gpu_communicator.hpp"
 #include "aero/cfd/gpu_solver.hpp"
 #include "aero/cfd/gpu_solver_internal.hpp"
+#include "aero/cfd/krylov_ops.hpp"
+#include "aero/cfd/lusgs.hpp"
+#include "aero/cfd/partition.hpp"
 #include "aero/cfd/diagnostics.hpp"
 #include <cfloat>
 #include <cmath>
@@ -57,7 +62,9 @@ static CfdSolveSummary solve_gpu_impl(
     int* d_failure_cell,
     Real* d_failure_state,
     bool owned_buffers,
-    std::string* error) {
+    std::string* error,
+    GpuCommunicator* comm = nullptr,
+    const GpuPartition* gpu_part = nullptr) {
     CfdSolveSummary summary;
     std::vector<Real> host_residual_history;
     int host_failed = 0;
@@ -72,17 +79,50 @@ static CfdSolveSummary solve_gpu_impl(
         w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
     }
     int nvar_ncells = DeviceMesh::NVAR * static_cast<int>(d_mesh.cell_count());
+    int n_cells = static_cast<int>(d_mesh.cell_count());
+    int nvar = DeviceMesh::NVAR;
+    int nvar_cells = n_cells * nvar;
+
+    FgmresSolver* fgmres = nullptr;
+    LusgsPreconditioner* lusgs = nullptr;
+    Real* d_dq = nullptr;
+    Real* d_dt_cell = nullptr;
+    Real* d_r_saved = nullptr;
+    Real* d_q_backup = nullptr;
+    Real* d_scratch = nullptr;
+
+    if (config.implicit) {
+        d_dq = nullptr; d_dt_cell = nullptr; d_r_saved = nullptr; d_q_backup = nullptr;
+        if (!cuda_check(cudaMalloc(&d_dq, nvar_cells * sizeof(Real)), "cudaMalloc d_dq", error)) goto fail;
+        if (!cuda_check(cudaMalloc(&d_dt_cell, n_cells * sizeof(Real)), "cudaMalloc d_dt_cell", error)) goto fail;
+        if (!cuda_check(cudaMalloc(&d_r_saved, nvar_cells * sizeof(Real)), "cudaMalloc d_r_saved", error)) goto fail;
+        if (!cuda_check(cudaMalloc(&d_q_backup, nvar_cells * sizeof(Real)), "cudaMalloc d_q_backup", error)) goto fail;
+        if (!cuda_check(cudaMalloc(&d_scratch, 4 * nvar_cells * sizeof(Real)), "cudaMalloc d_scratch", error)) goto fail;
+
+        fgmres = new FgmresSolver(nvar_cells, config.fgmres_restart, config.fgmres_max_iter, config.fgmres_tol);
+        if (!fgmres->allocate(error)) goto fail;
+
+        lusgs = new LusgsPreconditioner();
+        if (!lusgs->allocate(d_mesh, error)) goto fail;
+    }
 
 #ifdef MPI_ENABLED
     cudaStream_t stream_comp, stream_comm;
     cudaStreamCreate(&stream_comp);
     cudaStreamCreate(&stream_comm);
+    if (comm && gpu_part && comm->size() > 1) {
+        d_mesh.set_partition(gpu_part);
+    }
+#else
+    (void)comm;
+    (void)gpu_part;
 #endif
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
 #ifdef MPI_ENABLED
-        if (d_mesh.has_halo()) {
-            // exchange_halo_kernel<<<grid, 1, 0, stream_comm>>>(d_mesh.halo_send_device(), d_mesh.halo_recv_device());
+        if (comm && comm->size() > 1 && d_mesh.has_halo()) {
+            exchange_halo_gpu(d_mesh, *gpu_part, *comm, stream_comm);
+            cudaStreamSynchronize(stream_comm);
         }
 #endif
         if (config.reconstruction_order == 2) {
@@ -130,10 +170,111 @@ if (config.viscous) {
             }
         }
 
-        if (!compute_update_gpu(d_mesh, d_min_dt, config.gamma, d_l2_sum, d_failed,
-                d_failure_cell, d_failure_state)) {
-            if (error) *error = "update kernel failed";
-            goto fail;
+        if (config.implicit) {
+            Real cfl_ramp = config.cfl_start * real_pow(config.cfl_end / config.cfl_start,
+                static_cast<Real>(iter) / static_cast<Real>(config.cfl_ramp_steps > 0 ? config.cfl_ramp_steps : 1));
+            cfl_ramp = real_fmin(cfl_ramp, config.cfl_end);
+
+            if (!compute_local_timestep_gpu(d_mesh, config.gamma, cfl_ramp, d_dt_cell,
+                    config.viscous, d_mesh.mu_device(), config.Re, error)) {
+                goto fail;
+            }
+
+            if (!lusgs->compute_diagonal(d_mesh, d_dt_cell, config.gamma,
+                    config.viscous, d_mesh.mu_device(), config.Re, error)) {
+                goto fail;
+            }
+
+            if (!cuda_check(cudaMemcpy(d_r_saved, d_mesh.residual_device(),
+                    nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "save R(Q^n)", error)) goto fail;
+
+            Real l2_old = 0;
+            if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum)) { if (error) *error = "L2 norm failed"; goto fail; }
+            if (!cuda_check(cudaMemcpy(&l2_old, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost), "read L2", error)) goto fail;
+            l2_old = real_sqrt(l2_old / static_cast<Real>(nvar_ncells > 0 ? nvar_ncells : 1));
+
+            Real* d_neg_r = d_dt_cell;
+            if (!dscal_gpu(-1, d_r_saved, nvar_cells)) { if (error) *error = "negate R failed"; goto fail; }
+            if (!dcopy_gpu(d_r_saved, d_neg_r, nvar_cells)) { if (error) *error = "copy -R failed"; goto fail; }
+            if (!dscal_gpu(-1, d_r_saved, nvar_cells)) { if (error) *error = "restore R failed"; goto fail; }
+
+            Real eps_jfv = Real(1e-7);
+            bool newt_converged = false;
+
+            for (int newt = 0; newt < config.newton_max_iter; ++newt) {
+                if (!cuda_check(cudaMemcpy(d_q_backup, d_mesh.state_device(),
+                        nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "backup Q", error)) goto fail;
+
+                auto matvec = [&](const Real* v, Real* w, std::string* err) -> bool {
+                    return compute_jfv_product(d_mesh, v, w, d_r_saved, eps_jfv, config, w_inf, d_scratch, err);
+                };
+                auto prec = [&](const Real* v, Real* z, std::string* err) -> bool {
+                    return lusgs->apply(d_mesh, v, z, config.gamma, err);
+                };
+
+                fgmres->set_preconditioner(prec);
+                if (!fgmres->solve(matvec, d_neg_r, d_dq, error)) {
+                    if (error) *error = "FGMRES solve failed in Newton iteration";
+                    goto fail;
+                }
+
+                if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells)) {
+                    if (error) *error = "Q += dq failed"; goto fail;
+                }
+
+                d_mesh.clear_residual(error);
+                if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed,
+                        nullptr, error, config.reconstruction_order)) {
+                    goto fail;
+                }
+
+                Real l2_new = 0;
+                if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum)) {
+                    if (error) *error = "new L2 norm failed"; goto fail;
+                }
+                if (!cuda_check(cudaMemcpy(&l2_new, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost), "read new L2", error)) goto fail;
+                l2_new = real_sqrt(l2_new / static_cast<Real>(nvar_ncells > 0 ? nvar_ncells : 1));
+
+                if (l2_new < config.newton_sufficent_decrease * l2_old) {
+                    if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells)) {
+                        if (error) *error = "update saved R failed"; goto fail;
+                    }
+                    l2_old = l2_new;
+                    newt_converged = true;
+                    break;
+                }
+
+                if (!daxpy_gpu(-1, d_dq, d_mesh.state_device(), nvar_cells)) {
+                    if (error) *error = "Newton backtrack restore failed"; goto fail;
+                }
+                if (!dscal_gpu(0.5f, d_dq, nvar_cells)) {
+                    if (error) *error = "Newton backtrack scale failed"; goto fail;
+                }
+            }
+
+            if (!newt_converged) {
+                if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells)) {
+                    if (error) *error = "Newton fallback Q += dq failed"; goto fail;
+                }
+                d_mesh.clear_residual(error);
+                if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed,
+                        nullptr, error, config.reconstruction_order)) {
+                    goto fail;
+                }
+                if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells)) {
+                    if (error) *error = "Newton fallback save R failed"; goto fail;
+                }
+            }
+
+            if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum)) {
+                if (error) *error = "final L2 norm failed"; goto fail;
+            }
+        } else {
+            if (!compute_update_gpu(d_mesh, d_min_dt, config.gamma, d_l2_sum, d_failed,
+                    d_failure_cell, d_failure_state)) {
+                if (error) *error = "update kernel failed";
+                goto fail;
+            }
         }
 
         if (diagnostics_enabled) {
@@ -151,6 +292,9 @@ if (config.viscous) {
 #ifdef MPI_ENABLED
         if (d_mesh.has_halo()) {
             cudaStreamSynchronize(stream_comm);
+        }
+        if (comm && comm->size() > 1) {
+            comm->barrier(nullptr);
         }
 #endif
     }
@@ -265,6 +409,14 @@ fail:
     summary.failed = true;
 
 cleanup:
+    d_mesh.set_partition(nullptr);
+    if (fgmres) { delete fgmres; fgmres = nullptr; }
+    if (lusgs) { delete lusgs; lusgs = nullptr; }
+    cuda_free_safe(d_dq);
+    cuda_free_safe(d_dt_cell);
+    cuda_free_safe(d_r_saved);
+    cuda_free_safe(d_q_backup);
+    cuda_free_safe(d_scratch);
 #ifdef MPI_ENABLED
     cudaStreamDestroy(stream_comp);
     cudaStreamDestroy(stream_comm);

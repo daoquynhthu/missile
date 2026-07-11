@@ -1692,3 +1692,86 @@ Fix: `else if (!(r.min_volume > 0.0f))`。
 | LOW      | 1 | PH9-1-L1 (nmark unused) |
 | INFO     | 4 | PH9-2-I1, PH9-2-I2, PH9-3-I1, PH9-3-I2 |
 | FIXED    | 36 | PH9-1-H1, PH9-1-H2, PH9-1-H3, PH9-1-M1, PH9-1-M2, PH9-1-M3, PH9-1-M4, PH9-1-M5, PH9-1-L2, PH9-1-L3, PH9-1-L4, PH9-1-L5, PH9-1-L6, PH9-2-H1, PH9-2-H2, PH9-2-H3, PH9-2-H4, PH9-2-M1, PH9-2-M2, PH9-2-M3, PH9-2-M4, PH9-2-M5, PH9-2-M6, PH9-2-M7, PH9-2-M8, PH9-2-L1, PH9-2-L2, PH9-3-H1, PH9-3-H2, PH9-3-H3, PH9-3-H4, PH9-3-M1, PH9-3-M2, PH9-3-M3, PH9-3-L1, PH9-3-L2 | |
+
+## Phase 10 — Multi-GPU Distributed Memory (2026-07-11)
+
+Phase 10 implements the complete infrastructure for multi-GPU distributed memory: GPU topology detection, MPI communication layer, linear domain decomposition, halo exchange, and partition guards in all solver kernels. All MPI code is behind `AEROSIM_MPI` CMake option (OFF by default) and `#ifdef MPI_ENABLED` — zero overhead in single-GPU mode.
+
+**Note**: No multi-GPU environment available. All multi-GPU code paths compile but are NOT runtime-tested. Testing deferred until multi-GPU hardware is available.
+
+### Files
+
+| File | Role |
+|------|------|
+| `include/aero/cfd/gpu_topology.hpp` | `GpuTopology` struct: device count, peer access, NVLink, `select_devices()`, `bandwidth_report()` |
+| `src/aero/cfd/gpu_topology.cpp` | `detect_gpu_topology()` — cudaGetDeviceCount, peer access matrix, NVLink (CUDA<12) |
+| `include/aero/cfd/gpu_communicator.hpp` | `GpuCommunicator` RAII class: MPI init, send/recv, allreduce, barrier |
+| `src/aero/cfd/gpu_communicator.cpp` | MPI + CUDA-aware detection (compile-time `MPI_ENABLED`), non-MPI fallback |
+| `include/aero/cfd/partition.hpp` | `PartitionInfo` + `GpuPartition` structs; `partition_linear()`, `upload_partition_to_device()` |
+| `src/aero/cfd/partition.cpp` | Linear axis-based partition, ghost cell detection from face adjacency |
+| `src/aero/cfd/exchange_halo.cu` | `pack_halo_kernel`/`unpack_halo_kernel` + `exchange_halo_gpu()` orchestration |
+| `tests/cfd/test_gpu_topology.cpp` | Topology detection + linear partition tests (single GPU only) |
+
+### Modified Files
+
+---
+
+## Phase 11 — Implicit Time Advancement (2026-07-11)
+
+Phase 11 implements FGMRES+JFV+LU-SGS Newton-Krylov implicit solver on single GPU. Full pipeline integrated into `solve_gpu_impl()`: FGMRES with JFV matvec and LU-SGS right preconditioner, Newton line search with backtracking.
+
+### Category A: Correctness / Performance
+
+**PH11-A-1: LU-SGS 对角项使用全局 dt 而非局部 dt** [MEDIUM] — FIXED 2026-07-11
+`src/aero/cfd/lusgs_gpu.cu:297-299`
+
+`compute_diagonal()` 从 `d_min_dt` 读取单个标量 `host_dt`，传给 `compute_diag_kernel` 作为 `dt_val`。但隐式分支使用局部时间步进（per-cell `d_dt_cell`），对角项中的非定常项 `1/dt` 应使用每个单元自己的 dt，而非全局 min dt。
+
+影响：局部时间步进中高-CFL 单元的对角项被低估（`1/dt` 过大），使 LU-SGS 预处理条件数增加，FGMRES 收敛变慢。
+
+**PH11-A-2: Newton 循环耗尽后状态完全恢复至 Q^n，外迭代停滞** [MEDIUM] — FIXED 2026-07-11
+`src/aero/cfd/gpu_solver.cu:237-251`
+
+若 Newton 循环耗尽 `newt_max` 次迭代仍未达到 `l2_new < 0.5 * l2_old` 的充分下降条件，backtrack 将 Q 恢复到 `Q_backup`（`Q^n`），随后 `dcopy_gpu(d_r_saved, d_mesh.residual_device())` 将残差恢复到原始的 `R(Q^n)`。这导致：
+
+- Q 不变，残差不变 → `check_status_kernel` 报告相同 L2 → 外迭代无进展
+- 下一轮外迭代重复相同的 FGMRES 求解 → 外循环停滞
+- 在实践中 CFL 爬坡最终使 Newton 步满足下降条件，但缺乏安全回退
+
+已知在 PLAN.md 11.4 的 deferred 项"CFL control: if Newton fails, reduce CFL and retry"中承认。
+
+### Category B: Algorithm Fidelity
+
+**PH11-B-1: FGMRES 正交化使用 CGS 而非 MGS** [LOW]
+`src/aero/cfd/fgmres_gpu.cu:272-278`
+
+Arnoldi 正交化使用经典 Gram-Schmidt（`h_ij = dot(w, v_i); w -= h_ij * v_i`），而非规格指定的 Modified Gram-Schmidt（MGS）。CGS 在残差范数接近 FGMRES 收敛容差 `1e-2` 的病态系统下可能损失正交性。
+
+实际影响较小：重启 + 右预处理 + 非精确 Newton（`fgmres_tol = 1e-2`）使 CGS 稳定性问题极少触发。
+
+**PH11-B-2: DNrm2 使用同步 D2H 拷贝** [LOW]
+`src/aero/cfd/fgmres_gpu.cu:92-95`
+
+`dnrm2_gpu` 计算 `sum(x²)` 后执行 `cudaMemcpy` D2H 在 CPU 上执行 `sqrt`，再 `cudaMemcpy` H2D 写回。引入设备同步点。在 FGMRES Arnoldi 内每步调用一次，对性能有微小影响。
+
+**PH11-B-3: JFV 未包含 RANS 源项扰动** [LOW]
+`src/aero/cfd/jacobian_free.cu:60-74`
+
+`compute_jfv_product` 仅调用 `launch_euler_residual_kernel` 和 `compute_viscous_flux_gpu`，未包含 `compute_rans_source_gpu`。湍流模型的 Jacobian 在 `turbulence=true` 时未被 JFV 捕获，Newton 步的搜索方向可能不准确。隐藏前提：湍流源项 Jacobian 通过点隐式处理（`apply_rans_implicit_gpu`）独立处理。
+
+### Summary
+
+| 严重性 | 数量 | 项目 |
+|--------|------|------|
+| MEDIUM | 2 | PH11-A-1 — FIXED, PH11-A-2 — FIXED |
+| LOW    | 3 | PH11-B-1（CGS vs MGS, open）, PH11-B-2（D2H sync, open）, PH11-B-3（JFV sans RANS, open） |
+
+| File | Change |
+|------|--------|
+| `CMakeLists.txt` | +`option(AEROSIM_MPI OFF)` + `find_package(MPI)` + `add_compile_definitions(MPI_ENABLED)` |
+| `include/aero/cfd/device_mesh.hpp` | +`set_partition()`/`get_partition()`, forward-decl `GpuPartition`, +`gpu_part_` field |
+| `include/aero/cfd/gpu_solver_internal.hpp` | +`exchange_halo_gpu()` declaration, +`#include partition.hpp` |
+| `src/aero/cfd/gpu_solver.cu` | +`exchange_halo_gpu()` call in iteration loop, +`set_partition()`, +`barrier()` |
+| `src/aero/cfd/cfd_residual_gpu.cu` | +partition guard in both kernel variants, +`d_partition_owner`/`my_rank` params |
+| `src/aero/cfd/gpu_viscous.cu` | +partition guard in `viscous_flux_kernel_atomic` |
+| `src/aero/cfd/gpu_wall.cu` | +partition guard in `wall_force_kernel` |

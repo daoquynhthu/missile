@@ -33,6 +33,18 @@ struct CfdConfig {
 
     // RANS SA turbulence
     bool turbulence = false;
+
+    // Implicit solver
+    bool implicit = false;
+    Real cfl_start = 1.0f;
+    Real cfl_end = 1e6f;
+    int cfl_ramp_steps = 100;
+    bool local_time_stepping = true;
+    int fgmres_restart = 30;
+    int fgmres_max_iter = 100;
+    Real fgmres_tol = 1e-2f;
+    int newton_max_iter = 3;
+    Real newton_sufficent_decrease = 0.5f;
 };
 
 struct FreestreamCondition {

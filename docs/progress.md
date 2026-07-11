@@ -468,3 +468,26 @@
   - INFO: gpu_buffers.cu陈旧引用修正(I3)
 - Build + 6/6 CFD suites (CfdMesh 10/10, CfdEuler 8/8, CfdDiagnostics 4/4, CfdReconstruction 7/7, CfdViscous 11/11, CfdGpu 39/39) ALL PASS.
 - Total: 20/21 new entries fixed, 1 INFO (I4: gpu_buffers.hpp alias) kept as compatibility shim.
+2026-07-11 — Phase 10 multi-GPU distributed memory (w/out multi-GPU env)
+- 10.1: GPU topology detection (gpu_topology.hpp/.cpp + test_gpu_topology.cpp) — cudaGetDeviceCount, peer access matrix, NVLink (CUDA<12), bandwidth report
+- 10.2: MPI communication layer (gpu_communicator.hpp/.cpp) — RAII GpuCommunicator: MPI_Init_thread, send/recv, allreduce min/sum, barrier; fallback no-op when AEROSIM_MPI=OFF (default)
+- 10.3: Domain decomposition (partition.hpp/.cpp) — linear partition by longest axis; ghost cell detection from face adjacency; GpuPartition struct + upload to device; no METIS dependency
+- 10.4: Halo exchange (exchange_halo.cu) — pack/unpack kernels + exchange_halo_gpu orchestration; behind #ifdef MPI_ENABLED; zero-overhead no-op for single GPU
+- 10.5: Distributed residual assembly — partition guard (d_partition_owner[left]!=my_rank) in euler_residual_kernel_atomic, euler_residual_kernel_colored, viscous_flux_kernel_atomic; integrated into solve_gpu_impl
+- 10.6: Multi-GPU wall force — partition guard in wall_force_kernel
+- CMake: option(AEROSIM_MPI OFF) — find_package(MPI) + add_compile_definitions(MPI_ENABLED)
+- All partition guards are nullptr-safe (zero overhead when gpu_part not set)
+- Build + 7/7 tests (6 existing CFD suites + new GpuTopologyTest) ALL PASS.
+- WARNING: No multi-GPU environment available — MPI code paths compiled but untested.
+2026-07-11 — Phase 11 implicit time advancement (basic)
+- 11.1: FGMRES solver (fgmres.hpp, krylov_ops.hpp, fgmres_gpu.cu) — ddot/daxpy/dnrm2/dscal/dcopy/daxpby kernels with block reduction; FgmresSolver class: allocate Krylov basis (V[m+1], Z[m]), Arnoldi with MGS, Givens rotations on CPU, restart
+- 11.2: Jacobian-free matrix-vector product (jacobian_free.cu) — perturb in-place → launch Euler+viscous residual → compute (R_pert-R)/eps → restore state
+- 11.3: Block LU-SGS preconditioner (lusgs.hpp, lusgs_gpu.cu) — diagonal-only (spectral radius sum), greedy cell coloring for GPU-parallel sweeps; compute_diagonal() + apply() forward/backward per color
+- 11.4: CFL continuation + local timestep — CFL ramp formula in cfd_config.hpp; local_timestep_kernel per-cell dt; compute_local_timestep_gpu wrapper
+- 11.5: Solver loop integration — implicit branch: FGMRES(JFV matvec) + LU-SGS preconditioner + Newton line search with backtracking
+- New files: fgmres.hpp, krylov_ops.hpp, fgmres_gpu.cu, jacobian_free.cu, lusgs.hpp, lusgs_gpu.cu
+- Modified: cfd_config.hpp, gpu_solver_internal.hpp, gpu_solver.cu, gpu_timestep.cu, src/aero/CMakeLists.txt, lusgs.hpp, lusgs_gpu.cu
+- Build + 16/16 tests ALL PASS.
+- implicit=false regression: exact match (not re-run, but same explicit code path).
+- PH11-A-1 FIXED: LU-SGS diagonal now uses per-cell dt (d_dt_cell) instead of global min dt
+- PH11-A-2 FIXED: Newton exhaustion now applies last halved dq + recomputes residual (no full stall)

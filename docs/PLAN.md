@@ -766,6 +766,8 @@ Gate:
 
 Goal: scale from single GPU to multiple GPUs, multiple nodes. Support NVLink (within node) and InfiniBand/RoCE (across nodes). Implement MPI + CUDA-aware halo exchange.
 
+> **Status**: Infrastructure implemented. All MPI code paths behind `AEROSIM_MPI=OFF` + `MPI_ENABLED` guard. Single-GPU mode zero overhead, all tests PASS. Multi-GPU tests deferred — no multi-GPU environment available for runtime verification.
+
 ### 10.1 Hardware topology detection
 
 Files:
@@ -778,12 +780,12 @@ Files:
 
 Tasks:
 
-- [ ] Enumerate all CUDA-capable devices
-- [ ] Query per device: `cudaDevAttrComputeCapabilityMajor/Minor`, `cudaDevAttrMultiProcessorCount`, `cudaDevAttrTotalGlobalMem`, `cudaDevAttrMemoryClockRate`, `cudaDevAttrGlobalMemoryBusWidth`
-- [ ] Build `n×n` peer-access matrix: `cudaDeviceCanAccessPeer(&can, i, j)`
-- [ ] Build NVLink topology: `cudaDeviceGetP2PAttribute(&count, i, j, cudaDevP2PAttrNumLinks)`
-- [ ] `GpuTopology::select_devices(n)` — select best N devices (prefer NVLink-connected, same node)
-- [ ] `GpuTopology::bandwidth_report()` — estimate per-link bandwidth (NVLink: 300/600/900 GB/s gen2/3/4; PCIe: Gen4×16=32 GB/s)
+- [x] Enumerate all CUDA-capable devices
+- [x] Query per device: `cudaDevAttrComputeCapabilityMajor/Minor`, `cudaDevAttrMultiProcessorCount`, `cudaDevAttrTotalGlobalMem`, `cudaDevAttrMemoryClockRate`, `cudaDevAttrGlobalMemoryBusWidth`
+- [x] Build `n×n` peer-access matrix: `cudaDeviceCanAccessPeer(&can, i, j)`
+- [x] Build NVLink topology: check `cudaDevP2PAttrNumLinks` (removed in CUDA 12+, conditionally compiled)
+- [x] `GpuTopology::select_devices(n)` — select best N devices (prefer NVLink-connected, same node)
+- [x] `GpuTopology::bandwidth_report()` — estimate per-link bandwidth (NVLink: 300/600/900 GB/s gen2/3/4; PCIe: Gen4×16=32 GB/s)
 
 ### 10.2 MPI communication layer
 
@@ -797,14 +799,15 @@ Files:
 
 Tasks:
 
-- [ ] `GpuCommunicator`: RAII wrapper for MPI (init in constructor, finalize in destructor)
-- [ ] Device assignment policy: `rank % nodes` → GPU within node. Read `CUDA_VISIBLE_DEVICES` env var.
-- [ ] `GpuCommBuffer::send_recv_exchange(send_buf, recv_buf, count, peer_rank, tag)` — non-blocking: `MPI_Irecv`, `MPI_Isend`, `MPI_Waitall`
-- [ ] Detect CUDA-aware MPI at compile time: `#ifdef MPI_CUDA_AWARE` (set by CMake test or `find_package(MPI)` with CUDA)
-- [ ] Non-CUDA-aware fallback: `cudaMemcpy(buf, tmp_host, ..., D2H)` → `MPI_Send` → `cudaMemcpy(tmp_host, buf, ..., H2D)`
-- [ ] `allreduce_min(scalar)` — `MPI_Allreduce(MPI_FLOAT/DOUBLE, MPI_MIN)`
-- [ ] `allreduce_sum(scalar)` — `MPI_Allreduce(MPI_FLOAT/DOUBLE, MPI_SUM)`
-- [ ] Barrier, abort on error (MPI error handler set to `MPI_ERRORS_RETURN`)
+- [x] `GpuCommunicator`: RAII wrapper for MPI (init in constructor, finalize in destructor)
+- [x] Device assignment policy: `rank % nodes` → GPU within node. Read `CUDA_VISIBLE_DEVICES` env var.
+- [x] `send_recv_exchange(send_buf, recv_buf, count, peer_rank, tag)` — blocking `MPI_Send`/`MPI_Recv`
+- [ ] Non-blocking `MPI_Irecv`/`MPI_Isend`/`MPI_Waitall` variant
+- [ ] Detect CUDA-aware MPI at compile time: `#ifdef MPI_CUDA_AWARE`
+- [ ] Non-CUDA-aware fallback: `cudaMemcpy` → `MPI_Send` → `cudaMemcpy`
+- [x] `allreduce_min(scalar)` — `MPI_Allreduce(MPI_FLOAT/DOUBLE, MPI_MIN)`
+- [x] `allreduce_sum(scalar)` — `MPI_Allreduce(MPI_FLOAT/DOUBLE, MPI_SUM)`
+- [x] Barrier
 
 ### 10.3 Domain decomposition
 
@@ -818,13 +821,13 @@ Files:
 
 Tasks:
 
-- [ ] Build dual graph from mesh: node per cell, edge per interior face connecting two cells, edge weight = 1 (or face area)
-- [ ] Call `METIS_PartGraphKway(n_cells, xadj, adjncy, ..., n_parts)` or `ParMETIS_V3_PartKway` (distributed)
-- [ ] Output: `partition_owner[cell] = 0..n_parts-1`
-- [ ] Per rank, build `owned_cells` list: cells where `partition_owner[cell] == rank`
-- [ ] Per rank, build `ghost_cells_needed`: cells owned by other ranks that share a face with local owned cells
-- [ ] `MPI_Alltoallv` exchange of ghost cell indices
-- [ ] `GpuPartition` struct uploaded to device: `d_partition_owner`, `d_n_owned`, `d_ghost_indices`, `d_ghost_owner_rank`
+- [x] Build dual graph from mesh: face adjacency
+- [ ] METIS-based partition (optional, linear partition currently implemented)
+- [x] Output: `partition_owner[cell] = 0..n_parts-1`
+- [x] Per rank, build `owned_cells` list
+- [x] Per rank, build `ghost_cells_needed` from face adjacency
+- [ ] `MPI_Alltoallv` exchange of ghost cell indices (deferred, build from host face data)
+- [x] `GpuPartition` struct uploaded to device
 
 ### 10.4 Halo exchange kernel
 
@@ -838,16 +841,11 @@ Files:
 
 Tasks:
 
-- [ ] `pack_halo_kernel`: per ghost cell, read `d_q[idx*NVAR + ..]` → write to contiguous `d_halo_send_buf[offset*NVAR + ..]`
-- [ ] `unpack_halo_kernel`: per ghost cell, read `d_halo_recv_buf[offset*NVAR + ..]` → write to `d_q[ghost_idx*NVAR + ..]`
-- [ ] `exchange_halo_gpu`: for each peer rank that owns ghost cells:
-  - launch `pack_halo_kernel` (local owned cells that peer needs)
-  - `cudaMemcpyDeviceToHost` send buffer (async on `stream_comm`)
-  - `MPI_Isend` (on host, using `stream_comm`-synced host memory)
-  - `MPI_Irecv` → when complete, `cudaMemcpyHostToDevice` recv buffer (async on `stream_comm`)
-  - `cudaStreamSynchronize(stream_comm)`
-  - launch `unpack_halo_kernel`
-- [ ] For NVLink peers: use `cudaMemcpyPeer` directly, bypass MPI and host
+- [x] `pack_halo_kernel`: per ghost cell, read `d_q[idx*NVAR + ..]` → write to contiguous `d_halo_send_buf[offset*NVAR + ..]`
+- [x] `unpack_halo_kernel`: per ghost cell, read `d_halo_recv_buf[offset*NVAR + ..]` → write to `d_q[ghost_idx*NVAR + ..]`
+- [x] `exchange_halo_gpu`: orchestrate pack/MPI exchange/unpack (blocking MPI_Send/Recv)
+- [ ] `exchange_halo_gpu`: non-blocking MPI_Irecv/Isend version
+- [ ] NVLink peers: `cudaMemcpyPeer` direct path (deferred)
 
 ### 10.5 Distributed residual assembly
 
@@ -861,12 +859,12 @@ Files:
 
 Tasks:
 
-- [ ] Partition guard in residual kernels: `if (d_partition_owner[left] != my_rank) return;`
-- [ ] Ghost cell contributions: each face's flux is added to `d_residual[left]` and subtracted from `d_residual[right]`. For partition boundary faces, the owning rank computes both contributions and the halo exchange distributes `d_residual` for ghost cells.
-- [ ] After `exchange_halo_gpu`, each rank has correct `d_residual` for ghost cells (including the contributions from faces owned by other ranks).
-- [ ] Global min dt: `real_atomic_min` across owned cells → host min_dt → `MPI_Allreduce(MPI_MIN)` → broadcast back to device
-- [ ] Global L2 norm: `atomicAdd` across owned cells → host l2_sum → `MPI_Allreduce(MPI_SUM)` → sqrt → residual history
-- [ ] Global wall forces: per-rank partial forces → `MPI_Allreduce(MPI_SUM, 6 floats)` for force/moment
+- [x] Partition guard in residual kernels: `if (d_partition_owner[left] != my_rank) return;`
+- [ ] Ghost cell residual contributions via halo exchange (deferred — partition guard ensures correctness; ghost cell contributions need full MPI integration)
+- [ ] After `exchange_halo_gpu`, each rank has correct `d_residual` for ghost cells
+- [ ] Global min dt: `real_atomic_min` → host → `MPI_Allreduce(MPI_MIN)` (deferred)
+- [ ] Global L2 norm: `atomicAdd` → host → `MPI_Allreduce(MPI_SUM)` (deferred)
+- [ ] Global wall forces: `MPI_Allreduce(MPI_SUM, 6)` (deferred, partition guard implemented)
 
 ### 10.6 Multi-GPU wall force integration
 
@@ -878,9 +876,9 @@ Files:
 
 Tasks:
 
-- [ ] Partition guard: `if (d_partition_owner[left_cell] != my_rank) return;` for wall force kernel
-- [ ] Per-rank force reduction: `real_atomic_add` locally, then `MPI_Allreduce(MPI_SUM)` for 6 components
-- [ ] Download final forces on rank 0 only
+- [x] Partition guard: `if (d_partition_owner[left_cell] != my_rank) return;` for wall force kernel
+- [ ] Per-rank force reduction: `MPI_Allreduce(MPI_SUM)` for 6 components (deferred)
+- [ ] Download final forces on rank 0 only (deferred)
 
 Tests:
 
@@ -934,12 +932,12 @@ Files:
 
 Tasks:
 
-- [ ] Implement `ddot_kernel`: `sum = atomicAdd(result, xi * yi)` per thread block, block-reduce to scalar
-- [ ] Implement `daxpy_kernel`: `y[i] = a * x[i] + y[i]` per element
-- [ ] Implement `dnrm2_kernel`: `sum = atomicAdd(result, xi*xi)` per thread, block-reduce, `sqrt(sum)`
-- [ ] FGMRES: allocate Krylov basis vectors `V[m+1]` and `Z[m]` (m = restart), Arnoldi iteration: matrix-vector product → MGS → apply Givens rotation → check residual
-- [ ] Hessenberg least-squares: small (m+1)×m matrix, solve via Givens rotations on CPU (serial, negligible cost)
-- [ ] FgmresSolver: accept `std::function<void(const Real*, Real*)> matvec` for Jacobian-free product
+- [x] Implement `ddot_kernel`: block-reduce to scalar
+- [x] Implement `daxpy_kernel`: `y[i] = a * x[i] + y[i]`
+- [x] Implement `dnrm2_kernel`: block-reduce + sqrt
+- [x] FGMRES: Krylov basis V[m+1], Z[m], Arnoldi, MGS, Givens, least-squares (CPU)
+- [x] Hessenberg least-squares via Givens rotations on CPU
+- [x] FgmresSolver: `std::function<bool(const Real*, Real*, std::string*)> matvec`
 
 ### 11.2 Jacobian-free matrix-vector product
 
@@ -951,12 +949,12 @@ Files:
 
 Tasks:
 
-- [ ] Per-cell perturbation: `q_pert = q + epsilon * v` where `epsilon = 1e-7 * sqrt(NVAR) / sqrt(v·v)`
-- [ ] Launch residual kernel on perturbed state: `R(q_pert)` → `d_residual_pert`
-- [ ] Compute `J*v = (R_pert - R) / epsilon` (component-wise)
-- [ ] Reuse existing `launch_euler_residual_kernel` and `launch_viscous_flux_kernel` (no new physics)
-- [ ] Color-based: `ε` perturbation must be consistent across colors (all faces see same perturbed state)
-- [ ] Fused `jfv_kernel` option (future): combine residual + perturbation, eliminating redundant reads
+- [x] Per-cell perturbation: `q_pert = q + epsilon * v`
+- [x] Launch residual kernel on perturbed state
+- [x] Compute `J*v = (R_pert - R) / epsilon`
+- [x] Reuse existing residual kernels
+- [ ] Color-based consistent epsilon
+- [ ] Fused `jfv_kernel` option (future)
 
 ### 11.3 Block LU-SGS preconditioner (GPU)
 
@@ -969,12 +967,12 @@ Files:
 
 Tasks:
 
-- [ ] Compute block diagonal D = I/dt + ∂R/∂Q (approximate Jacobian: flux-difference approximation per face contribution to diagonal)
-- [ ] Store D as `Real* d_D` = `[NVAR*NVAR * n_cells]` flattened (or use diagonal-only approximation for memory)
-- [ ] Forward sweep: color-graph ordering, each color independent, read off-diagonal contributions from neighbor `z_old` via halo-exchanged state
-- [ ] Backward sweep: same colors, reversed order
-- [ ] Option 1: Diagonal-only (~LU-SGS with scalar Jacobian, minimal memory). Option 2: Full 5×5 block (more accurate, 25× memory).
-- [ ] Host-side: `LusgsPreconditioner::analyze(mesh, device_mesh)` — precompute color ordering for sweeps
+- [x] Compute diagonal D = I/dt + spectral_radius (diagonal-only, Option 1)
+- [x] Store D as `Real* d_D` per cell
+- [x] Forward sweep: cell color-graph ordering, each color independent
+- [x] Backward sweep: reversed color order
+- [x] Diagonal-only (Option 1, minimal memory), full block (Option 2) deferred
+- [x] Host-side greedy cell coloring precomputed in allocate()
 
 ### 11.4 CFL continuation and local timestep
 
@@ -987,10 +985,10 @@ Files:
 
 Tasks:
 
-- [ ] CFL ramp: `cfl = cfl_start * (cfl_end/cfl_start)^(iter / ramp_steps)` — interpolated between steps
-- [ ] Local timestep: each cell advances at `dt_i = CFL * h_i / (|v_i| + a_i + viscous_factor)`
-- [ ] Solver loop mod: with implicit solver, each Newton iteration uses local dt; linear solver tolerance tightens as CFL increases
-- [ ] CFL control: if Newton fails (linear solver doesn't converge), reduce CFL by factor 2 and retry
+- [x] CFL ramp: `cfl = cfl_start * (cfl_end/cfl_start)^(iter / ramp_steps)`
+- [x] Local timestep kernel: per-cell `dt_i`
+- [x] Solver loop mod: implicit branch with CFL ramp + local dt
+- [ ] CFL control: if Newton fails, reduce CFL and retry
 
 ### 11.5 Solver loop integration
 
@@ -998,7 +996,9 @@ Files:
 
 | File | Action | Content |
 |------|--------|---------|
-| `src/aero/cfd/gpu_solver.cu` | MODIFY | Add implicit branch: when `config.implicit=true`, replace explicit update with Newton loop |
+| `src/aero/cfd/gpu_solver.cu` | MODIFY | Add implicit branch: when `config.implicit=true`, replace explicit update with LU-SGS + line search Newton loop |
+
+Current implementation: FGMRES+JFV+LU-SGS full pipeline integrated into Newton loop. FGMRES uses JFV as matvec and LU-SGS as right preconditioner. Newton line search with backtracking. Uses pre-allocated d_scratch buffer for JFV (no per-call cudaMalloc).
 
 Implicit iteration structure:
 
