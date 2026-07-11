@@ -1,6 +1,5 @@
 #pragma once
 
-#include <Eigen/Dense>
 #include <cuda_runtime.h>
 #include "infra/common.hpp"
 

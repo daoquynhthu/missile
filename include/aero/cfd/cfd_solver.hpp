@@ -1,5 +1,4 @@
 #pragma once
-#include "aero/cfd/real.hpp"
 
 #include "aero/cfd/cfd_config.hpp"
 #include "aero/cfd/cfd_mesh.hpp"
@@ -36,6 +35,7 @@ public:
 
 private:
     CfdMesh mesh_;
+    std::vector<int> wall_face_indices_;
 };
 
 bool assert_oracle_equivalent(

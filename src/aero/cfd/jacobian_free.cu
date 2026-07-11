@@ -35,7 +35,7 @@ __global__ void jfv_result_kernel(Real* d_result, const Real* d_residual_pert,
 bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     const Real* d_residual, Real epsilon, const CfdConfig& config,
     const PrimitiveState& w_inf, Real* d_scratch, int* d_failed,
-    std::string* error) {
+    std::string* error, cudaStream_t stream) {
     int n = static_cast<int>(mesh.cell_count());
     int nvar = DeviceMesh::NVAR;
     int nvar_cells = n * nvar;
@@ -46,29 +46,23 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
 
     Real* d_q_pert = d_scratch;
 
-    perturb_kernel<<<grid, block>>>(d_q_pert, mesh.state_device(), d_v, epsilon, n, nvar);
+    perturb_kernel<<<grid, block, 0, stream>>>(d_q_pert, mesh.state_device(), d_v, epsilon, n, nvar);
     if (!cuda_check(cudaGetLastError(), "perturb kernel", error)) return false;
 
-    Real* d_q_saved = mesh.state_device();
-    Real* d_q_orig = d_scratch + nvar_cells;
-
-    if (!cuda_check(cudaMemcpy(d_q_orig, d_q_saved, nvar_cells * sizeof(Real),
-            cudaMemcpyDeviceToDevice), "save q", error)) return false;
-
-    if (!cuda_check(cudaMemcpy(d_q_saved, d_q_pert, nvar_cells * sizeof(Real),
-            cudaMemcpyDeviceToDevice), "set q = q_pert", error)) return false;
+    Real* d_q_orig = mesh.state_device();
+    mesh.set_state_device(d_q_pert);
 
     if (!launch_euler_residual_kernel(mesh, w_inf, config.gamma, d_failed, nullptr, error,
-            config.reconstruction_order)) {
-        cudaMemcpy(d_q_saved, d_q_orig, nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice);
+            config.reconstruction_order, stream)) {
+        mesh.set_state_device(d_q_orig);
         return false;
     }
 
     if (config.viscous) {
         if (!compute_viscous_flux_gpu(mesh, config.gamma, config.prandtl,
                 config.mu_ref, config.T_ref, config.sutherland_T,
-                config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed)) {
-            cudaMemcpy(d_q_saved, d_q_orig, nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice);
+                config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream)) {
+            mesh.set_state_device(d_q_orig);
             if (error) *error = "JFV viscous flux failed";
             return false;
         }
@@ -77,8 +71,8 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     if (config.turbulence) {
         if (!compute_rans_source_gpu(mesh, config.gamma, config.Re,
                 config.mu_ref, config.T_ref, config.sutherland_T,
-                d_failed, error)) {
-            cudaMemcpy(d_q_saved, d_q_orig, nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice);
+                d_failed, error, stream)) {
+            mesh.set_state_device(d_q_orig);
             if (error) *error = "JFV RANS source failed";
             return false;
         }
@@ -86,15 +80,11 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
 
     Real* d_residual_pert = mesh.residual_device();
 
-    Real inv_eps = 1.0f / epsilon;
-    jfv_result_kernel<<<grid, block>>>(d_result, d_residual_pert, d_residual, inv_eps, n, nvar);
-    if (!cuda_check(cudaGetLastError(), "jfv result kernel", error)) {
-        cudaMemcpy(d_q_saved, d_q_orig, nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice);
-        return false;
-    }
+    mesh.set_state_device(d_q_orig);
 
-    if (!cuda_check(cudaMemcpy(d_q_saved, d_q_orig, nvar_cells * sizeof(Real),
-            cudaMemcpyDeviceToDevice), "restore q", error)) return false;
+    Real inv_eps = 1.0f / epsilon;
+    jfv_result_kernel<<<grid, block, 0, stream>>>(d_result, d_residual_pert, d_residual, inv_eps, n, nvar);
+    if (!cuda_check(cudaGetLastError(), "jfv result kernel", error)) return false;
 
     return true;
 }

@@ -52,7 +52,7 @@ struct CfdDiagnostics {
     FailureSnapshot failure;
 };
 
-StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, Real gamma);
+StateBounds compute_state_bounds(const std::vector<ConservativeState>& q, Real gamma, const std::vector<PrimitiveState>* primitive_override = nullptr);
 
 FailureSnapshot make_failure_snapshot(
     int iteration,

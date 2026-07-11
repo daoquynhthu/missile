@@ -137,15 +137,16 @@ __global__ void failure_snapshot_kernel(
 
 } // namespace
 
-bool compute_state_bounds_gpu(DeviceMesh& mesh, Real gamma, Real* d_bounds_slot) {
-    init_bounds_slot_kernel<<<1, 1>>>(d_bounds_slot);
+bool compute_state_bounds_gpu(DeviceMesh& mesh, Real gamma, Real* d_bounds_slot,
+    cudaStream_t stream) {
+    init_bounds_slot_kernel<<<1, 1, 0, stream>>>(d_bounds_slot);
     if (!cuda_check(cudaGetLastError(), "init_bounds_slot launch")) return false;
 
     int block = 128;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
 
-    state_bounds_kernel<<<grid, block>>>(
+    state_bounds_kernel<<<grid, block, 0, stream>>>(
         mesh.state_device(), nc, DeviceMesh::NVAR, gamma,
         d_bounds_slot + 0, d_bounds_slot + 1,
         d_bounds_slot + 2, d_bounds_slot + 3,
@@ -156,12 +157,13 @@ bool compute_state_bounds_gpu(DeviceMesh& mesh, Real gamma, Real* d_bounds_slot)
 }
 
 bool compute_failure_snapshot_gpu(DeviceMesh& mesh, Real gamma,
-    int* d_failure_cell, Real* d_failure_state) {
+    int* d_failure_cell, Real* d_failure_state,
+    cudaStream_t stream) {
     int block = 128;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
 
-    failure_snapshot_kernel<<<grid, block>>>(
+    failure_snapshot_kernel<<<grid, block, 0, stream>>>(
         mesh.state_device(), nc, DeviceMesh::NVAR, gamma,
         d_failure_cell, d_failure_state);
     if (!cuda_check(cudaGetLastError(), "failure_snapshot_kernel launch")) return false;

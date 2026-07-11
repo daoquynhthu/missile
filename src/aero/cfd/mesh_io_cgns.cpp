@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef WITH_CGNS
@@ -285,28 +286,31 @@ bool read_mesh_cgns(const std::string& path, CfdMesh& mesh, std::string* err) {
             }
         }
 
+        // Build O(1) marker lookup: sorted-node tuple → BoundaryKind
+        struct SortedNodeHash {
+            std::size_t operator()(const std::vector<int>& v) const {
+                std::size_t h = 0;
+                for (int x : v) {
+                    h ^= static_cast<std::size_t>(x) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                }
+                return h;
+            }
+        };
+        std::unordered_map<std::vector<int>, BoundaryKind, SortedNodeHash> marker_map;
+        for (const auto& pbf : pending_bc_faces) {
+            std::vector<int> key(pbf.nodes, pbf.nodes + pbf.n_nodes);
+            std::sort(key.begin(), key.end());
+            marker_map.emplace(std::move(key), pbf.kind);
+        }
+
         // Apply boundary markers from CGNS boundary conditions by matching node sets
         for (auto& face : mesh.faces) {
             if (face.right_cell >= 0) continue;
-            int fn = face.node_count;
-            for (const auto& pbf : pending_bc_faces) {
-                if (pbf.n_nodes != fn) continue;
-                // Compare sorted node sets
-                int face_sorted[4], pbf_sorted[4];
-                for (int i = 0; i < fn; ++i) {
-                    face_sorted[i] = face.node[i];
-                    pbf_sorted[i] = pbf.nodes[i];
-                }
-                std::sort(face_sorted, face_sorted + fn);
-                std::sort(pbf_sorted, pbf_sorted + fn);
-                bool match = true;
-                for (int i = 0; i < fn; ++i) {
-                    if (face_sorted[i] != pbf_sorted[i]) { match = false; break; }
-                }
-                if (match) {
-                    face.boundary = pbf.kind;
-                    break;
-                }
+            std::vector<int> key(face.node, face.node + face.node_count);
+            std::sort(key.begin(), key.end());
+            auto it = marker_map.find(key);
+            if (it != marker_map.end()) {
+                face.boundary = it->second;
             }
         }
 

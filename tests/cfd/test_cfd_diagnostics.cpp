@@ -121,7 +121,7 @@ static int test_vtk_output() {
         std::string error;
         if (!write_vtk_cells(path, mesh, q, 1.4f, &error)) FAIL("%s", error.c_str());
 
-        std::ifstream in(path);
+        std::ifstream in(path, std::ios::binary);
         if (!in) FAIL("failed to read vtk");
         std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         in.close();

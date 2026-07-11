@@ -1,10 +1,10 @@
 #pragma once
-#include "aero/cfd/real.hpp"
-
 
 #include "aero/cfd/cfd_mesh.hpp"
 #include "aero/cfd/cfd_state.hpp"
 #include "aero/cfd/device_mesh.hpp"
+
+#include "aero/cfd/reconstruction.hpp"
 
 #include <cstddef>
 #include <cuda_runtime_api.h>
@@ -20,14 +20,25 @@ bool compute_euler_residual_cpu(
     const std::vector<ConservativeState>& q,
     const PrimitiveState& freestream,
     Real gamma,
-    std::vector<EulerFlux>& residual);
+    std::vector<EulerFlux>& residual,
+    const std::vector<PrimitiveState>* primitive_override = nullptr);
 
 bool compute_euler_residual_cpu_order2(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const PrimitiveState& freestream,
     Real gamma,
-    std::vector<EulerFlux>& residual);
+    std::vector<EulerFlux>& residual,
+    const std::vector<PrimitiveState>* primitive_override = nullptr);
+
+bool compute_euler_residual_cpu_order2(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    const PrimitiveState& freestream,
+    Real gamma,
+    const std::vector<PrimitiveGradient>& limited_gradients,
+    std::vector<EulerFlux>& residual,
+    const std::vector<PrimitiveState>* primitive_override = nullptr);
 
 bool launch_euler_residual_kernel(
     DeviceMesh& mesh,
@@ -36,7 +47,8 @@ bool launch_euler_residual_kernel(
     int* d_failed,
     cudaEvent_t start_event = nullptr,
     std::string* error = nullptr,
-    int reconstruction_order = 1);
+    int reconstruction_order = 1,
+    cudaStream_t stream = nullptr);
 
 bool compute_euler_residual_gpu(
     DeviceMesh& mesh,
@@ -70,6 +82,21 @@ bool compute_euler_residual_gpu(
     Real gamma,
     std::vector<EulerFlux>& residual,
     std::string* error = nullptr);
+
+bool compute_viscous_flux_cpu(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    const std::vector<PrimitiveGradient>& gradients,
+    Real gamma,
+    Real prandtl,
+    Real mu_ref,
+    Real T_ref,
+    Real sutherland_T,
+    Real Re,
+    Real wall_T,
+    int turbulence,
+    std::vector<EulerFlux>& residual,
+    const std::vector<PrimitiveState>* primitive_override = nullptr);
 
 } // namespace cfd
 } // namespace aero

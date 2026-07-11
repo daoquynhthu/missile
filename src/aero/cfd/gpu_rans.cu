@@ -143,6 +143,7 @@ __global__ void apply_rans_implicit_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
 
+    Real min_dt = __ldg(d_min_dt);
     Real rho = d_q[idx * nvar + 0];
     if (rho <= 0.0f || !real_isfinite(rho)) return;
 
@@ -158,7 +159,7 @@ __global__ void apply_rans_implicit_kernel(
     constexpr Real karman = 0.41f;
 
     Real d_dest = 2.0f * cw1 * nu_tilde / (karman * karman * wall_distance * wall_distance + 1e-30f);
-    Real dt_over_V = (*d_min_dt) / (d_volume[idx] + 1e-30f);
+    Real dt_over_V = min_dt / (d_volume[idx] + 1e-30f);
     Real implicit_factor = 1.0f / (1.0f + dt_over_V * d_dest + 1e-30f);
 
     Real old_rhont = d_q[idx * nvar + 5];
@@ -204,14 +205,14 @@ __global__ void apply_rans_implicit_per_cell_kernel(
 } // namespace
 
 bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
-    const Real* d_min_dt, std::string* error) {
+    const Real* d_min_dt, std::string* error, cudaStream_t stream) {
     if (mesh.cell_count() == 0) return true;
     int block = 128;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();
 
-    apply_rans_implicit_kernel<<<grid, block>>>(
+    apply_rans_implicit_kernel<<<grid, block, 0, stream>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
         cd.wall_distance, d_min_dt,
         nc, DeviceMesh::NVAR, Re);
@@ -220,14 +221,14 @@ bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
 }
 
 bool apply_rans_implicit_per_cell_gpu(DeviceMesh& mesh, Real Re,
-    const Real* d_dt_cell, std::string* error) {
+    const Real* d_dt_cell, std::string* error, cudaStream_t stream) {
     if (mesh.cell_count() == 0) return true;
     int block = 128;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();
 
-    apply_rans_implicit_per_cell_kernel<<<grid, block>>>(
+    apply_rans_implicit_per_cell_kernel<<<grid, block, 0, stream>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
         cd.wall_distance, d_dt_cell,
         nc, DeviceMesh::NVAR, Re);
@@ -235,7 +236,7 @@ bool apply_rans_implicit_per_cell_gpu(DeviceMesh& mesh, Real Re,
     return true;
 }
 
-bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref, Real T_ref, Real sutherland_T, int* d_failed, std::string* error) {
+bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref, Real T_ref, Real sutherland_T, int* d_failed, std::string* error, cudaStream_t stream) {
     if (mesh.cell_count() == 0) return true;
     if (!mesh.gradients_device()) {
         if (error) *error = "gradients not allocated for RANS source";
@@ -247,7 +248,7 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref,
     int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();
 
-    rans_source_kernel<<<grid, block>>>(
+    rans_source_kernel<<<grid, block, 0, stream>>>(
         mesh.state_device(),
         mesh.residual_device(),
         mesh.gradients_device(),
@@ -256,13 +257,6 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref,
         mu_ref, T_ref, sutherland_T,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "rans_source_kernel launch")) return false;
-    if (!cuda_check(cudaDeviceSynchronize(), "rans_source_kernel sync")) return false;
-    int host_failed = 0;
-    if (!cuda_check(cudaMemcpy(&host_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "rans_source d_failed")) return false;
-    if (host_failed) {
-        if (error) *error = "RANS source kernel detected invalid state";
-        return false;
-    }
     return true;
 }
 

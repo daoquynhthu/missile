@@ -295,7 +295,7 @@ void rebuild_faces(CfdMesh& mesh, bool classify_cube = false, Real outer_scale =
         }
     }
 
-    compute_mesh_metrics(mesh);
+    compute_mesh_metrics(mesh, false);
 }
 
 // Compute volume, centroid, h_min for any element type
@@ -320,7 +320,7 @@ void compute_cell_metrics(CfdMesh& mesh, CfdCell& cell) {
                 Real area = area_tri(fp[0], fp[1], fp[2]);
                 max_area = std::max(max_area, area);
             }
-            cell.h_min = 3.0f * cell.volume / std::max(max_area, 1e-30f);
+            cell.h_min = 3.0f * cell.volume / std::max(max_area, Real(1e-30));
             break;
         }
         case ElementType::HEX8: {
@@ -583,7 +583,7 @@ void rebuild_mesh_faces(CfdMesh& mesh) {
     rebuild_faces(mesh);
 }
 
-MeshQualityReport compute_mesh_metrics(CfdMesh& mesh) {
+MeshQualityReport compute_mesh_metrics(CfdMesh& mesh, bool recompute_cells) {
     MeshQualityReport report;
     report.nodes = static_cast<int>(mesh.nodes.size());
     report.cells = static_cast<int>(mesh.cells.size());
@@ -594,14 +594,16 @@ MeshQualityReport compute_mesh_metrics(CfdMesh& mesh) {
     report.max_h = 0.0f;
     report.min_wall_distance = std::numeric_limits<Real>::max();
 
-    for (auto& cell : mesh.cells) {
-        compute_cell_metrics(mesh, cell);
-        cell.wall_distance = 0.0f;
+    if (recompute_cells) {
+        for (auto& cell : mesh.cells) {
+            compute_cell_metrics(mesh, cell);
+            cell.wall_distance = 0.0f;
 
-        report.min_volume = std::min(report.min_volume, cell.volume);
-        report.max_volume = std::max(report.max_volume, cell.volume);
-        report.min_h = std::min(report.min_h, cell.h_min);
-        report.max_h = std::max(report.max_h, cell.h_min);
+            report.min_volume = std::min(report.min_volume, cell.volume);
+            report.max_volume = std::max(report.max_volume, cell.volume);
+            report.min_h = std::min(report.min_h, cell.h_min);
+            report.max_h = std::max(report.max_h, cell.h_min);
+        }
     }
 
     std::vector<std::vector<int>> cell_faces(mesh.cells.size());

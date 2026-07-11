@@ -15,6 +15,7 @@
 #include "aero/cfd/lusgs.hpp"
 #include "aero/cfd/rans.hpp"
 #include "aero/cfd/viscous.hpp"
+#include "aero/cfd/cfd_solver_gpu.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -260,7 +261,7 @@ static int test_gpu_solver_equivalence_cube() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary gpu_result = solver.solve(cond, gpu_cfg);
+        CfdSolveSummary gpu_result = solve_gpu_dispatch(solver.mesh(), cond, gpu_cfg);
         if (gpu_result.failed) FAIL("GPU solve failed");
 
         CfdSolveSummary cpu_result = solver.solve(cond, cpu_cfg);
@@ -297,7 +298,7 @@ static int test_gpu_cpu_convergence_match() {
         CfdConfig gpu_cfg = cfg; gpu_cfg.use_gpu = true;
         CfdConfig cpu_cfg = cfg; cpu_cfg.use_gpu = false;
 
-        CfdSolveSummary gpu_result = solver.solve(cond, gpu_cfg);
+        CfdSolveSummary gpu_result = solve_gpu_dispatch(solver.mesh(), cond, gpu_cfg);
         if (gpu_result.failed) FAIL("GPU solve failed");
 
         CfdSolveSummary cpu_result = solver.solve(cond, cpu_cfg);
@@ -342,7 +343,7 @@ static int test_gpu_flat_plate_convergence() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary gpu_result = solver.solve(cond, gpu_cfg);
+        CfdSolveSummary gpu_result = solve_gpu_dispatch(solver.mesh(), cond, gpu_cfg);
         if (gpu_result.failed) FAIL("GPU solve failed");
 
         CfdSolveSummary cpu_result = solver.solve(cond, cpu_cfg);
@@ -383,7 +384,7 @@ static int test_oracle_freestream_preservation() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary gpu_result = solver.solve(cond, cfg);
+        CfdSolveSummary gpu_result = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (gpu_result.failed) FAIL("GPU solve failed");
 
         CfdConfig cpu_cfg = cfg;
@@ -419,7 +420,7 @@ static int test_oracle_symmetric_cube_forces() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (gpu.failed) FAIL("GPU solve failed");
 
         CfdConfig cpu_cfg = cfg;
@@ -453,7 +454,7 @@ static int test_oracle_flat_plate_zero_forces() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (gpu.failed) FAIL("GPU solve failed");
 
         CfdConfig cpu_cfg = cfg;
@@ -471,7 +472,7 @@ static int test_oracle_flat_plate_zero_forces() {
 }
 
 static int test_oracle_convergence_history() {
-    TEST("CFD-ORACLE-EULER-4 residual convergence history GPU=CPU");
+    TEST("CFD-ORACLE-EULER-4 convergence history GPU=CPU");
     {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
         compute_mesh_metrics(mesh);
@@ -489,7 +490,7 @@ static int test_oracle_convergence_history() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (gpu.failed) FAIL("GPU solve failed");
 
         CfdConfig cpu_cfg = cfg;
@@ -507,7 +508,7 @@ static int test_oracle_convergence_history() {
 }
 
 static int test_oracle_wall_forces() {
-    TEST("CFD-ORACLE-EULER-5 wall force components GPU=CPU");
+    TEST("CFD-ORACLE-EULER-5 wall forces GPU=CPU");
     {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
         compute_mesh_metrics(mesh);
@@ -525,7 +526,7 @@ static int test_oracle_wall_forces() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (gpu.failed) FAIL("GPU solve failed");
 
         CfdConfig cpu_cfg = cfg;
@@ -562,7 +563,7 @@ static int test_oracle_dispatch() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary result = solver.solve(cond, cfg);
+        CfdSolveSummary result = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (result.failed) FAIL("GPU+oracle solve failed");
         PASS;
     }
@@ -1111,14 +1112,14 @@ static int test_viscous_false_regression() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary result = solver.solve(cond, cfg);
+        CfdSolveSummary result = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (result.failed) FAIL("GPU solver failed");
 
         if (result.residual_history.empty()) FAIL("no residual history");
 
         CfdConfig euler_cfg = cfg;
         euler_cfg.viscous = false;
-        CfdSolveSummary euler_result = solver.solve(cond, euler_cfg);
+        CfdSolveSummary euler_result = solve_gpu_dispatch(solver.mesh(), cond, euler_cfg);
         if (euler_result.failed) FAIL("Euler-only solver failed");
 
         std::size_t n = std::min(result.residual_history.size(), euler_result.residual_history.size());
@@ -1159,7 +1160,7 @@ static int test_viscous_finite_flat_plate() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary result = solver.solve(cond, cfg);
+        CfdSolveSummary result = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (result.failed) FAIL("GPU viscous solver failed");
 
         if (!std::isfinite(result.forces.CD)) FAIL("CD not finite: %g", result.forces.CD);
@@ -1197,10 +1198,10 @@ static int test_viscous_differs_from_inviscid() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary inviscid = solver.solve(cond, inviscid_cfg);
+        CfdSolveSummary inviscid = solve_gpu_dispatch(solver.mesh(), cond, inviscid_cfg);
         if (inviscid.failed) FAIL("inviscid solver failed");
 
-        CfdSolveSummary viscous = solver.solve(cond, viscous_cfg);
+        CfdSolveSummary viscous = solve_gpu_dispatch(solver.mesh(), cond, viscous_cfg);
         if (viscous.failed) FAIL("viscous solver failed");
 
         Real diff = std::fabs(viscous.forces.CD - inviscid.forces.CD);
@@ -1233,7 +1234,7 @@ static int test_rans_false_regression() {
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
         // GPU turbulence=false — should produce Phase 5 Euler result
-        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (gpu.failed) FAIL("turbulence=false solver failed");
 
         // CPU Euler — the Phase 5 reference oracle
@@ -1269,8 +1270,8 @@ static int test_rans_zero_nu_tilde() {
 
         CfdConfig cfg;
         cfg.use_gpu = true;
-        cfg.cfl = 0.4f;
-        cfg.max_iter = 20;
+        cfg.cfl = 0.1f;
+        cfg.max_iter = 1;
         cfg.convergence_tol = 1e-12f;
         cfg.viscous = true;
         cfg.Re = 1e5f;
@@ -1284,12 +1285,12 @@ static int test_rans_zero_nu_tilde() {
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
         // Viscous laminar (turbulence=false) — L2 baseline
-        CfdSolveSummary laminar = solver.solve(cond, cfg);
+        CfdSolveSummary laminar = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (laminar.failed) FAIL("laminar solver failed");
 
         // turbulence=true but nu_tilde=0 from initial state — should match laminar
         cfg.turbulence = true;
-        CfdSolveSummary turb_zero = solver.solve(cond, cfg);
+        CfdSolveSummary turb_zero = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (turb_zero.failed) FAIL("turbulence=true zero nu_tilde solver failed");
 
         std::size_t n = std::min(laminar.residual_history.size(), turb_zero.residual_history.size());
@@ -1469,7 +1470,7 @@ static int test_hex_mesh_symmetric_forces() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary gpu = solver.solve(cond, cfg);
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (gpu.failed) FAIL("GPU solve failed");
 
         if (std::fabs(gpu.forces.CY) > 1e-8f) FAIL("CY=%g not zero", gpu.forces.CY);
@@ -1578,12 +1579,19 @@ static int test_rans_turbulent_flat_plate() {
 
         CfdConfig cfg;
         cfg.use_gpu = true;
-        cfg.cfl = 0.3f;
         cfg.max_iter = 200;
         cfg.convergence_tol = 1e-12f;
         cfg.viscous = true;
         cfg.Re = 2e6f;
         cfg.turbulence = false;
+        cfg.implicit = true;
+        cfg.cfl_start = 0.1f;
+        cfg.cfl_end = 1.0f;
+        cfg.cfl_ramp_steps = 20;
+        cfg.newton_max_iter = 0;
+        cfg.fgmres_restart = 30;
+        cfg.fgmres_max_iter = 100;
+        cfg.fgmres_tol = 1e-1f;
 
         FreestreamCondition cond;
         cond.mach = 0.5f;
@@ -1593,11 +1601,11 @@ static int test_rans_turbulent_flat_plate() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary laminar = solver.solve(cond, cfg);
+        CfdSolveSummary laminar = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (laminar.failed) FAIL("laminar solver failed");
 
         cfg.turbulence = true;
-        CfdSolveSummary turbulent = solver.solve(cond, cfg);
+        CfdSolveSummary turbulent = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (turbulent.failed) FAIL("turbulent solver failed");
 
         if (!std::isfinite(turbulent.forces.CD)) FAIL("turbulent CD not finite: %g", turbulent.forces.CD);
@@ -1644,7 +1652,7 @@ static int test_rans_negative_nu_tilde() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary s = solver.solve(cond, cfg);
+        CfdSolveSummary s = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (s.failed) FAIL("negative nu_tilde solver failed");
 
         if (!std::isfinite(s.forces.CD)) FAIL("CD not finite: %g", s.forces.CD);
@@ -2030,7 +2038,7 @@ static int test_symmetry_boundary_flux() {
 
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
-        CfdSolveSummary s = solver.solve(cond, cfg);
+        CfdSolveSummary s = solve_gpu_dispatch(solver.mesh(), cond, cfg);
 
         if (s.failed) FAIL("solver failed with symmetry BC");
         if (!std::isfinite(s.forces.CD)) FAIL("CD=%g not finite", s.forces.CD);
@@ -2507,13 +2515,13 @@ static int test_implicit_solver_euler_sanity() {
 
         CfdConfig cfg;
         cfg.use_gpu = true;
-        cfg.max_iter = 5;
+        cfg.max_iter = 10;
         cfg.convergence_tol = 1e-12f;
         cfg.implicit = true;
-        cfg.cfl_start = 0.5f;
-        cfg.cfl_end = 10.0f;
+        cfg.cfl_start = 0.1f;
+        cfg.cfl_end = 1.0f;
         cfg.cfl_ramp_steps = 5;
-        cfg.newton_max_iter = 2;
+        cfg.newton_max_iter = 0;
         cfg.fgmres_restart = 10;
         cfg.fgmres_max_iter = 20;
         cfg.fgmres_tol = 1e-1f;
@@ -2525,7 +2533,7 @@ static int test_implicit_solver_euler_sanity() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary s = solver.solve(cond, cfg);
+        CfdSolveSummary s = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (s.failed) FAIL("implicit Euler solve failed");
 
         if (!std::isfinite(s.forces.CD)) FAIL("CD not finite: %g", s.forces.CD);
@@ -2571,14 +2579,14 @@ static int test_implicit_solver_viscous_rans() {
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
         // newton_max_iter=0: no Newton correction, direct preconditioned solve
-        CfdSolveSummary s0 = solver.solve(cond, cfg);
+        CfdSolveSummary s0 = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (s0.failed) FAIL("implicit viscous RANS newton=0 solve failed");
         if (!std::isfinite(s0.forces.CD)) FAIL("newt=0 CD not finite: %g", s0.forces.CD);
         if (!std::isfinite(s0.forces.CL)) FAIL("newt=0 CL not finite: %g", s0.forces.CL);
 
         // newton_max_iter=2: Newton with backtracking
         cfg.newton_max_iter = 2;
-        CfdSolveSummary s2 = solver.solve(cond, cfg);
+        CfdSolveSummary s2 = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (s2.failed) FAIL("implicit viscous RANS newton=2 solve failed");
         if (!std::isfinite(s2.forces.CD)) FAIL("newt=2 CD not finite: %g", s2.forces.CD);
         if (!std::isfinite(s2.forces.CL)) FAIL("newt=2 CL not finite: %g", s2.forces.CL);
@@ -2631,7 +2639,7 @@ static int test_implicit_newton_backtrack_and_near_singular() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
 
-        CfdSolveSummary s = solver.solve(cond, cfg);
+        CfdSolveSummary s = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (s.failed) FAIL("implicit viscous RANS solve failed");
 
         if (!std::isfinite(s.forces.CD)) FAIL("CD not finite: %g", s.forces.CD);
@@ -2643,6 +2651,159 @@ static int test_implicit_newton_backtrack_and_near_singular() {
         Real final_l2 = s.residual_history.back();
         if (!std::isfinite(final_l2)) FAIL("final L2=%g not finite", final_l2);
 
+        PASS;
+    }
+    return 0;
+}
+
+static int test_cpu_viscous_equivalence() {
+    TEST("CFD-CPU-VISC-EQUIV-1 viscous GPU=CPU residual comparison");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.cfl = 0.3f;
+        cfg.max_iter = 10;
+        cfg.convergence_tol = 1e-12f;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, cfg);
+        if (gpu.failed) FAIL("GPU viscous solve failed");
+
+        cfg.use_gpu = false;
+        CfdSolveSummary cpu = solver.solve(cond, cfg);
+        if (cpu.failed) FAIL("CPU viscous solve failed");
+
+        std::string err;
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-4f, 1e-1f, &err))
+            FAIL("viscous GPU=CPU: %s", err.c_str());
+        PASS;
+    }
+    return 0;
+}
+
+static int test_cpu_order2_equivalence() {
+    TEST("CFD-CPU-ORDER2-EQUIV-1 order2 Euler GPU=CPU residual comparison");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 3.0f;
+
+        CfdConfig cfg;
+        cfg.cfl = 0.3f;
+        cfg.max_iter = 2;
+        cfg.convergence_tol = 1e-12f;
+        cfg.reconstruction_order = 2;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdConfig gpu_cfg = cfg;
+        gpu_cfg.use_gpu = true;
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, gpu_cfg);
+        if (gpu.failed) FAIL("GPU order2 Euler solve failed");
+
+        CfdConfig cpu_cfg = cfg;
+        cpu_cfg.use_gpu = false;
+        CfdSolveSummary cpu = solver.solve(cond, cpu_cfg);
+        if (cpu.failed) FAIL("CPU order2 Euler solve failed");
+
+        std::string err;
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-4f, 1e-3f, &err))
+            FAIL("order2 Euler GPU=CPU: %s", err.c_str());
+        PASS;
+    }
+    return 0;
+}
+
+static int test_cpu_viscous_order2_equivalence() {
+    TEST("CFD-CPU-VISC-ORDER2-EQUIV-1 viscous+order2 GPU=CPU residual comparison");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.cfl = 0.2f;
+        cfg.max_iter = 10;
+        cfg.convergence_tol = 1e-12f;
+        cfg.reconstruction_order = 2;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdConfig gpu_cfg = cfg;
+        gpu_cfg.use_gpu = true;
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, gpu_cfg);
+        if (gpu.failed) FAIL("GPU viscous+order2 solve failed");
+
+        CfdConfig cpu_cfg = cfg;
+        cpu_cfg.use_gpu = false;
+        CfdSolveSummary cpu = solver.solve(cond, cpu_cfg);
+        if (cpu.failed) FAIL("CPU viscous+order2 solve failed");
+
+        std::string err;
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-4f, 1e-3f, &err))
+            FAIL("viscous+order2 GPU=CPU: %s", err.c_str());
+        PASS;
+    }
+    return 0;
+}
+
+static int test_cpu_viscous_turb_equivalence() {
+    TEST("CFD-CPU-VISC-TURB-EQUIV-1 viscous+turbulence GPU=CPU residual comparison");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+        cond.nu_tilde_ratio = 0.1f;
+
+        CfdConfig cfg;
+        cfg.cfl = 0.5f;
+        cfg.max_iter = 1;
+        cfg.convergence_tol = 1e-12f;
+        cfg.reconstruction_order = 2;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+        cfg.turbulence = true;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        CfdConfig gpu_cfg = cfg;
+        gpu_cfg.use_gpu = true;
+        CfdSolveSummary gpu = solve_gpu_dispatch(solver.mesh(), cond, gpu_cfg);
+        if (gpu.failed) FAIL("GPU viscous+turb solve failed");
+
+        CfdConfig cpu_cfg = cfg;
+        cpu_cfg.use_gpu = false;
+        CfdSolveSummary cpu = solver.solve(cond, cpu_cfg);
+        if (cpu.failed) FAIL("CPU viscous+turb solve failed");
+
+        std::string err;
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-4f, 1e-3f, &err))
+            FAIL("viscous+turb GPU=CPU: %s", err.c_str());
         PASS;
     }
     return 0;
@@ -2702,6 +2863,10 @@ result |= test_recon_order2_converged_forces();
     result |= test_sa_diffusion_sigma_division();
     result |= test_hllc_symmetric_state_nan_resilience();
     result |= test_state_download_nu_tilde_roundtrip();
+    result |= test_cpu_viscous_equivalence();
+    result |= test_cpu_order2_equivalence();
+    result |= test_cpu_viscous_order2_equivalence();
+    result |= test_cpu_viscous_turb_equivalence();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

@@ -64,6 +64,7 @@ class DeviceMesh {
 public:
     static constexpr int NVAR = CFD_NVAR;
     static constexpr int NGRAD = 18;
+    static constexpr int kMinmaxStride = 12;
     static constexpr int kMaxColors = 64;
 
     DeviceMesh() = default;
@@ -100,9 +101,11 @@ public:
     ConstDeviceCellData cell_data() const;
 
     Real* state_device() const { return d_q_; }
+    void set_state_device(Real* d_q) { d_q_ = d_q; }
     Real* residual_device() const { return d_residual_; }
     Real* gradients_device() const { return d_gradients_; }
     Real* limiters_device() const { return d_limiters_; }
+    Real* minmax_device() const { return d_minmax_; }
     // MPI halo (reserved, no-op in single-GPU mode)
     bool has_halo() const { return d_halo_indices_ != nullptr && n_halo_cells_ > 0; }
     bool allocate_halo(int n_halo_cells);
@@ -145,6 +148,7 @@ private:
 
     Real* d_gradients_ = nullptr;
     Real* d_limiters_ = nullptr;
+    Real* d_minmax_ = nullptr;
     Real* d_mu_ = nullptr;
     Real* d_lam_ = nullptr;
 

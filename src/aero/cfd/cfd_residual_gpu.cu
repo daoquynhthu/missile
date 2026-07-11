@@ -384,10 +384,11 @@ bool launch_euler_residual_kernel(
     int* d_failed,
     cudaEvent_t start_event,
     std::string* error,
-    int reconstruction_order) {
+    int reconstruction_order,
+    cudaStream_t stream) {
     if (!mesh.clear_residual(error)) return false;
-    if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "cudaMemset failed", error)) return false;
-    if (start_event && !cuda_check(cudaEventRecord(start_event), "cudaEventRecord start", error)) return false;
+    if (!cuda_check(cudaMemsetAsync(d_failed, 0, sizeof(int), stream), "cudaMemset failed", error)) return false;
+    if (start_event && !cuda_check(cudaEventRecord(start_event, stream), "cudaEventRecord start", error)) return false;
 
     if (reconstruction_order == 2 && !mesh.gradients_device()) {
         if (error) *error = "reconstruction_order=2 but gradients not allocated";
@@ -413,7 +414,7 @@ bool launch_euler_residual_kernel(
             int end   = mesh.host_color_offsets()[c + 1];
             int nf_c  = end - start;
             int grid_c = (nf_c + block - 1) / block;
-            euler_residual_kernel_colored<<<grid_c, block>>>(
+            euler_residual_kernel_colored<<<grid_c, block, 0, stream>>>(
                 fd.nx, fd.ny, fd.nz, fd.area,
                 fd.left_cell, fd.right_cell, fd.boundary,
                 mesh.state_device(),
@@ -431,7 +432,7 @@ bool launch_euler_residual_kernel(
         }
     } else {
         int grid = (nf + block - 1) / block;
-        euler_residual_kernel_atomic<<<grid, block>>>(
+        euler_residual_kernel_atomic<<<grid, block, 0, stream>>>(
             fd.nx, fd.ny, fd.nz, fd.area,
             fd.left_cell, fd.right_cell, fd.boundary,
             mesh.state_device(),

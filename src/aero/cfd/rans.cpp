@@ -94,17 +94,20 @@ std::vector<RansSource> compute_rans_sources(
     const std::vector<ConservativeState>& q,
     const std::vector<PrimitiveGradient>& gradients,
     Real gamma,
-    Real Re) {
+    Real Re,
+    const std::vector<PrimitiveState>* primitive_override) {
     constexpr Real T_ref = 288.15f;
     constexpr Real S = 110.4f;
     std::vector<RansSource> sources(mesh.cells.size());
     for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
         PrimitiveState w;
-        if (!conservative_to_primitive(q[i], gamma, w)) {
+        if (primitive_override && primitive_override->size() == q.size()) {
+            w = (*primitive_override)[i];
+        } else if (!conservative_to_primitive(q[i], gamma, w)) {
             sources[i].total_source = std::numeric_limits<Real>::quiet_NaN();
             continue;
         }
-        Real T = w.p / std::max(w.rho, 1e-30f);
+        Real T = w.p / std::max(w.rho, Real(1e-30));
         Real mu = sutherland_viscosity(T, T_ref, S);
         if (mu <= 0.0f) mu = 1.0f;
         sources[i] = compute_rans_source(

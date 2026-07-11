@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Eigen/Dense>
+#include <Eigen/Core>
 #include <Eigen/Geometry>
 #include "infra/util/pid.hpp"
 #include "sim/propulsion/propulsion_model.hpp"

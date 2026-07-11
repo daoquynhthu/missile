@@ -3,6 +3,7 @@
 > Design: `docs/AERO_ACCURACY_UPGRADE.md`
 > Progress log: `docs/progress.md`
 > Active blockers: `docs/ISSUES.md`
+> CPU Oracle 解耦: `docs/CPU_ORACLE_DECOMP.md`
 
 ## Architecture Decision
 

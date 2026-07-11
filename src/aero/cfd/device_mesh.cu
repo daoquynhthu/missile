@@ -43,6 +43,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     d_face_cz_ = other.d_face_cz_;
     d_gradients_ = other.d_gradients_;
     d_limiters_ = other.d_limiters_;
+    d_minmax_ = other.d_minmax_;
     d_mu_ = other.d_mu_;
     d_lam_ = other.d_lam_;
     other.cell_count_ = 0;
@@ -58,6 +59,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_face_cx_ = other.d_face_cy_ = other.d_face_cz_ = nullptr;
     other.d_gradients_ = nullptr;
     other.d_limiters_ = nullptr;
+    other.d_minmax_ = nullptr;
     other.d_mu_ = nullptr;
     other.d_lam_ = nullptr;
     d_halo_indices_ = other.d_halo_indices_;
@@ -190,6 +192,7 @@ void DeviceMesh::release() {
     cuda_free_safe(d_face_cz_);
     cuda_free_safe(d_gradients_);
     cuda_free_safe(d_limiters_);
+    cuda_free_safe(d_minmax_);
     cuda_free_safe(d_mu_);
     cuda_free_safe(d_lam_);
     cuda_free_safe(d_color_offsets_);
@@ -254,10 +257,12 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
     if (!alloc(d_residual_, nc * NVAR * sizeof(Real), "cudaMalloc residual")) return false;
     if (!alloc(d_gradients_, nc * DeviceMesh::NGRAD * sizeof(Real), "cudaMalloc gradients")) return false;
     if (!alloc(d_limiters_, nc * sizeof(PrimitiveLimiter), "cudaMalloc limiters")) return false;
+    if (!alloc(d_minmax_, nc * DeviceMesh::kMinmaxStride * sizeof(Real), "cudaMalloc minmax")) return false;
     if (!cuda_check(cudaMemset(d_q_, 0, nc * NVAR * sizeof(Real)), "cudaMemset state", error)) { release(); return false; }
     if (!cuda_check(cudaMemset(d_residual_, 0, nc * NVAR * sizeof(Real)), "cudaMemset residual", error)) { release(); return false; }
     if (!cuda_check(cudaMemset(d_gradients_, 0, nc * DeviceMesh::NGRAD * sizeof(Real)), "cudaMemset gradients", error)) { release(); return false; }
     if (!cuda_check(cudaMemset(d_limiters_, 0, nc * sizeof(PrimitiveLimiter)), "cudaMemset limiters", error)) { release(); return false; }
+    if (!cuda_check(cudaMemset(d_minmax_, 0, nc * DeviceMesh::kMinmaxStride * sizeof(Real)), "cudaMemset minmax", error)) { release(); return false; }
 
     std::vector<Real> h_nx(nf), h_ny(nf), h_nz(nf), h_area(nf), h_face_cx(nf), h_face_cy(nf), h_face_cz(nf);
     std::vector<int> h_left_cell(nf), h_right_cell(nf);
@@ -288,16 +293,38 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
                 dest[f] = insert_pos[c]++;
             }
 
-            auto reorder = [&](auto& vec) {
-                auto copy = vec;
+            std::vector<Real> reorder_tmp_real(nf);
+            std::vector<int> reorder_tmp_int(nf);
+            auto reorder = [&](auto& vec, auto& tmp) {
                 for (std::size_t f = 0; f < nf; ++f)
-                    vec[static_cast<std::size_t>(dest[f])] = copy[f];
+                    tmp[f] = vec[f];
+                for (std::size_t f = 0; f < nf; ++f)
+                    vec[static_cast<std::size_t>(dest[f])] = tmp[f];
             };
-            reorder(h_nx); reorder(h_ny); reorder(h_nz);
-            reorder(h_area);
-            reorder(h_left_cell); reorder(h_right_cell);
-            reorder(temp_boundary);
-            reorder(h_face_cx); reorder(h_face_cy); reorder(h_face_cz);
+            reorder(h_nx, reorder_tmp_real); reorder(h_ny, reorder_tmp_real); reorder(h_nz, reorder_tmp_real);
+            reorder(h_area, reorder_tmp_real);
+            reorder(h_left_cell, reorder_tmp_int); reorder(h_right_cell, reorder_tmp_int);
+            reorder(temp_boundary, reorder_tmp_int);
+            reorder(h_face_cx, reorder_tmp_real); reorder(h_face_cy, reorder_tmp_real); reorder(h_face_cz, reorder_tmp_real);
+
+            // PERF-B1: sort faces within each color by left_cell for coalesced d_q reads
+            std::vector<int> perm(nf);
+            for (std::size_t f = 0; f < nf; ++f) perm[f] = static_cast<int>(f);
+            for (int c = 0; c < n_colors_; ++c) {
+                int s = host_color_offsets_[c];
+                int e = host_color_offsets_[c + 1];
+                std::sort(perm.begin() + s, perm.begin() + e,
+                    [&](int a, int b) { return h_left_cell[a] < h_left_cell[b]; });
+            }
+            auto apply_perm = [&](auto& vec, auto& tmp) {
+                for (std::size_t f = 0; f < nf; ++f) tmp[f] = vec[f];
+                for (std::size_t f = 0; f < nf; ++f) vec[f] = tmp[static_cast<std::size_t>(perm[f])];
+            };
+            apply_perm(h_nx, reorder_tmp_real); apply_perm(h_ny, reorder_tmp_real); apply_perm(h_nz, reorder_tmp_real);
+            apply_perm(h_area, reorder_tmp_real);
+            apply_perm(h_left_cell, reorder_tmp_int); apply_perm(h_right_cell, reorder_tmp_int);
+            apply_perm(temp_boundary, reorder_tmp_int);
+            apply_perm(h_face_cx, reorder_tmp_real); apply_perm(h_face_cy, reorder_tmp_real); apply_perm(h_face_cz, reorder_tmp_real);
         }
     }
 

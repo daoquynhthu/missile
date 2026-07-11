@@ -46,23 +46,26 @@ class DeviceMesh;
 std::vector<PrimitiveGradient> compute_green_gauss_gradients(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    Real gamma);
+    Real gamma,
+    const std::vector<PrimitiveState>* primitive_override = nullptr);
 
 std::vector<PrimitiveGradient> compute_least_squares_gradients(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    Real gamma);
+    Real gamma,
+    const std::vector<PrimitiveState>* primitive_override = nullptr);
 
 std::vector<PrimitiveLimiter> compute_barth_jespersen_limiters(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const std::vector<PrimitiveGradient>& gradients,
-    Real gamma);
+    Real gamma,
+    const std::vector<PrimitiveState>* primitive_override = nullptr);
 
 PrimitiveGradient apply_limiter(const PrimitiveGradient& gradient, const PrimitiveLimiter& limiter);
 
-bool apply_limiter_gpu(DeviceMesh& mesh, std::string* error = nullptr);
-bool apply_limiter_gpu(DeviceMesh& mesh, bool sync, std::string* error = nullptr);
+bool apply_limiter_gpu(DeviceMesh& mesh, std::string* error = nullptr, cudaStream_t stream = nullptr);
+bool apply_limiter_gpu(DeviceMesh& mesh, bool sync, std::string* error = nullptr, cudaStream_t stream = nullptr);
 
 PrimitiveState reconstruct_primitive(
     const PrimitiveState& center,

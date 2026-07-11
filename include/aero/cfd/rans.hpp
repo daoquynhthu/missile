@@ -32,7 +32,8 @@ std::vector<RansSource> compute_rans_sources(
     const std::vector<ConservativeState>& q,
     const std::vector<PrimitiveGradient>& gradients,
     Real gamma,
-    Real Re);
+    Real Re,
+    const std::vector<PrimitiveState>* primitive_override = nullptr);
 
 } // namespace cfd
 } // namespace aero

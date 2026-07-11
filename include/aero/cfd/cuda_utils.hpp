@@ -7,8 +7,6 @@ namespace aerosp {
 namespace aero {
 namespace cfd {
 
-#define CUDA_KERNEL_CHECK(msg) cuda_check(cudaGetLastError(), msg)
-
 bool cuda_check(cudaError_t error, const char* action, std::string* message = nullptr);
 
 template <typename T>

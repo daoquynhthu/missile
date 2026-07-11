@@ -7,7 +7,7 @@
 #include <sstream>
 #include <iostream>
 #include <cmath>
-#include <Eigen/Dense>
+#include <Eigen/Core>
 
 namespace aerosp {
 

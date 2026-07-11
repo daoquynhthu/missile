@@ -53,5 +53,5 @@
 - 不要提交 git commit（除非明确要求）
 - 每个改动后运行编译器验证
 - NaN/Inf 检查是必须的
-- CUDA 调用后必须检查错误 (`CUDA_CHECK`/`CUDA_KERNEL_CHECK`)
+- CUDA 调用后必须检查错误 (`CUDA_CHECK`)
 - 所有浮点比较用相对容差，不要用精确相等

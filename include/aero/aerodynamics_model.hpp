@@ -11,7 +11,7 @@
 #include <string>
 #include <map>
 
-#include <Eigen/Dense>
+#include <Eigen/Core>
 
 #include "aero/panel/aero_solver.hpp"
 #include "infra/util/utils.hpp"

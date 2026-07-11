@@ -50,7 +50,7 @@ Real positive_theta(Real center, Real reconstructed, Real floor_value) {
     if (center <= floor_value) return 0.0f;
     Real denom = center - reconstructed;
     if (denom <= 0.0f || !std::isfinite(denom)) return 0.0f;
-    return std::max(0.0f, std::min(1.0f, (center - floor_value) / denom));
+    return std::max(Real(0.0), std::min(Real(1.0), (center - floor_value) / denom));
 }
 
 PrimitiveGradient scale_gradient(const PrimitiveGradient& g, Real theta) {
@@ -109,6 +109,58 @@ bool solve_3x3(Real a[3][3], Real b[3], Real x[3]) {
     return std::isfinite(x[0]) && std::isfinite(x[1]) && std::isfinite(x[2]);
 }
 
+// LU decomposition of a 3x3 matrix with partial pivoting.
+// Stores L below diagonal (unit diagonal implicit), U on/above diagonal.
+// pivot[i] records which original row is now at row i after permutation.
+static bool lu_factor_3x3(const Real a[3][3], Real lu[3][3], int pivot[3]) {
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            lu[r][c] = a[r][c];
+    pivot[0] = 0; pivot[1] = 1; pivot[2] = 2;
+
+    for (int k = 0; k < 3; ++k) {
+        int p = k;
+        Real max_abs = std::fabs(lu[k][k]);
+        for (int r = k + 1; r < 3; ++r) {
+            Real abs_val = std::fabs(lu[r][k]);
+            if (abs_val > max_abs) { max_abs = abs_val; p = r; }
+        }
+        Real col_max = 0.0f;
+        for (int r = k; r < 3; ++r)
+            col_max = std::max(col_max, std::fabs(lu[r][k]));
+        if (col_max < Real(1e-30) || max_abs < col_max * Real(1e-12)) return false;
+
+        if (p != k) {
+            for (int j = 0; j < 3; ++j) std::swap(lu[k][j], lu[p][j]);
+            std::swap(pivot[k], pivot[p]);
+        }
+        Real inv_diag = 1.0f / lu[k][k];
+        for (int i = k + 1; i < 3; ++i) {
+            Real factor = lu[i][k] * inv_diag;
+            lu[i][k] = factor;
+            for (int j = k + 1; j < 3; ++j)
+                lu[i][j] -= factor * lu[k][j];
+        }
+    }
+    return true;
+}
+
+// Solve LU * x = P * b using forward (L) and back (U) substitution.
+static void lu_solve_3x3(const Real lu[3][3], const int pivot[3], const Real b[3], Real x[3]) {
+    Real y[3];
+    for (int i = 0; i < 3; ++i) {
+        y[i] = b[pivot[i]];
+        for (int j = 0; j < i; ++j)
+            y[i] -= lu[i][j] * y[j];
+    }
+    for (int i = 2; i >= 0; --i) {
+        x[i] = y[i];
+        for (int j = i + 1; j < 3; ++j)
+            x[i] -= lu[i][j] * x[j];
+        x[i] /= lu[i][i];
+    }
+}
+
 void accumulate_least_squares_matrix(Real a[3][3], Real dx, Real dy, Real dz) {
     Real d[3] = {dx, dy, dz};
     for (int r = 0; r < 3; ++r) {
@@ -150,12 +202,12 @@ Real limiter_theta(Real center, Real reconstructed, Real min_value, Real max_val
     if (reconstructed > max_value) {
         Real denom = reconstructed - center;
         if (denom <= 0.0f) return 0.0f;
-        return std::max(0.0f, std::min(1.0f, (max_value - center) / denom));
+        return std::max(Real(0.0), std::min(Real(1.0), (max_value - center) / denom));
     }
     if (reconstructed < min_value) {
         Real denom = reconstructed - center;
         if (denom >= 0.0f) return 0.0f;
-        return std::max(0.0f, std::min(1.0f, (min_value - center) / denom));
+        return std::max(Real(0.0), std::min(Real(1.0), (min_value - center) / denom));
     }
     return 1.0f;
 }
@@ -190,27 +242,33 @@ void update_limiter(PrimitiveLimiter& limiter, const PrimitiveState& center, con
 std::vector<PrimitiveGradient> compute_green_gauss_gradients(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    Real gamma) {
+    Real gamma,
+    const std::vector<PrimitiveState>* primitive_override) {
     if (q.size() != mesh.cells.size()) return {};
 
-    std::vector<PrimitiveState> primitive(q.size());
-    for (std::size_t i = 0; i < q.size(); ++i) {
-        if (!conservative_to_primitive(q[i], gamma, primitive[i])) return {};
+    const std::vector<PrimitiveState>* local_primitive = primitive_override;
+    std::vector<PrimitiveState> fallback;
+    if (!local_primitive || local_primitive->size() != q.size()) {
+        fallback.resize(q.size());
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            if (!conservative_to_primitive(q[i], gamma, fallback[i])) return {};
+        }
+        local_primitive = &fallback;
     }
 
     std::vector<PrimitiveGradient> gradients(q.size());
     for (const auto& face : mesh.faces) {
-        const PrimitiveState& wl = primitive[face.left_cell];
+        const PrimitiveState& wl = (*local_primitive)[face.left_cell];
         PrimitiveState wf = wl;
         if (face.boundary == BoundaryKind::Interior) {
-            wf = average_state(wl, primitive[face.right_cell]);
+            wf = average_state(wl, (*local_primitive)[face.right_cell]);
         }
 
         Real left_scale = face.area / mesh.cells[face.left_cell].volume;
         add_face_contribution(gradients[face.left_cell], wf, wl, face.nx, face.ny, face.nz, left_scale);
 
         if (face.boundary == BoundaryKind::Interior) {
-            const PrimitiveState& wr = primitive[face.right_cell];
+            const PrimitiveState& wr = (*local_primitive)[face.right_cell];
             Real right_scale = -face.area / mesh.cells[face.right_cell].volume;
             add_face_contribution(gradients[face.right_cell], wf, wr, face.nx, face.ny, face.nz, right_scale);
         }
@@ -222,12 +280,18 @@ std::vector<PrimitiveGradient> compute_green_gauss_gradients(
 std::vector<PrimitiveGradient> compute_least_squares_gradients(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    Real gamma) {
+    Real gamma,
+    const std::vector<PrimitiveState>* primitive_override) {
     if (q.size() != mesh.cells.size()) return {};
 
-    std::vector<PrimitiveState> primitive(q.size());
-    for (std::size_t i = 0; i < q.size(); ++i) {
-        if (!conservative_to_primitive(q[i], gamma, primitive[i])) return {};
+    const std::vector<PrimitiveState>* local_primitive = primitive_override;
+    std::vector<PrimitiveState> fallback;
+    if (!local_primitive || local_primitive->size() != q.size()) {
+        fallback.resize(q.size());
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            if (!conservative_to_primitive(q[i], gamma, fallback[i])) return {};
+        }
+        local_primitive = &fallback;
     }
 
     struct CellSystem {
@@ -246,7 +310,7 @@ std::vector<PrimitiveGradient> compute_least_squares_gradients(
         accumulate_least_squares_matrix(systems[left].a, dx, dy, dz);
         accumulate_least_squares_matrix(systems[right].a, -dx, -dy, -dz);
         for (int component = 0; component < 6; ++component) {
-            Real dphi = primitive_component(primitive[right], component) - primitive_component(primitive[left], component);
+            Real dphi = primitive_component((*local_primitive)[right], component) - primitive_component((*local_primitive)[left], component);
             accumulate_least_squares_rhs(systems[left].b[component], dx, dy, dz, dphi);
             accumulate_least_squares_rhs(systems[right].b[component], -dx, -dy, -dz, -dphi);
         }
@@ -254,16 +318,14 @@ std::vector<PrimitiveGradient> compute_least_squares_gradients(
 
     std::vector<PrimitiveGradient> gradients(q.size());
     for (std::size_t i = 0; i < q.size(); ++i) {
+        Real lu[3][3];
+        int pivot[3];
+        if (!lu_factor_3x3(systems[i].a, lu, pivot)) continue;
+        Real x[3];
         for (int component = 0; component < 6; ++component) {
-            Real a[3][3] = {
-                {systems[i].a[0][0], systems[i].a[0][1], systems[i].a[0][2]},
-                {systems[i].a[1][0], systems[i].a[1][1], systems[i].a[1][2]},
-                {systems[i].a[2][0], systems[i].a[2][1], systems[i].a[2][2]}
-            };
-            Real x[3] = {};
-            if (solve_3x3(a, systems[i].b[component], x)) {
+            lu_solve_3x3(lu, pivot, systems[i].b[component], x);
+            if (std::isfinite(x[0]) && std::isfinite(x[1]) && std::isfinite(x[2]))
                 assign_gradient_component(gradients[i], component, x);
-            }
         }
     }
 
@@ -274,43 +336,49 @@ std::vector<PrimitiveLimiter> compute_barth_jespersen_limiters(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const std::vector<PrimitiveGradient>& gradients,
-    Real gamma) {
+    Real gamma,
+    const std::vector<PrimitiveState>* primitive_override) {
     if (q.size() != mesh.cells.size() || gradients.size() != mesh.cells.size()) return {};
 
-    std::vector<PrimitiveState> primitive(q.size());
-    for (std::size_t i = 0; i < q.size(); ++i) {
-        if (!conservative_to_primitive(q[i], gamma, primitive[i])) return {};
+    const std::vector<PrimitiveState>* local_primitive = primitive_override;
+    std::vector<PrimitiveState> fallback;
+    if (!local_primitive || local_primitive->size() != q.size()) {
+        fallback.resize(q.size());
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            if (!conservative_to_primitive(q[i], gamma, fallback[i])) return {};
+        }
+        local_primitive = &fallback;
     }
 
-    std::vector<PrimitiveState> min_w = primitive;
-    std::vector<PrimitiveState> max_w = primitive;
+    std::vector<PrimitiveState> min_w = *local_primitive;
+    std::vector<PrimitiveState> max_w = *local_primitive;
     for (const auto& face : mesh.faces) {
         if (face.boundary != BoundaryKind::Interior) continue;
-        update_minmax(min_w[face.left_cell], max_w[face.left_cell], primitive[face.right_cell]);
-        update_minmax(min_w[face.right_cell], max_w[face.right_cell], primitive[face.left_cell]);
+        update_minmax(min_w[face.left_cell], max_w[face.left_cell], (*local_primitive)[face.right_cell]);
+        update_minmax(min_w[face.right_cell], max_w[face.right_cell], (*local_primitive)[face.left_cell]);
     }
 
     std::vector<PrimitiveLimiter> limiters(q.size());
     for (const auto& face : mesh.faces) {
         const CfdCell& left = mesh.cells[face.left_cell];
         PrimitiveState left_recon = reconstruct_primitive(
-            primitive[face.left_cell],
+            (*local_primitive)[face.left_cell],
             gradients[face.left_cell],
             face.cx - left.cx,
             face.cy - left.cy,
             face.cz - left.cz);
-        update_limiter(limiters[face.left_cell], primitive[face.left_cell], left_recon,
+        update_limiter(limiters[face.left_cell], (*local_primitive)[face.left_cell], left_recon,
             min_w[face.left_cell], max_w[face.left_cell]);
 
         if (face.boundary == BoundaryKind::Interior) {
             const CfdCell& right = mesh.cells[face.right_cell];
             PrimitiveState right_recon = reconstruct_primitive(
-                primitive[face.right_cell],
+                (*local_primitive)[face.right_cell],
                 gradients[face.right_cell],
                 face.cx - right.cx,
                 face.cy - right.cy,
                 face.cz - right.cz);
-            update_limiter(limiters[face.right_cell], primitive[face.right_cell], right_recon,
+            update_limiter(limiters[face.right_cell], (*local_primitive)[face.right_cell], right_recon,
                 min_w[face.right_cell], max_w[face.right_cell]);
         }
     }

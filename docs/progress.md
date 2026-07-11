@@ -1,3 +1,19 @@
+2026-07-11
+- PERF-D1: precompute primitive state vector once per iteration in cfd_solver.cpp and pass &w to downstream functions (compute_green_gauss_gradients, compute_barth_jespersen_limiters, compute_euler_residual_cpu/order2, compute_viscous_flux_cpu, compute_rans_sources, compute_state_bounds). Conservative-to-primitive conversions reduced from 4-6x per iteration to 1x. All CFD tests PASS: TestCfdEuler 8/8, TestCfdDiagnostics 4/4, TestCfdReconstruction 7/7, TestCfdViscous 11/11, TestCfdMesh 11/11.
+
+2026-07-11
+- Step 1 (GPU dispatch剥离): extracted GPU dispatch from cfd_solver.cpp into cfd_solver_gpu.cpp/.hpp; cfd_solver.cpp is now pure CPU with zero CUDA includes; missile_lib builds clean.
+- Step 3 (GPU test adaptation): replaced 25 solver.solve(use_gpu=true) calls in test_cfd_gpu.cpp with solve_gpu_dispatch(); repaired task-agent file corruption (duplicate PASS blocks, missing function braces); all 56/56 tests PASS.
+- Step 4a (CUDA arch detection): replaced unreliable auto-detection with hardcoded `75;80;89;90;100` set via FORCE cache.
+- Step 4b (FP64 target): added `test_oracle_fp64` target to tests/CMakeLists.txt; compiled with AEROSP_REAL_DOUBLE as pure C++.
+- Step 4c (BUILD_TESTING guard): wrapped tests in `option(BUILD_TESTING)` guard to allow toggling.
+- Step 5a (#include order): moved `#include "aero/cfd/real.hpp"` after `#pragma once` blank line in 4 headers (cfd_solver.hpp, cfd_residual.hpp, gpu_solver.hpp, viscous.hpp).
+- Step 5b (CUDA_KERNEL_CHECK removal): removed unused macro from cuda_utils.hpp; updated AGENTS.md constraint.
+- Step 6 (FP64 oracle): created tests/cfd/test_oracle_fp64.cpp with 3 tests (Euler/viscous/RANS flat plate).
+- Fixed pre-existing type-hygiene issue in 7 source files: `std::max(x, 1e-30f)` → `std::max(x, Real(1e-30))` to avoid ambiguous overload when Real=double.
+- Verification: `TestCfdGpu` 56/56 PASS, `test_oracle_fp64` 3/3 PASS.
+- All 7 steps from CPU_ORACLE_DECOMP.md completed.
+
 2026-06-16
 - Created clean CFD rebuild baseline commit `d86393d`.
 - Started Phase 1 mesh foundation under `include/aero_cfd/`, `src/aero_cfd/`, and `tests/cfd/`.
@@ -492,6 +508,23 @@
 - PH11-A-1 FIXED: LU-SGS diagonal now uses per-cell dt (d_dt_cell) instead of global min dt
 - PH11-A-2 FIXED: Newton exhaustion now applies last halved dq + recomputes residual (no full stall)
 
+2026-07-11 — PERF batch 2: timestep/L2 atomic reduction, FGMRES batch D2H, colored viscous flux
+- PERF-A1: gpu_timestep.cu — timestep atomicMin → two-level block-shared reduction + final reduce_min_kernel
+- PERF-A2: gpu_update.cu — L2 atomicAdd → two-level tree reduction (reduce_sum_kernel)
+- PERF-C1: gpu_rans.cu, reconstruction_gpu.cu — removed unconditional cudaDeviceSynchronize + D2H d_failed reads
+- PERF-G1: fgmres_gpu.cu — replaced O(m²) per-dot-product D2H+sync with daxpy_device_kernel (device-scalar axpy), batch cudaMemcpy2DAsync per column, one sync per outer iteration (m vs m(m+3)/2 transfers)
+- PERF-A3: gpu_viscous.cu — added viscous_flux_kernel_colored (face_start/face_end, non-atomic +=) + colored launch path
+- PERF-A4: gpu_wall.cu — wall_force_kernel_colored attempted but REVERTED: d_forces[6] is a global accumulator shared by ALL wall-face threads regardless of cell coloring; non-atomic += causes race; wall forces permanently use atomic kernel
+- PERF-D2: mesh_metrics.cpp — rebuild_faces second call skips cell metrics via recompute_cells=false
+- PERF-G3: jacobian_free.cu, device_mesh.hpp — JFV pointer swap eliminates 3 D2D state copies per product
+- PERF-G6: gpu_solver.cu — viscous buffer allocation moved from iteration loop to solver setup
+- Build + TestCfdGpu 56/56 PASS, TestCfdMesh 11/11 PASS
+
+2026-07-11 — PERF-D3: 边界面匹配 O(N²) 线性搜索 → O(1) unordered_map
+- `mesh_io_su2.cpp`: removed `find_marker_face()`, added `SortedNodeHash` (boost hash_combine), built `unordered_map<vector<int>, int>` keyed by sorted marker-face nodes, replaced loop with map lookup
+- `mesh_io_cgns.cpp`: added `#include <unordered_map>`, same map approach replacing inline linear search over `pending_bc_faces`
+- Build + TestCfdMesh 11/11 PASS
+
 2026-07-11 — Phase 11 audit fixes Batch 1-3 (18 issues fixed, 8 remaining OPEN)
 - Batch 1: PH11-H8 (d_dt_cell size n_cells→nvar_cells, -R 2 ops), H5 (JFV d_failed param + solver lambda), H6/H7 (LU-SGS sweep 自声速 a 加入 lambda), M2/M3 (退化邻点 a fallback), M4 (粘性对角项 d_mu/Re 传递到 compute_diag_kernel)
 - Batch 2: PH11-H1/H2 (FGMRES 初始残差+重启改为 matvec(d_x)→b - Ax), H3 (nullptr daxpy→dscal_gpu(0)), H4 (dnrm2_gpu + krylov_ddot 用 cudaMemcpyAsync+cudaStreamSynchronize), M1 (grid_size cap 256→65536)
@@ -548,3 +581,41 @@
 - Total ~47 findings: 20 HIGH, 15 MEDIUM, 9 LOW, 3 INFO
 - Key HIGH findings: 6 atomic contention hotspots needing colored/fused paths (viscous, wall, limiter, minmax, timestep, L2); 1 non-coalesced d_q read through all face-level kernels; 4 CPU redundant work items (2-4x conservative_to_primitive per iteration, rebuild_faces double metrics, linear boundary matching); FGMRES O(m²) D2H sync; d_minmax alloc/free per iteration; JFV 3x full-state D2D copy; streams unused; 4 build-system issues (nvcc on .cpp, 27 device-link steps, no ccache, arch detection broken)
 - Written to ISSUES.md as `## 性能审计 (2026-07-11)` section
+- Fixed PERF-G5: removed D2H→H2D roundtrip in `dnrm2_gpu` — kernel writes `*result` directly; callers already D2H explicitly.
+- Fixed PERF-A7: `ddot_kernel` replaced with two-stage reduction (per-block partial + single-block reduce-sum) in `fgmres_gpu.cu`; removes `atomicAdd` contention.
+- PERF-D2: `compute_mesh_metrics(mesh, recompute_cells=false)` added; second call in `rebuild_faces()` skips cell metrics.
+- PERF-G3: JFV product uses pointer swap (`d_q_pert` scratch) instead of 3 full D2D state copies in `jacobian_free.cu` + `device_mesh.hpp`.
+- PERF-G6: viscous buffer allocation (`allocate_viscous()`) moved from inside iteration loop to solver setup in `gpu_solver.cu`.
+- PERF-D3: 边界面匹配 O(N²) → O(1) unordered_map (mesh_io_su2.cpp, mesh_io_cgns.cpp)
+- PERF-B2: `*d_min_dt` 替换为 `__ldg(d_min_dt)` (gpu_rans.cu, gpu_update.cu)
+- PERF-F4: tokenize 返回 vector<string_view> (mesh_io_su2.cpp)
+- PERF-E4: 就地排列复用暂存缓冲 (device_mesh.cu)
+- PERF-H1: 移除 blanket set_source_files_properties(LANGUAGE CUDA) (tests/CMakeLists.txt)
+- PERF-F3: wall_face_indices_ 预计算 (cfd_solver.cpp)
+- PERF-G2: d_minmax 持久化到 DeviceMesh (device_mesh.hpp/.cu, reconstruction_gpu.cu)
+- PERF-E1/2/3: residual/limited/sources 向量提升 + q_next.resize + fill 替代 copy/assign
+- 56/56 TestCfdGpu PASS. 11/11 TestCfdMesh PASS.
+- PERF-A5+A6: colored bj_limiter_kernel + update_minmax_kernel in reconstruction_gpu.cu (atomic CAS → direct write per color). Colored dispatch in compute_limiters_gpu.
+- PERF-G4: stream_comp 无条件创建；所有 GPU 计算函数添加 `cudaStream_t stream = nullptr` 参数并透传至内核启动。修改 12 个文件 (gpu_solver_internal.hpp, gpu_solver.cu, reconstruction_gpu.cu, gpu_timestep.cu, cfd_residual_gpu.cu, gpu_viscous.cu, gpu_rans.cu, gpu_update.cu, gpu_diagnostics.cu, jacobian_free.cu, cfd_residual.hpp, reconstruction.hpp)。
+- PERF-H2: missile_lib 拆分为 missile_cpu (纯 C++ 源文件) + missile_lib (仅 .cu 源文件 + 链接 missile_cpu)。无 CUDA 的测试目标链接 missile_cpu (跳过设备链接)。修改 CMakeLists.txt, src/aero/CMakeLists.txt, tests/CMakeLists.txt。
+- 56/56 TestCfdGpu PASS, 8/8 TestCfdEuler PASS, 11/11 TestCfdMesh PASS, 4/4 TestCfdDiagnostics PASS, 2/2 TestIntegrator PASS, 1/1 TestAero PASS. CPU-only 目标无设备链接 (2-step 编译)。
+- PERF-B1: device_mesh.cu — after greedy coloring + reorder, sort face arrays by left_cell within each color for coalesced d_q reads.
+- PERF-F1: reconstruction.cpp — added lu_factor_3x3/lu_solve_3x3 helpers; each cell does 1x LU + 6x back-substitution instead of 6x full Gauss-Jordan.
+- PERF-H3: CMakeLists.txt — added AEROSIM_USE_CCACHE option + compiler launcher setup.
+- PERF-I4: CMakeLists.txt — duplicate global separable compilation removed (part of H2).
+- 已修复但未标记的 10 项已补充到 ISSUES.md (A7, B2, E1-E4, F3-F4, G2, H1, H6, I1)。
+- PERF-D1: 7 CPU functions (green-gauss, least-squares, limiters, euler residual x3, viscous, rans, state bounds) accept optional `const std::vector<PrimitiveState>* primitive_override`; solver precomputes `w` once per iteration in dt loop and passes `&w` downstream, eliminating 2-4 redundant c→p conversions per iteration.
+- PERF-D4: State bounds accumulation integrated into dt loop (reuses precomputed `w[i]`); pre-loop explicit bounds removed; one final `compute_state_bounds` post-loop only. Saves 1 O(N) per-iteration pass when diagnostics enabled.
+- PERF-I3: missile_cpu Eigen include changed to PRIVATE; consumers (CPU test targets) no longer inherit Eigen include path unnecessarily. missile_lib retains PUBLIC Eigen for sim/ headers used in .cu sources.
+- PERF-F2: diagnostics.cpp VTK output changed from ASCII to binary format (text headers + big-endian raw data). write_vtk_cells uses std::ios::binary mode, ~3-5x smaller output, no per-element << overhead.
+- PERF-I2: CMake install rules added — missile_cpu, missile_lib, headers (include/*.hpp), and export target (AeroSimTargets.cmake). All source-directory includes wrapped in BUILD_INTERFACE for install compatibility.
+- PERF-G7, H5 deferred: marginal benefit vs complexity for mesh upload batching and PCH setup.
+- PERF-H4: Replaced `#include <Eigen/Dense>` with `<Eigen/Core>`/`<Eigen/Geometry>` in all 9 headers previously including the full Eigen module. Removed unused Eigen include from atmosphere_model.hpp entirely. Reduces nvcc template parsing overhead.
+- 56/56 TestCfdGpu PASS, 8/8 TestCfdEuler PASS, 4/4 TestCfdDiagnostics PASS, 7/7 TestCfdReconstruction PASS, 11/11 TestCfdViscous PASS, 11/11 TestCfdMesh PASS.
+- Fixed PERF-G1: replaced O(m²) D2H syncs in FGMRES Arnoldi loop with batched column transfer.
+  - Added `daxpy_device_kernel`/`daxpy_device_gpu` — reads scalar from device pointer (avoids D2H for axpy).
+  - MGS inner loop: dot products write directly to `d_hess_` on device; axpy reads scalar from `d_hess_`.
+  - Norm: dot product writes to `d_hess_` subdiagonal.
+  - Per column j: single `cudaMemcpy2DAsync` copies j+2 strided elements from `d_hess_` column to `h_host`.
+  - One `cudaStreamSynchronize` per outer iteration (vs (j+2) per iteration).
+  - m=50: ~50 syncs/restart-cycle vs ~2500 before. 50x reduction.

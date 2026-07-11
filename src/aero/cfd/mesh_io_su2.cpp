@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -87,40 +88,45 @@ std::string trim(const std::string& s) {
 }
 
 // Parse a line into tokens, handling both space and tab separators
-std::vector<std::string> tokenize(const std::string& line) {
-    std::vector<std::string> tokens;
-    std::string current;
+// Returns string_views pointing into the original line — caller must ensure
+// the line outlives the returned vector.
+std::vector<std::string_view> tokenize(const std::string& line) {
+    std::vector<std::string_view> tokens;
+    std::size_t tok_start = std::string::npos;
     for (std::size_t i = 0; i < line.size(); ++i) {
         char c = line[i];
         if (c == '%') break;  // comment
         if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!current.empty()) {
-                tokens.push_back(current);
-                current.clear();
+            if (tok_start != std::string::npos) {
+                tokens.push_back(
+                    std::string_view(line.data() + tok_start, i - tok_start));
+                tok_start = std::string::npos;
             }
         } else {
-            current += c;
+            if (tok_start == std::string::npos) tok_start = i;
         }
     }
-    if (!current.empty()) tokens.push_back(current);
+    if (tok_start != std::string::npos) {
+        tokens.push_back(
+            std::string_view(line.data() + tok_start, line.size() - tok_start));
+    }
     return tokens;
 }
 
-// Match a face by sorted node set against a list of marker faces
 struct MarkerFace {
     BoundaryKind boundary;
     std::vector<int> sorted_nodes;
 };
 
-int find_marker_face(const std::vector<int>& face_nodes, int face_node_count,
-                     const std::vector<MarkerFace>& markers) {
-    std::vector<int> sorted(face_nodes.begin(), face_nodes.begin() + face_node_count);
-    std::sort(sorted.begin(), sorted.end());
-    for (std::size_t m = 0; m < markers.size(); ++m) {
-        if (markers[m].sorted_nodes == sorted) return static_cast<int>(m);
+struct SortedNodeHash {
+    std::size_t operator()(const std::vector<int>& v) const {
+        std::size_t h = 0;
+        for (int x : v) {
+            h ^= static_cast<std::size_t>(x) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
+        return h;
     }
-    return -1;
-}
+};
 
 // Face building helpers (mirrors mesh_metrics.cpp)
 struct FaceKey {
@@ -237,19 +243,19 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
 
         try {
         // Handle key = value (SU2 format: "NDIME= 3" or "NDIME=3" or "NDIME 3")
-        auto split_kv = [](const std::string& s) -> std::pair<std::string, std::string> {
+        auto split_kv = [](std::string_view s) -> std::pair<std::string_view, std::string_view> {
             auto eq = s.find('=');
-            if (eq != std::string::npos)
+            if (eq != std::string_view::npos)
                 return {s.substr(0, eq), s.substr(eq + 1)};
-            return {s, ""};
+            return {s, std::string_view{}};
         };
         auto [kw, val] = split_kv(tokens[0]);
         if (tokens.size() > 1 && val.empty()) val = tokens[1];
 
-        if (kw == "NDIME") { ndime = std::stoi(val); continue; }
+        if (kw == "NDIME") { ndime = std::stoi(std::string(val)); continue; }
         if (kw == "NPOIN") {
             if (section >= 1) { if (err) *err = "duplicate NPOIN"; return false; }
-            npoin = std::stoi(val);
+            npoin = std::stoi(std::string(val));
             mesh.nodes.reserve(static_cast<std::size_t>(npoin));
             section = 1;
             continue;
@@ -257,7 +263,7 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
         if (kw == "NELEM") {
             if (section >= 2) { if (err) *err = "duplicate NELEM"; return false; }
             if (section < 1) { if (err) *err = "NELEM before NPOIN"; return false; }
-            nelem = std::stoi(val);
+            nelem = std::stoi(std::string(val));
             mesh.cells.reserve(static_cast<std::size_t>(nelem));
             section = 2;
             continue;
@@ -265,7 +271,7 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
         if (kw == "NMARK") {
             if (section >= 3) { if (err) *err = "duplicate NMARK"; return false; }
             if (section < 2) { if (err) *err = "NMARK before NELEM"; return false; }
-            nmark = std::stoi(val);
+            nmark = std::stoi(std::string(val));
             section = 3;
             continue;
         }
@@ -289,7 +295,7 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
                 if (err) *err = "MARKER_ELEMS without value";
                 return false;
             }
-            expected_marker_count = std::stoi(val);
+            expected_marker_count = std::stoi(std::string(val));
             current_marker_count = 0;
             continue;
         }
@@ -299,9 +305,9 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
             // NPOIN: <id> <x> <y> [<z>]
             if (tokens.size() < 4) continue;
             CfdNode node;
-            node.x = static_cast<Real>(std::stod(tokens[1]));
-            node.y = static_cast<Real>(std::stod(tokens[2]));
-            node.z = static_cast<Real>(std::stod(tokens[3]));
+            node.x = static_cast<Real>(std::stod(std::string(tokens[1])));
+            node.y = static_cast<Real>(std::stod(std::string(tokens[2])));
+            node.z = static_cast<Real>(std::stod(std::string(tokens[3])));
             if (!std::isfinite(node.x) || !std::isfinite(node.y) || !std::isfinite(node.z)) {
                 if (err) *err = "non-finite coordinate at node " + std::to_string(mesh.nodes.size());
                 return false;
@@ -310,7 +316,7 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
         } else if (section == 2) {
             // NELEM: <su2_type> <tag> <node1> <node2> ...
             if (tokens.size() < 3) continue;
-            int su2_type = std::stoi(tokens[0]);
+            int su2_type = std::stoi(std::string(tokens[0]));
             if (su2_type == 5 || su2_type == 13) {
                 if (err) *err = std::string("face element type ") + std::to_string(su2_type) + " in volume element section";
                 return false;
@@ -327,7 +333,7 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
             CfdCell cell;
             cell.type = info.type;
             for (int i = 0; i < info.n_nodes; ++i) {
-                int ni = std::stoi(tokens[2 + i]);
+                int ni = std::stoi(std::string(tokens[2 + i]));
                 if (ni < 0 || static_cast<std::size_t>(ni) >= mesh.nodes.size()) {
                     if (err) *err = "node index " + std::to_string(ni) + " out of range [0," + std::to_string(mesh.nodes.size()) + ")";
                     return false;
@@ -339,7 +345,7 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
             // NMARK data: each line is a boundary face
             // <su2_face_type> <tag> <n1> <n2> [<n3> [<n4>]]
             if (tokens.size() < 4) continue;
-            int face_type = std::stoi(tokens[0]);
+            int face_type = std::stoi(std::string(tokens[0]));
             int fn = (face_type == 5) ? 3 : (face_type == 13) ? 4 : 0;
             if (fn == 0) continue;
             if (static_cast<int>(tokens.size()) < 2 + fn) continue;
@@ -347,7 +353,7 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
             MarkerFace mf;
             mf.boundary = tag_to_boundary(current_marker_tag);
             for (int i = 0; i < fn; ++i) {
-                mf.sorted_nodes.push_back(std::stoi(tokens[2 + i]));
+                mf.sorted_nodes.push_back(std::stoi(std::string(tokens[2 + i])));
             }
             std::sort(mf.sorted_nodes.begin(), mf.sorted_nodes.end());
             marker_faces.push_back(mf);
@@ -395,13 +401,20 @@ bool read_mesh_su2(const std::string& path, CfdMesh& mesh, std::string* err) {
         }
     }
 
+    // Build O(1) marker lookup: sorted-node tuple → marker index
+    std::unordered_map<std::vector<int>, int, SortedNodeHash> marker_map;
+    for (int mi = 0; mi < static_cast<int>(marker_faces.size()); ++mi) {
+        marker_map.emplace(marker_faces[mi].sorted_nodes, mi);
+    }
+
     // Match boundary faces to marker faces
     for (auto& face : mesh.faces) {
         if (face.right_cell >= 0) continue;  // interior face
-        int m = find_marker_face({face.node[0], face.node[1], face.node[2], face.node[3]},
-                                 face.node_count, marker_faces);
-        if (m >= 0) {
-            face.boundary = marker_faces[static_cast<std::size_t>(m)].boundary;
+        std::vector<int> key(face.node, face.node + face.node_count);
+        std::sort(key.begin(), key.end());
+        auto it = marker_map.find(key);
+        if (it != marker_map.end()) {
+            face.boundary = marker_faces[it->second].boundary;
         }
     }
 

@@ -8,7 +8,7 @@ namespace aero {
 namespace cfd {
 
 Real primitive_temperature(const PrimitiveState& w) {
-    return w.p / std::max(w.rho, 1e-30f);
+    return w.p / std::max(w.rho, Real(1e-30));
 }
 
 Real sutherland_viscosity(
@@ -28,7 +28,7 @@ PrimitiveState no_slip_isothermal_wall_state(const PrimitiveState& interior, Rea
     wall.u = 0.0f;
     wall.v = 0.0f;
     wall.w = 0.0f;
-    wall.rho = interior.p / std::max(wall_temperature, 1e-30f);
+    wall.rho = interior.p / std::max(wall_temperature, Real(1e-30));
     wall.p = interior.p;
     return wall;
 }
@@ -51,7 +51,7 @@ ViscousGradient viscous_gradient_from_primitive_gradient(
     out.dw_dy = gradient.dw_dy;
     out.dw_dz = gradient.dw_dz;
 
-    Real inv_rho2 = 1.0f / std::max(w.rho * w.rho, 1e-30f);
+    Real inv_rho2 = 1.0f / std::max(w.rho * w.rho, Real(1e-30));
     out.dT_dx = (w.rho * gradient.dp_dx - w.p * gradient.drho_dx) * inv_rho2;
     out.dT_dy = (w.rho * gradient.dp_dy - w.p * gradient.drho_dy) * inv_rho2;
     out.dT_dz = (w.rho * gradient.dp_dz - w.p * gradient.drho_dz) * inv_rho2;
@@ -118,7 +118,7 @@ ViscousGradient orthogonal_face_gradient_correction(
 
 Real inviscid_timestep(const PrimitiveState& w, Real h, Real gamma, Real cfl) {
     Real vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
-    return cfl * h / std::max(vmag + speed_of_sound(w, gamma), 1e-30f);
+    return cfl * h / std::max(vmag + speed_of_sound(w, gamma), Real(1e-30));
 }
 
 Real viscous_timestep(Real rho, Real h, Real reynolds, Real mu, Real cfl) {
@@ -155,8 +155,8 @@ WallFlux compute_wall_flux(
 
     out.q_wall = -conductivity * (gradient.dT_dx*nx + gradient.dT_dy*ny + gradient.dT_dz*nz);
     Real tau_mag = std::sqrt(out.tau_x*out.tau_x + out.tau_y*out.tau_y + out.tau_z*out.tau_z);
-    out.cf = tau_mag / std::max(q_ref, 1e-30f);
-    out.st = out.q_wall / std::max(heat_ref, 1e-30f);
+    out.cf = tau_mag / std::max(q_ref, Real(1e-30));
+    out.st = out.q_wall / std::max(heat_ref, Real(1e-30));
     (void)interior;
     return out;
 }

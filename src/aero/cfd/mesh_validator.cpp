@@ -258,7 +258,7 @@ MeshQualityReport compute_mesh_quality_detail(const CfdMesh& mesh) {
             cf.x /= cf_len; cf.y /= cf_len; cf.z /= cf_len;
             Vec3 fn = {face.nx, face.ny, face.nz};
             Real d = std::fabs(dot(cf, fn));
-            Real ortho = std::acos(std::min(std::max(d, -1.0f), 1.0f)) * Real(180.0) / Real(3.14159265358979323846);
+            Real ortho = std::acos(std::min(std::max(d, Real(-1.0)), Real(1.0))) * Real(180.0) / Real(3.14159265358979323846);
             Real skew = std::fabs(90.0f - ortho) / 90.0f;
             cell_ortho_sum += ortho;
             cell_skew_sum += skew;

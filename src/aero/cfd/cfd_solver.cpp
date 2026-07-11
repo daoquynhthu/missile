@@ -2,10 +2,11 @@
 #include "aero/cfd/cfd_residual.hpp"
 #include "aero/cfd/rans.hpp"
 #include "aero/cfd/reconstruction.hpp"
-#include "aero/cfd/gpu_solver.hpp"
+#include "aero/cfd/viscous.hpp"
 
 #include <algorithm>
 #include <cmath>
+
 #include <limits>
 
 namespace aerosp {
@@ -34,7 +35,8 @@ Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
     return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5;
 }
 
-void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
+void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_face_indices,
+    const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
     const CfdConfig& config, CfdForceResult& result) {
     Real fx = 0.0f;
     Real fy = 0.0f;
@@ -43,8 +45,8 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeSt
     Real my = 0.0f;
     Real mz = 0.0f;
 
-    for (const auto& face : mesh.faces) {
-        if (face.boundary != BoundaryKind::SlipWall && face.boundary != BoundaryKind::NoSlipWall) continue;
+    for (int idx : wall_face_indices) {
+        const auto& face = mesh.faces[idx];
         if (face.left_cell < 0 || static_cast<std::size_t>(face.left_cell) >= q.size()) continue;
         PrimitiveState w;
         if (!conservative_to_primitive(q[face.left_cell], config.gamma, w)) continue;
@@ -58,16 +60,59 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<ConservativeSt
         mx += face.cy * pz - face.cz * py;
         my += face.cz * px - face.cx * pz;
         mz += face.cx * py - face.cy * px;
+
+        if (config.viscous && face.boundary == BoundaryKind::NoSlipWall) {
+            Real du_dx = 0.0f, du_dy = 0.0f, du_dz = 0.0f;
+            Real dv_dx = 0.0f, dv_dy = 0.0f, dv_dz = 0.0f;
+            Real dw_dx = 0.0f, dw_dy = 0.0f, dw_dz = 0.0f;
+
+            Real dr_x = face.cx - mesh.cells[face.left_cell].cx;
+            Real dr_y = face.cy - mesh.cells[face.left_cell].cy;
+            Real dr_z = face.cz - mesh.cells[face.left_cell].cz;
+            Real inv_d2 = 1.0f / (dr_x*dr_x + dr_y*dr_y + dr_z*dr_z + 1e-30f);
+
+            Real du_corr = (-w.u) * inv_d2;
+            Real dv_corr = (-w.v) * inv_d2;
+            Real dw_corr = (-w.w) * inv_d2;
+            du_dx += du_corr * dr_x; du_dy += du_corr * dr_y; du_dz += du_corr * dr_z;
+            dv_dx += dv_corr * dr_x; dv_dy += dv_corr * dr_y; dv_dz += dv_corr * dr_z;
+            dw_dx += dw_corr * dr_x; dw_dy += dw_corr * dr_y; dw_dz += dw_corr * dr_z;
+
+            Real div_u = du_dx + dv_dy + dw_dz;
+            Real tau_xx = 2.0f * (du_dx - div_u / 3.0f);
+            Real tau_yy = 2.0f * (dv_dy - div_u / 3.0f);
+            Real tau_zz = 2.0f * (dw_dz - div_u / 3.0f);
+            Real tau_xy = (du_dy + dv_dx);
+            Real tau_xz = (du_dz + dw_dx);
+            Real tau_yz = (dv_dz + dw_dy);
+
+            Real mu_face = sutherland_viscosity(config.wall_temperature, config.T_ref, config.sutherland_T) * config.mu_ref;
+            if (mu_face <= 0.0f) mu_face = config.mu_ref;
+
+            Real inv_Re = 1.0f / (config.Re > 0.0f ? config.Re : 1e6f);
+            Real mu_invRe = mu_face * inv_Re;
+
+            Real tx = (tau_xx*face.nx + tau_xy*face.ny + tau_xz*face.nz) * mu_invRe * face.area;
+            Real ty = (tau_xy*face.nx + tau_yy*face.ny + tau_yz*face.nz) * mu_invRe * face.area;
+            Real tz = (tau_xz*face.nx + tau_yz*face.ny + tau_zz*face.nz) * mu_invRe * face.area;
+
+            fx += tx;
+            fy += ty;
+            fz += tz;
+            mx += face.cy * tz - face.cz * ty;
+            my += face.cz * tx - face.cx * tz;
+            mz += face.cx * ty - face.cy * tx;
+        }
     }
 
     Real q_inf = 0.5f * condition.mach * condition.mach;
-    Real inv_force_ref = 1.0f / std::max(q_inf * config.ref_area, 1e-30f);
+    Real inv_force_ref = 1.0f / std::max(q_inf * config.ref_area, Real(1e-30));
     result.CX = fx * inv_force_ref;
     result.CY = fy * inv_force_ref;
     result.CZ = fz * inv_force_ref;
-    result.Cl = mx / std::max(q_inf * config.ref_area * config.ref_span, 1e-30f);
-    result.Cm = my / std::max(q_inf * config.ref_area * config.ref_length, 1e-30f);
-    result.Cn = mz / std::max(q_inf * config.ref_area * config.ref_span, 1e-30f);
+    result.Cl = mx / std::max(q_inf * config.ref_area * config.ref_span, Real(1e-30));
+    result.Cm = my / std::max(q_inf * config.ref_area * config.ref_length, Real(1e-30));
+    result.Cn = mz / std::max(q_inf * config.ref_area * config.ref_span, Real(1e-30));
 
     Real alpha = condition.alpha_deg * 3.14159265358979323846 / 180.0;
     Real beta = condition.beta_deg * 3.14159265358979323846 / 180.0;
@@ -175,55 +220,27 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
 
 bool CfdSolver::load_mesh(const CfdMesh& mesh) {
     mesh_ = mesh;
+    wall_face_indices_.clear();
+    for (std::size_t i = 0; i < mesh_.faces.size(); ++i) {
+        const auto& face = mesh_.faces[i];
+        if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall)
+            wall_face_indices_.push_back(static_cast<int>(i));
+    }
     auto report = compute_mesh_metrics(mesh_);
     return report.valid;
 }
 
 CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const CfdConfig& config) {
-    auto make_initial_q = [&]() -> std::vector<ConservativeState> {
-        PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
-        w_inf.nu_tilde = condition.nu_tilde;
-        if (condition.nu_tilde_ratio > 0.0f && config.viscous) {
-            Real T_inf = w_inf.p / w_inf.rho;
-            Real t_ratio = T_inf / config.T_ref;
-            Real mu_inf = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
-            w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
-        }
-        ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
-        return std::vector<ConservativeState>(mesh_.cells.size(), q_inf);
-    };
-
-    if (config.use_gpu) {
-        DeviceMesh d_mesh;
-        if (!d_mesh.upload_mesh(mesh_)) {
-            CfdSolveSummary s;
-            s.failed = true;
-            return s;
-        }
-        std::vector<ConservativeState> q = make_initial_q();
-        if (!d_mesh.upload_state(q)) {
-            CfdSolveSummary s;
-            s.failed = true;
-            return s;
-        }
-        CfdSolveSummary gpu_result = solve_gpu(d_mesh, condition, config);
-
-        if (config.cpu_oracle && !gpu_result.failed) {
-            CfdConfig cpu_cfg = config;
-            cpu_cfg.use_gpu = false;
-            CfdSolveSummary cpu_result = solve_from_state(condition, cpu_cfg, q);
-            std::string oracle_error;
-            if (!assert_oracle_equivalent(gpu_result, cpu_result, 1e-6f, 1e-6f, &oracle_error)) {
-                std::fprintf(stderr, "[CPU Oracle] FAIL: %s\n", oracle_error.c_str());
-                CfdSolveSummary s;
-                s.failed = true;
-                return s;
-            }
-        }
-        return gpu_result;
+    PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
+    w_inf.nu_tilde = condition.nu_tilde;
+    if (condition.nu_tilde_ratio > 0.0f && config.viscous) {
+        Real T_inf = w_inf.p / w_inf.rho;
+        Real t_ratio = T_inf / config.T_ref;
+        Real mu_inf = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
+        w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
     }
-
-    std::vector<ConservativeState> q = make_initial_q();
+    ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
+    std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
     return solve_from_state(condition, config, q);
 }
 
@@ -243,38 +260,52 @@ CfdSolveSummary CfdSolver::solve_from_state(
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     std::vector<ConservativeState> q = initial_state;
-    std::vector<ConservativeState> q_next = initial_state;
+    std::vector<ConservativeState> q_next;
+    q_next.resize(mesh_.cells.size());
+    std::vector<EulerFlux> residual;
+    std::vector<PrimitiveGradient> limited;
+    std::vector<RansSource> sources;
+    std::vector<PrimitiveState> w(mesh_.cells.size());
     bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
-
-    if (diagnostics_enabled) {
-        StateBounds bounds = compute_state_bounds(q, config.gamma);
-        summary.diagnostics.state_bounds_history.push_back(bounds);
-        if (!bounds.valid) {
-            int cell = bounds.bad_cell >= 0 ? bounds.bad_cell : 0;
-            summary.failed = true;
-            summary.diagnostics.failure = make_failure_snapshot(0, cell, "invalid initial state", q[cell], config.gamma);
-            return summary;
-        }
-    }
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
         Real min_dt = std::numeric_limits<Real>::max();
         DtLimiterSnapshot dt_limiter;
         dt_limiter.iteration = iter;
+        StateBounds iter_bounds;
+        iter_bounds.min_rho = std::numeric_limits<Real>::max();
+        iter_bounds.min_p = std::numeric_limits<Real>::max();
+        iter_bounds.min_mach = std::numeric_limits<Real>::max();
+        iter_bounds.max_rho = -std::numeric_limits<Real>::max();
+        iter_bounds.max_p = -std::numeric_limits<Real>::max();
+        iter_bounds.max_mach = -std::numeric_limits<Real>::max();
+        iter_bounds.valid = true;
         for (std::size_t i = 0; i < q.size(); ++i) {
-            PrimitiveState w;
-            if (!conservative_to_primitive(q[i], config.gamma, w)) {
+            if (!conservative_to_primitive(q[i], config.gamma, w[i])) {
                 summary.failed = true;
                 if (diagnostics_enabled) {
-                    summary.diagnostics.failure = make_failure_snapshot(iter, static_cast<int>(i), "invalid state before timestep", q[i], config.gamma);
+                    const char* reason = (iter == 0) ? "invalid initial state" : "invalid state before timestep";
+                    summary.diagnostics.failure = make_failure_snapshot(iter, static_cast<int>(i), reason, q[i], config.gamma);
                 }
                 return summary;
             }
-            Real vmag = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
-            Real signal_speed = vmag + speed_of_sound(w, config.gamma);
+            Real vmag = std::sqrt(w[i].u*w[i].u + w[i].v*w[i].v + w[i].w*w[i].w);
+            Real a = speed_of_sound(w[i], config.gamma);
+            Real signal_speed = vmag + a;
             Real h_min_val = mesh_.cells[i].h_min;
             if (h_min_val <= 0.0f) h_min_val = 1e-10f;
             Real dt = config.cfl * h_min_val / signal_speed;
+            if (config.viscous) {
+                Real T = w[i].p / w[i].rho;
+                if (T > 0.0f) {
+                    Real t_ratio = T / config.T_ref;
+                    Real mu = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T + config.sutherland_T);
+                    if (mu > 0.0f) {
+                        Real dt_visc = config.cfl * w[i].rho * h_min_val * h_min_val * config.Re / mu;
+                        if (dt_visc < dt) dt = dt_visc;
+                    }
+                }
+            }
             if (dt < min_dt) {
                 min_dt = dt;
                 dt_limiter.cell = static_cast<int>(i);
@@ -282,48 +313,94 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 dt_limiter.h_min = mesh_.cells[i].h_min;
                 dt_limiter.signal_speed = signal_speed;
             }
+            if (diagnostics_enabled) {
+                Real mach = vmag / std::max(a, Real(1e-30));
+                if (w[i].rho < iter_bounds.min_rho) iter_bounds.min_rho = w[i].rho;
+                if (w[i].rho > iter_bounds.max_rho) iter_bounds.max_rho = w[i].rho;
+                if (w[i].p < iter_bounds.min_p) iter_bounds.min_p = w[i].p;
+                if (w[i].p > iter_bounds.max_p) iter_bounds.max_p = w[i].p;
+                if (mach < iter_bounds.min_mach) iter_bounds.min_mach = mach;
+                if (mach > iter_bounds.max_mach) iter_bounds.max_mach = mach;
+            }
         }
         if (diagnostics_enabled) {
             summary.diagnostics.dt_limiter_history.push_back(dt_limiter);
+            summary.diagnostics.state_bounds_history.push_back(iter_bounds);
         }
 
-        std::vector<EulerFlux> residual;
-        if (!compute_euler_residual_cpu(mesh_, q, w_inf, config.gamma, residual)) {
-            summary.failed = true;
-            if (diagnostics_enabled) {
-                summary.diagnostics.failure.reason = "residual assembly failed";
-                summary.diagnostics.failure.valid = true;
-                summary.diagnostics.failure.iteration = iter;
-            }
-            return summary;
-        }
+        bool need_gradients = (config.reconstruction_order == 2) || config.viscous || config.turbulence;
+        std::vector<PrimitiveGradient> grads;
+        std::vector<PrimitiveLimiter> limiters_vec;
+        bool apply_limiting = config.reconstruction_order == 2 || config.turbulence;
 
-        if (config.turbulence) {
-            std::vector<PrimitiveGradient> grads = compute_green_gauss_gradients(mesh_, q, config.gamma);
+        if (need_gradients) {
+            grads = compute_green_gauss_gradients(mesh_, q, config.gamma, &w);
             if (grads.size() != mesh_.cells.size()) {
                 summary.failed = true;
                 if (diagnostics_enabled) {
-                    summary.diagnostics.failure.reason = "gradient computation failed for RANS source";
+                    summary.diagnostics.failure.reason = "gradient computation failed";
                     summary.diagnostics.failure.valid = true;
                     summary.diagnostics.failure.iteration = iter;
                 }
                 return summary;
             }
-            std::vector<PrimitiveLimiter> limiters = compute_barth_jespersen_limiters(mesh_, q, grads, config.gamma);
-            if (limiters.size() != mesh_.cells.size()) {
+            if (apply_limiting) {
+                limiters_vec = compute_barth_jespersen_limiters(mesh_, q, grads, config.gamma, &w);
+                if (limiters_vec.size() != mesh_.cells.size()) {
+                    summary.failed = true;
+                    if (diagnostics_enabled) {
+                        summary.diagnostics.failure.reason = "limiter computation failed";
+                        summary.diagnostics.failure.valid = true;
+                        summary.diagnostics.failure.iteration = iter;
+                    }
+                    return summary;
+                }
+                limited.resize(grads.size());
+                for (std::size_t i = 0; i < grads.size(); ++i)
+                    limited[i] = apply_limiter(grads[i], limiters_vec[i]);
+            }
+        }
+
+        if (config.reconstruction_order == 2) {
+            if (!compute_euler_residual_cpu_order2(mesh_, q, w_inf, config.gamma, limited, residual, &w)) {
                 summary.failed = true;
                 if (diagnostics_enabled) {
-                    summary.diagnostics.failure.reason = "limiter computation failed for RANS source";
+                    summary.diagnostics.failure.reason = "order2 residual assembly failed";
                     summary.diagnostics.failure.valid = true;
                     summary.diagnostics.failure.iteration = iter;
                 }
                 return summary;
             }
-            std::vector<PrimitiveGradient> limited(grads.size());
-            for (std::size_t i = 0; i < grads.size(); ++i)
-                limited[i] = apply_limiter(grads[i], limiters[i]);
+        } else {
+            if (!compute_euler_residual_cpu(mesh_, q, w_inf, config.gamma, residual, &w)) {
+                summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure.reason = "residual assembly failed";
+                    summary.diagnostics.failure.valid = true;
+                    summary.diagnostics.failure.iteration = iter;
+                }
+                return summary;
+            }
+        }
 
-            std::vector<RansSource> sources = compute_rans_sources(mesh_, q, limited, config.gamma, config.Re);
+        if (config.viscous) {
+            const auto& visc_grads = apply_limiting ? limited : grads;
+            if (!compute_viscous_flux_cpu(mesh_, q, visc_grads, config.gamma,
+                    config.prandtl, config.mu_ref, config.T_ref,
+                    config.sutherland_T, config.Re, config.wall_temperature,
+                    config.turbulence ? 1 : 0, residual, &w)) {
+                summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure.reason = "viscous flux failed";
+                    summary.diagnostics.failure.valid = true;
+                    summary.diagnostics.failure.iteration = iter;
+                }
+                return summary;
+            }
+        }
+
+        if (config.turbulence) {
+            sources = compute_rans_sources(mesh_, q, limited, config.gamma, config.Re, &w);
             if (sources.size() != mesh_.cells.size()) {
                 summary.failed = true;
                 if (diagnostics_enabled) {
@@ -335,6 +412,23 @@ CfdSolveSummary CfdSolver::solve_from_state(
             }
             for (std::size_t i = 0; i < q.size(); ++i)
                 residual[i].turbulence += sources[i].total_source * mesh_.cells[i].volume;
+
+            // Semi-implicit destruction treatment (match GPU apply_rans_implicit_gpu)
+            for (std::size_t i = 0; i < q.size(); ++i) {
+                Real wall_distance = mesh_.cells[i].h_min;
+                if (wall_distance <= 0.0f) wall_distance = 1e30f;
+                Real nu_tilde = q[i].rho_nu_tilde / q[i].rho;
+                if (!std::isfinite(nu_tilde)) continue;
+                constexpr Real cw1 = 0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f);
+                constexpr Real karman = 0.41f;
+                Real d_dest = 2.0f * cw1 * nu_tilde / (karman * karman * wall_distance * wall_distance + 1e-30f);
+                Real dt_over_V = min_dt / (mesh_.cells[i].volume + 1e-30f);
+                Real implicit_factor = 1.0f / (1.0f + dt_over_V * d_dest + 1e-30f);
+                Real old_rhont = q[i].rho_nu_tilde;
+                Real old_residual = residual[i].turbulence;
+                residual[i].turbulence = old_rhont * (implicit_factor - 1.0f) / (dt_over_V + 1e-30f)
+                                       + old_residual * implicit_factor;
+            }
         }
 
         Real l2 = 0.0f;
@@ -347,24 +441,18 @@ CfdSolveSummary CfdSolver::solve_from_state(
         summary.residual_history.push_back(residual_l2);
         q.swap(q_next);
 
-        if (diagnostics_enabled) {
-            StateBounds bounds = compute_state_bounds(q, config.gamma);
-            summary.diagnostics.state_bounds_history.push_back(bounds);
-            if (!bounds.valid) {
-                int cell = bounds.bad_cell >= 0 ? bounds.bad_cell : 0;
-                summary.failed = true;
-                summary.diagnostics.failure = make_failure_snapshot(iter + 1, cell, "invalid state after update", q[cell], config.gamma);
-                return summary;
-            }
-        }
-
         if (residual_l2 < config.convergence_tol) {
             summary.converged = true;
             break;
         }
     }
 
-integrate_wall_forces(mesh_, q, condition, config, summary.forces);
+    if (diagnostics_enabled) {
+        StateBounds final_bounds = compute_state_bounds(q, config.gamma);
+        summary.diagnostics.state_bounds_history.push_back(final_bounds);
+    }
+
+    integrate_wall_forces(mesh_, wall_face_indices_, q, condition, config, summary.forces);
     summary.forces.iterations = static_cast<int>(summary.residual_history.size());
     summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
     summary.forces.turbulence_model = config.turbulence ? "rans-sa" : "laminar";

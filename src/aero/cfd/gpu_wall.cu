@@ -165,7 +165,6 @@ bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces,
 
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
-    int grid = (nf + block - 1) / block;
     DeviceFaceData fd = mesh.face_data();
     DeviceCellData cd = mesh.cell_data();
 
@@ -176,6 +175,7 @@ bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces,
     const int* d_partition_owner = gpu_part ? gpu_part->d_partition_owner : nullptr;
     int my_rank = gpu_part ? gpu_part->my_rank : 0;
 
+    int grid = (nf + block - 1) / block;
     wall_force_kernel<<<grid, block>>>(
         mesh.state_device(), DeviceMesh::NVAR, gamma,
         fd.nx, fd.ny, fd.nz, fd.area,
