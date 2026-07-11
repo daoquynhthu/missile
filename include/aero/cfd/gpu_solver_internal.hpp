@@ -46,6 +46,8 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
 
 bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
     const Real* d_min_dt, std::string* error = nullptr);
+bool apply_rans_implicit_per_cell_gpu(DeviceMesh& mesh, Real Re,
+    const Real* d_dt_cell, std::string* error = nullptr);
 
 bool compute_local_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_dt_cell,
     bool viscous, Real* d_mu, Real Re, std::string* error = nullptr);
@@ -54,7 +56,8 @@ bool compute_local_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_
 struct PrimitiveState;
 bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     const Real* d_residual, Real epsilon, const CfdConfig& config,
-    const PrimitiveState& w_inf, Real* d_scratch, std::string* error = nullptr);
+    const PrimitiveState& w_inf, Real* d_scratch, int* d_failed,
+    std::string* error = nullptr);
 
 // Multi-GPU halo exchange
 bool exchange_halo_gpu(DeviceMesh& mesh, const GpuPartition& gpu_part,

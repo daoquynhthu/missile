@@ -94,7 +94,8 @@ static CfdSolveSummary solve_gpu_impl(
     if (config.implicit) {
         d_dq = nullptr; d_dt_cell = nullptr; d_r_saved = nullptr; d_q_backup = nullptr;
         if (!cuda_check(cudaMalloc(&d_dq, nvar_cells * sizeof(Real)), "cudaMalloc d_dq", error)) goto fail;
-        if (!cuda_check(cudaMalloc(&d_dt_cell, n_cells * sizeof(Real)), "cudaMalloc d_dt_cell", error)) goto fail;
+        if (!cuda_check(cudaMemset(d_dq, 0, nvar_cells * sizeof(Real)), "zero d_dq", error)) goto fail;
+        if (!cuda_check(cudaMalloc(&d_dt_cell, nvar_cells * sizeof(Real)), "cudaMalloc d_dt_cell", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_r_saved, nvar_cells * sizeof(Real)), "cudaMalloc d_r_saved", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_q_backup, nvar_cells * sizeof(Real)), "cudaMalloc d_q_backup", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_scratch, 4 * nvar_cells * sizeof(Real)), "cudaMalloc d_scratch", error)) goto fail;
@@ -164,9 +165,11 @@ if (config.viscous) {
                 if (error && error->empty()) *error = "RANS source kernel failed";
                 goto fail;
             }
-            if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error)) {
-                if (error && error->empty()) *error = "RANS implicit kernel failed";
-                goto fail;
+            if (!config.implicit) {
+                if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error)) {
+                    if (error && error->empty()) *error = "RANS implicit kernel failed";
+                    goto fail;
+                }
             }
         }
 
@@ -186,17 +189,23 @@ if (config.viscous) {
             }
 
             if (!cuda_check(cudaMemcpy(d_r_saved, d_mesh.residual_device(),
-                    nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "save R(Q^n)", error)) goto fail;
+                    nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "save raw R(Q^n)", error)) goto fail;
+
+            if (config.turbulence) {
+                if (!apply_rans_implicit_per_cell_gpu(d_mesh, config.Re, d_dt_cell, error)) {
+                    if (error && error->empty()) *error = "RANS implicit per-cell kernel failed";
+                    goto fail;
+                }
+            }
+
+            Real* d_neg_r = d_dt_cell;
+            if (!dcopy_gpu(d_mesh.residual_device(), d_neg_r, nvar_cells)) { if (error) *error = "copy R failed"; goto fail; }
+            if (!dscal_gpu(-1, d_neg_r, nvar_cells)) { if (error) *error = "negate R failed"; goto fail; }
 
             Real l2_old = 0;
             if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum)) { if (error) *error = "L2 norm failed"; goto fail; }
             if (!cuda_check(cudaMemcpy(&l2_old, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost), "read L2", error)) goto fail;
             l2_old = real_sqrt(l2_old / static_cast<Real>(nvar_ncells > 0 ? nvar_ncells : 1));
-
-            Real* d_neg_r = d_dt_cell;
-            if (!dscal_gpu(-1, d_r_saved, nvar_cells)) { if (error) *error = "negate R failed"; goto fail; }
-            if (!dcopy_gpu(d_r_saved, d_neg_r, nvar_cells)) { if (error) *error = "copy -R failed"; goto fail; }
-            if (!dscal_gpu(-1, d_r_saved, nvar_cells)) { if (error) *error = "restore R failed"; goto fail; }
 
             Real eps_jfv = Real(1e-7);
             bool newt_converged = false;
@@ -206,7 +215,7 @@ if (config.viscous) {
                         nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "backup Q", error)) goto fail;
 
                 auto matvec = [&](const Real* v, Real* w, std::string* err) -> bool {
-                    return compute_jfv_product(d_mesh, v, w, d_r_saved, eps_jfv, config, w_inf, d_scratch, err);
+                    return compute_jfv_product(d_mesh, v, w, d_r_saved, eps_jfv, config, w_inf, d_scratch, d_failed, err);
                 };
                 auto prec = [&](const Real* v, Real* z, std::string* err) -> bool {
                     return lusgs->apply(d_mesh, v, z, config.gamma, err);
@@ -218,39 +227,76 @@ if (config.viscous) {
                     goto fail;
                 }
 
-                if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells)) {
-                    if (error) *error = "Q += dq failed"; goto fail;
-                }
+                {
+                    int btry = 0;
+                    Real* d_dq_full = d_scratch + 2 * nvar_cells;
+                    while (btry < 8) {
+                        if (btry == 0) {
+                            if (!dcopy_gpu(d_dq, d_dq_full, nvar_cells)) {
+                                if (error) *error = "Newton save dq_full failed";
+                                goto fail;
+                            }
+                        } else {
+                            if (!dcopy_gpu(d_dq_full, d_dq, nvar_cells)) {
+                                if (error) *error = "Newton restore dq_full failed";
+                                goto fail;
+                            }
+                            if (!dscal_gpu(0.5f, d_dq, nvar_cells)) {
+                                if (error) *error = "Newton backtrack scale failed";
+                                goto fail;
+                            }
+                        }
+                        if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells)) {
+                            if (error) *error = "Q += dq failed"; goto fail;
+                        }
 
-                d_mesh.clear_residual(error);
-                if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed,
-                        nullptr, error, config.reconstruction_order)) {
-                    goto fail;
-                }
+                        d_mesh.clear_residual(error);
+                        if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed,
+                                nullptr, error, config.reconstruction_order)) {
+                            goto fail;
+                        }
+                        if (config.viscous) {
+                            if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
+                                    config.mu_ref, config.T_ref, config.sutherland_T,
+                                    config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed)) {
+                                if (error) *error = "Newton viscous flux failed";
+                                goto fail;
+                            }
+                        }
+                        if (config.turbulence) {
+                            if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re,
+                                    config.mu_ref, config.T_ref, config.sutherland_T,
+                                    d_failed, error)) {
+                                if (error) *error = "Newton RANS source failed";
+                                goto fail;
+                            }
+                        }
 
-                Real l2_new = 0;
-                if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum)) {
-                    if (error) *error = "new L2 norm failed"; goto fail;
-                }
-                if (!cuda_check(cudaMemcpy(&l2_new, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost), "read new L2", error)) goto fail;
-                l2_new = real_sqrt(l2_new / static_cast<Real>(nvar_ncells > 0 ? nvar_ncells : 1));
+                        Real l2_new = 0;
+                        if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum)) {
+                            if (error) *error = "new L2 norm failed"; goto fail;
+                        }
+                        if (!cuda_check(cudaMemcpy(&l2_new, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost), "read new L2", error)) goto fail;
+                        l2_new = real_sqrt(l2_new / static_cast<Real>(nvar_ncells > 0 ? nvar_ncells : 1));
 
-                if (l2_new < config.newton_sufficent_decrease * l2_old) {
-                    if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells)) {
-                        if (error) *error = "update saved R failed"; goto fail;
+                        if (l2_new < config.newton_sufficient_decrease * l2_old) {
+                            if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells)) {
+                                if (error) *error = "update saved R failed"; goto fail;
+                            }
+                            l2_old = l2_new;
+                            newt_converged = true;
+                            goto newton_accepted;
+                        }
+
+                        if (!daxpy_gpu(-1, d_dq, d_mesh.state_device(), nvar_cells)) {
+                            if (error) *error = "Newton backtrack restore failed"; goto fail;
+                        }
+                        ++btry;
                     }
-                    l2_old = l2_new;
-                    newt_converged = true;
-                    break;
-                }
-
-                if (!daxpy_gpu(-1, d_dq, d_mesh.state_device(), nvar_cells)) {
-                    if (error) *error = "Newton backtrack restore failed"; goto fail;
-                }
-                if (!dscal_gpu(0.5f, d_dq, nvar_cells)) {
-                    if (error) *error = "Newton backtrack scale failed"; goto fail;
                 }
             }
+newton_accepted:
+            ;
 
             if (!newt_converged) {
                 if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells)) {
@@ -260,6 +306,22 @@ if (config.viscous) {
                 if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed,
                         nullptr, error, config.reconstruction_order)) {
                     goto fail;
+                }
+                if (config.viscous) {
+                    if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
+                            config.mu_ref, config.T_ref, config.sutherland_T,
+                            config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed)) {
+                        if (error) *error = "Newton fallback viscous flux failed";
+                        goto fail;
+                    }
+                }
+                if (config.turbulence) {
+                    if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re,
+                            config.mu_ref, config.T_ref, config.sutherland_T,
+                            d_failed, error)) {
+                        if (error) *error = "Newton fallback RANS source failed";
+                        goto fail;
+                    }
                 }
                 if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells)) {
                     if (error) *error = "Newton fallback save R failed"; goto fail;

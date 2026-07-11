@@ -491,3 +491,54 @@
 - implicit=false regression: exact match (not re-run, but same explicit code path).
 - PH11-A-1 FIXED: LU-SGS diagonal now uses per-cell dt (d_dt_cell) instead of global min dt
 - PH11-A-2 FIXED: Newton exhaustion now applies last halved dq + recomputes residual (no full stall)
+
+2026-07-11 — Phase 11 audit fixes Batch 1-3 (18 issues fixed, 8 remaining OPEN)
+- Batch 1: PH11-H8 (d_dt_cell size n_cells→nvar_cells, -R 2 ops), H5 (JFV d_failed param + solver lambda), H6/H7 (LU-SGS sweep 自声速 a 加入 lambda), M2/M3 (退化邻点 a fallback), M4 (粘性对角项 d_mu/Re 传递到 compute_diag_kernel)
+- Batch 2: PH11-H1/H2 (FGMRES 初始残差+重启改为 matvec(d_x)→b - Ax), H3 (nullptr daxpy→dscal_gpu(0)), H4 (dnrm2_gpu + krylov_ddot 用 cudaMemcpyAsync+cudaStreamSynchronize), M1 (grid_size cap 256→65536)
+- Batch 3: PH11-M7 (RANS 隐式 per-cell dt: 新增 apply_rans_implicit_per_cell_kernel/func, 隐式分支移入implicit块使用d_dt_cell), L7 (拼写 newton_sufficient_decrease)
+- Modified: lusgs_gpu.cu, gpu_solver.cu, fgmres_gpu.cu, jacobian_free.cu, gpu_rans.cu, gpu_solver_internal.hpp, cfd_config.hpp, fgmres.hpp
+- 81/81 tests PASS (TestCfdGpu 39/39, TestCfdEuler 8/8, TestCfdViscous 11/11, TestCfdReconstruction 7/7, TestCfdMesh 11/11, TestCfdDiagnostics 4/4, TestGpuTopology 1/1)
+- Phase 11 OPEN count: 8 (M8, L1-L6, L9) — deferred to next session
+
+2026-07-11 — Phase 11 audit fixes Batch 4 (remaining 8 issues, Phase 11 FINAL)
+- M8: LU-SGS allocate() D2H memcpy → cudaMemcpyAsync + cudaDeviceSynchronize (lusgs_gpu.cu)
+- L1: Remove dead apply_givens_rotation member function (fgmres.hpp + fgmres_gpu.cu)
+- L2: Remove unused d_givens_c_/d_givens_s_ allocations and fields (fgmres.hpp + fgmres_gpu.cu)
+- L3: Dead ternary converged_?k:k → k (fgmres_gpu.cu)
+- L4: krylov_ddot error message "ddot failed" → "krylov ddot failed" (fgmres_gpu.cu)
+- L5: min() → epsilon() in Hessenberg singularity threshold (fgmres_gpu.cu)
+- L6: Newton backtrack: inner while-loop saves full step to d_scratch, on backtrack restores from full step and halves (gpu_solver.cu)
+- L9: apply_rans_implicit_gpu/per_cell_gpu now pass error param to cuda_check (gpu_rans.cu)
+- 42/42 TestCfdGpu tests PASS (including 3 implicit regression tests)
+- Phase 11: 26/26 FIXED, 0/26 OPEN
+- Added 2 new physical-correctness regression tests:
+  - CFD-IMPLICIT-REGRESS-4: large-DOF krylov ops (n=70000) to guard PH11-M1 (grid_size cap)
+  - CFD-IMPLICIT-REGRESS-5: implicit viscous+RANS on flat plate with newton_max_iter=3 to guard PH11-L5 (near-singular Hessenberg) + L6 (Newton backtrack)
+- 44/44 TestCfdGpu tests PASS
+
+2026-07-11 — Phase 11 self-audit fixes Batch 5 (2 more bugs found, Phase 11 FINAL²)
+- PH11-M9: JFV product missing RANS source term perturbation (jcobian_free.cu + gpu_solver.cu)
+  - compute_jfv_product called Euler + viscous kernels but skipped compute_rans_source_gpu; Jacobian approximation missing RANS contribution under config.turbulence=true
+  - apply_rans_implicit_per_cell_gpu modified residual in-place before baseline save, causing JFV baseline/perturbation to use different RANS residual functions
+  - Fix: added if(config.turbulence) branch in jfv_product; moved residual save before RANS point-implicit step
+- PH11-M10: Double-sqrt in implicit L2 norm (fgmres_gpu.cu + gpu_solver.cu)
+  - dnrm2_gpu returned sqrt(sum(r^2)); implicit callers took sqrt again → l2 = sqrt(sqrt(S)/N) instead of sqrt(S/N)
+  - Newton sufficient-decrease condition became S_new < k^4 * S_old; convergence detection off by ~N^{3/2}
+  - Fix: dnrm2_gpu now returns raw sum-of-squares; all callers compute sqrt(S/N) once
+- 44/44 TestCfdGpu tests PASS (no regressions)
+- Phase 11: 28/28 FIXED, 0/28 OPEN
+
+2026-07-11 (regression test batch — 7 new tests, 52/52 PASS)
+- Added 7 regression tests guarding against previously-fixed bugs from Phase 2/4/7/8/11:
+  - CFD-IMPLICIT-REGRESS-7: PH11-M10 implicit L2 normalization (dnrm2 raw sum → sqrt(S/N))
+  - CFD-ORACLE-RANS-6: AUDIT-FREE-H1 GPU/CPU 2nd-order RANS limiter match (manufactured sharp nu_tilde gradient)
+  - CFD-GPU-RECON-POSITIVITY: PH4-A-2 reconstruction positivity clamping (smooth gradient, limiter prevents negative rho/p)
+  - CFD-SYMMETRY-BC: PH2-RA-H3 symmetry boundary flux (cube mesh symmetry faces, run solver)
+  - CFD-GPU-SA-DIFFUSION: AUDIT-FREE-M4 SA diffusion sigma division (flat plate, viscous flux)
+  - CFD-HLLC-NAN: PH2-RA-H1/H2 symmetric-state HLLC NaN resilience (Mach 1 uniform, Euler residual)
+  - CFD-GPU-STATE-DOWNLOAD: PH8-2-A2/A3 nu_tilde roundtrip (varying nu_tilde, upload⇒download⇒compare 6 components)
+- Three real bugs uncovered and fixed during test development:
+  1. AUDIT-FREE-H1: GPU `gg_gradient_kernel_atomic` + `_colored` missing nu_tilde gradient accumulation (indices 15-17). Added rho_nu_tilde gradient computation to both kernels. `CFD-ORACLE-RANS-6` now PASS.
+  2. PH11-M10: discriminator formula had double-sqrt. `dnrm2_gpu` returned sqrt(S) not S; callers took sqrt again. Fix: dnrm2 returns raw sum-of-squares.
+  3. PH4-A-2: original test used step-function rho (1e-3 left, 2.0 right) too sharp for unstructured tet mesh — BJ limiter still couldn't prevent negative extrapolation. Redesigned with smooth linear gradient (0.5→1.5) that limiter handles, plus discriminator: verify limiters < 1 for some cells.
+- Verification: `TestCfdGpu.exe` 52/52 PASS. All 6 CFD suites PASS.

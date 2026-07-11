@@ -66,7 +66,7 @@ __global__ void daxpby_kernel(Real a, const Real* x, Real b, Real* y, int n) {
 
 int grid_size(int n) {
     int g = (n + kBlockSize - 1) / kBlockSize;
-    return g < 1 ? 1 : (g > 256 ? 256 : g);
+    return g < 1 ? 1 : (g > 65536 ? 65536 : g);
 }
 
 } // namespace
@@ -90,9 +90,10 @@ bool dnrm2_gpu(const Real* x, int n, Real* result, cudaStream_t stream) {
     ddot_kernel<<<grid, kBlockSize, 0, stream>>>(x, x, n, result);
     if (!cuda_check(cudaGetLastError(), "dnrm2 ddot kernel")) return false;
     Real host_sum = 0;
-    if (!cuda_check(cudaMemcpy(&host_sum, result, sizeof(Real), cudaMemcpyDeviceToHost), "dnrm2 copy")) return false;
-    host_sum = real_sqrt(host_sum);
-    if (!cuda_check(cudaMemcpy(result, &host_sum, sizeof(Real), cudaMemcpyHostToDevice), "dnrm2 copy result")) return false;
+    if (!cuda_check(cudaMemcpyAsync(&host_sum, result, sizeof(Real), cudaMemcpyDeviceToHost, stream), "dnrm2 copy")) return false;
+    if (!cuda_check(cudaStreamSynchronize(stream), "dnrm2 sync")) return false;
+    if (!cuda_check(cudaMemcpyAsync(result, &host_sum, sizeof(Real), cudaMemcpyHostToDevice, stream), "dnrm2 copy result")) return false;
+    if (!cuda_check(cudaStreamSynchronize(stream), "dnrm2 sync result")) return false;
     return true;
 }
 
@@ -135,8 +136,6 @@ bool FgmresSolver::allocate(std::string* error) {
     if (!cuda_check(cudaMalloc(&d_z_, m * ldz_ * sizeof(Real)), "cudaMalloc d_z", error)) return false;
     if (!cuda_check(cudaMalloc(&d_w_, n_ * sizeof(Real)), "cudaMalloc d_w", error)) return false;
     if (!cuda_check(cudaMalloc(&d_hess_, (m + 1) * m * sizeof(Real)), "cudaMalloc d_hess", error)) return false;
-    if (!cuda_check(cudaMalloc(&d_givens_c_, m * sizeof(Real)), "cudaMalloc d_givens_c", error)) return false;
-    if (!cuda_check(cudaMalloc(&d_givens_s_, m * sizeof(Real)), "cudaMalloc d_givens_s", error)) return false;
     if (!cuda_check(cudaMalloc(&d_rs_, (m + 1) * sizeof(Real)), "cudaMalloc d_rs", error)) return false;
 
     allocated_ = true;
@@ -148,8 +147,6 @@ void FgmresSolver::release() {
     cuda_free_safe(d_z_);
     cuda_free_safe(d_w_);
     cuda_free_safe(d_hess_);
-    cuda_free_safe(d_givens_c_);
-    cuda_free_safe(d_givens_s_);
     cuda_free_safe(d_rs_);
     allocated_ = false;
 }
@@ -174,21 +171,6 @@ void FgmresSolver::generate_givens_rotation(Real a, Real b, Real& c, Real& s) {
     }
 }
 
-bool FgmresSolver::apply_givens_rotation(Real* h, int k, Real* rs) {
-    for (int i = 0; i < k; ++i) {
-        Real temp = d_givens_c_[i] * h[i] + d_givens_s_[i] * h[i + 1];
-        h[i + 1] = -d_givens_s_[i] * h[i] + d_givens_c_[i] * h[i + 1];
-        h[i] = temp;
-    }
-    generate_givens_rotation(h[k], h[k + 1], d_givens_c_[k], d_givens_s_[k]);
-    h[k] = d_givens_c_[k] * h[k] + d_givens_s_[k] * h[k + 1];
-    h[k + 1] = 0;
-
-    rs[k + 1] = -d_givens_s_[k] * rs[k];
-    rs[k] = d_givens_c_[k] * rs[k];
-    return real_fabs(rs[k + 1]) <= tol_;
-}
-
 bool FgmresSolver::solve(const MatvecFunc& matvec,
                           const Real* d_b,
                           Real* d_x,
@@ -207,23 +189,21 @@ bool FgmresSolver::solve(const MatvecFunc& matvec,
     Real* v = d_v_;
     Real* z = d_z_;
     Real* w = d_w_;
-    Real* hess = d_hess_;
-    Real* givens_c = d_givens_c_;
-    Real* givens_s = d_givens_s_;
     Real* rs = d_rs_;
 
     auto krylov_ddot = [&](const Real* a, const Real* b, Real& val) -> bool {
         if (!cuda_check(cudaMemsetAsync(rs, 0, sizeof(Real), stream), "ddot tmp", error)) return false;
-        if (!ddot_gpu(a, b, n, rs, stream)) { if (error) *error = "ddot failed"; return false; }
-        if (!cuda_check(cudaMemcpy(&val, rs, sizeof(Real), cudaMemcpyDeviceToHost), "ddot copy", error)) return false;
+        if (!ddot_gpu(a, b, n, rs, stream)) { if (error) *error = "krylov ddot failed"; return false; }
+        if (!cuda_check(cudaMemcpyAsync(&val, rs, sizeof(Real), cudaMemcpyDeviceToHost, stream), "ddot copy", error)) return false;
+        if (!cuda_check(cudaStreamSynchronize(stream), "ddot sync", error)) return false;
         return true;
     };
 
     Real beta = 0;
     Real* v0 = v;
 
-    if (!daxpy_gpu(-1, d_x, w, n, stream)) { if (error) *error = "w = -x failed"; return false; }
-    if (!daxpy_gpu(1, d_b, w, n, stream)) { if (error) *error = "w = b - Ax0 failed"; return false; }
+    if (!matvec(d_x, w, error)) { if (error) { std::string e = "FGMRES initial matvec failed: " + *error; *error = e; } return false; }
+    if (!daxpby_gpu(1, d_b, -1, w, n, stream)) { if (error) *error = "w = b - Ax0 failed"; return false; }
 
     if (!krylov_ddot(w, w, beta)) return false;
     beta = real_sqrt(beta);
@@ -320,7 +300,7 @@ bool FgmresSolver::solve(const MatvecFunc& matvec,
             k = j;
         }
 
-        int k_eff = converged_ ? k : (k);
+        int k_eff = k;
         {
             std::vector<Real> R(k_eff + 1, 0);
             for (int i = 0; i <= k_eff; ++i) R[i] = rs_host[i];
@@ -330,14 +310,14 @@ bool FgmresSolver::solve(const MatvecFunc& matvec,
                 for (int j = i + 1; j <= k_eff; ++j) {
                     sum -= h_host[i * m + j] * R[j];
                 }
-                if (real_fabs(h_host[i * m + i]) > std::numeric_limits<Real>::min()) {
+                if (real_fabs(h_host[i * m + i]) > std::numeric_limits<Real>::epsilon()) {
                     R[i] = sum / h_host[i * m + i];
                 } else {
                     R[i] = 0;
                 }
             }
 
-            if (!daxpy_gpu(0, nullptr, w, n, stream)) { if (error) *error = "zero w failed"; return false; }
+            if (!dscal_gpu(0, w, n, stream)) { if (error) *error = "zero w failed"; return false; }
             if (!daxpy_gpu(R[0], z, w, n, stream)) { if (error) *error = "w = R[0]*z0 failed"; return false; }
             for (int j = 1; j <= k_eff; ++j) {
                 Real* zj = z + j * ldz_;
@@ -348,8 +328,8 @@ bool FgmresSolver::solve(const MatvecFunc& matvec,
         }
 
         if (!converged_) {
-            if (!daxpy_gpu(-1, d_x, w, n, stream)) { if (error) *error = "w = -x failed"; return false; }
-            if (!daxpy_gpu(1, d_b, w, n, stream)) { if (error) *error = "w = b - Ax failed"; return false;}
+            if (!matvec(d_x, w, error)) { if (error) { std::string e = "FGMRES restart matvec failed: " + *error; *error = e; } return false; }
+            if (!daxpby_gpu(1, d_b, -1, w, n, stream)) { if (error) *error = "w = b - Ax failed"; return false; }
 
             if (!krylov_ddot(w, w, beta)) return false;
             beta = real_sqrt(beta);

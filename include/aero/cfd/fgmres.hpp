@@ -50,13 +50,10 @@ private:
     Real* d_z_ = nullptr;
     Real* d_w_ = nullptr;
     Real* d_hess_ = nullptr;
-    Real* d_givens_c_ = nullptr;
-    Real* d_givens_s_ = nullptr;
     Real* d_rs_ = nullptr;
     int ldv_;
     int ldz_;
 
-    bool apply_givens_rotation(Real* h, int k, Real* rs);
     void generate_givens_rotation(Real a, Real b, Real& c, Real& s);
 };
 

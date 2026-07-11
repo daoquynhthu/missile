@@ -34,7 +34,8 @@ __global__ void jfv_result_kernel(Real* d_result, const Real* d_residual_pert,
 
 bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     const Real* d_residual, Real epsilon, const CfdConfig& config,
-    const PrimitiveState& w_inf, Real* d_scratch, std::string* error) {
+    const PrimitiveState& w_inf, Real* d_scratch, int* d_failed,
+    std::string* error) {
     int n = static_cast<int>(mesh.cell_count());
     int nvar = DeviceMesh::NVAR;
     int nvar_cells = n * nvar;
@@ -57,7 +58,7 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     if (!cuda_check(cudaMemcpy(d_q_saved, d_q_pert, nvar_cells * sizeof(Real),
             cudaMemcpyDeviceToDevice), "set q = q_pert", error)) return false;
 
-    if (!launch_euler_residual_kernel(mesh, w_inf, config.gamma, nullptr, nullptr, error,
+    if (!launch_euler_residual_kernel(mesh, w_inf, config.gamma, d_failed, nullptr, error,
             config.reconstruction_order)) {
         cudaMemcpy(d_q_saved, d_q_orig, nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice);
         return false;
@@ -66,9 +67,19 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     if (config.viscous) {
         if (!compute_viscous_flux_gpu(mesh, config.gamma, config.prandtl,
                 config.mu_ref, config.T_ref, config.sutherland_T,
-                config.Re, config.wall_temperature, config.turbulence ? 1 : 0, nullptr)) {
+                config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed)) {
             cudaMemcpy(d_q_saved, d_q_orig, nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice);
             if (error) *error = "JFV viscous flux failed";
+            return false;
+        }
+    }
+
+    if (config.turbulence) {
+        if (!compute_rans_source_gpu(mesh, config.gamma, config.Re,
+                config.mu_ref, config.T_ref, config.sutherland_T,
+                d_failed, error)) {
+            cudaMemcpy(d_q_saved, d_q_orig, nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice);
+            if (error) *error = "JFV RANS source failed";
             return false;
         }
     }

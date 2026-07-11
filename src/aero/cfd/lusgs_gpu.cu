@@ -58,7 +58,8 @@ __global__ void compute_diag_kernel(
     const Real* d_q, const Real* d_volume,
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
     const Real* d_area, const int* d_left, const int* d_right,
-    int n_faces, const Real* d_dt_cell, Real* d_inv_vol) {
+    int n_faces, const Real* d_dt_cell, Real* d_inv_vol,
+    const Real* d_mu, Real Re) {
     int cell = blockIdx.x * blockDim.x + threadIdx.x;
     if (cell >= n_cells) return;
 
@@ -77,6 +78,7 @@ __global__ void compute_diag_kernel(
     Real p = (gamma - 1.0f) * (E - rho * kinetic);
     if (!real_isfinite(p) || p <= 0) { d_D[cell] = 1e10f; if (d_srad) d_srad[cell] = 0; return; }
     Real a = real_sqrt(gamma * p / rho);
+    Real mu_local = (d_mu) ? d_mu[cell] : 0;
 
     Real diag = 0;
     for (int f = 0; f < n_faces; ++f) {
@@ -85,8 +87,9 @@ __global__ void compute_diag_kernel(
         if (left != cell && right != cell) continue;
 
         int nbr = (left == cell) ? right : left;
+        Real area = d_area[f];
         if (nbr < 0 || nbr >= n_cells) {
-            diag += (real_fabs(u * d_nx[f] + v * d_ny[f] + w * d_nz[f]) + a) * d_area[f];
+            diag += (real_fabs(u * d_nx[f] + v * d_ny[f] + w * d_nz[f]) + a) * area;
         } else {
             Real vn_self = u * d_nx[f] + v * d_ny[f] + w * d_nz[f];
             Real rho_n = d_q[nbr * nvar + 0];
@@ -105,7 +108,14 @@ __global__ void compute_diag_kernel(
             } else {
                 lambda_nbr = real_fabs(vn_self) + a;
             }
-            diag += lambda_nbr * d_area[f];
+            diag += lambda_nbr * area;
+        }
+
+        if (d_mu && Re > 0) {
+            Real mu_nbr = d_mu[(nbr >= 0 && nbr < n_cells) ? nbr : cell];
+            Real mu_avg = 0.5f * (mu_local + mu_nbr);
+            Real visc_srad = (4.0f / 3.0f) * mu_avg * area * area / (Re * vol);
+            diag += visc_srad;
         }
     }
 
@@ -139,6 +149,10 @@ __global__ void forward_sweep_kernel(
     Real u = d_q[cell * nvar + 1] * inv_rho;
     Real v = d_q[cell * nvar + 2] * inv_rho;
     Real w = d_q[cell * nvar + 3] * inv_rho;
+    Real E = d_q[cell * nvar + 4];
+    Real kin = 0.5f * (u*u + v*v + w*w);
+    Real p = (gamma - 1.0f) * (E - rho * kin);
+    Real a = p > 0 ? real_sqrt(gamma * p / rho) : 1e-8f;
 
     Real res[6] = {0};
     for (int iv = 0; iv < nvar; ++iv) res[iv] = d_r[cell * nvar + iv];
@@ -156,7 +170,7 @@ __global__ void forward_sweep_kernel(
 
         Real vn_self = u * d_nx[f] + v * d_ny[f] + w * d_nz[f];
         Real rho_n = d_q[nbr * nvar + 0];
-        Real lambda = 0;
+        Real lambda;
         if (rho_n > 0) {
             Real inv_rho_n = 1.0f / rho_n;
             Real u_n = d_q[nbr * nvar + 1] * inv_rho_n;
@@ -165,11 +179,11 @@ __global__ void forward_sweep_kernel(
             Real E_n = d_q[nbr * nvar + 4];
             Real kin_n = 0.5f * (u_n*u_n + v_n*v_n + w_n*w_n);
             Real p_n = (gamma - 1.0f) * (E_n - rho_n * kin_n);
-            Real a_n = p_n > 0 ? real_sqrt(gamma * p_n / rho_n) : 0;
+            Real a_n = p_n > 0 ? real_sqrt(gamma * p_n / rho_n) : a;
             Real vn_nbr = u_n * d_nx[f] + v_n * d_ny[f] + w_n * d_nz[f];
-            lambda = 0.5f * (real_fabs(vn_self) + real_fabs(vn_nbr) + a_n);
+            lambda = 0.5f * (real_fabs(vn_self) + real_fabs(vn_nbr) + a + a_n);
         } else {
-            lambda = real_fabs(vn_self);
+            lambda = real_fabs(vn_self) + a;
         }
         Real contrib = 0.5f * lambda * d_area[f] * d_inv_vol[cell];
         for (int iv = 0; iv < nvar; ++iv) {
@@ -201,6 +215,10 @@ __global__ void backward_sweep_kernel(
     Real u = d_q[cell * nvar + 1] * inv_rho;
     Real v = d_q[cell * nvar + 2] * inv_rho;
     Real w = d_q[cell * nvar + 3] * inv_rho;
+    Real E = d_q[cell * nvar + 4];
+    Real kin = 0.5f * (u*u + v*v + w*w);
+    Real p = (gamma - 1.0f) * (E - rho * kin);
+    Real a = p > 0 ? real_sqrt(gamma * p / rho) : 1e-8f;
 
     Real correction[6] = {0};
     for (int f = 0; f < n_faces; ++f) {
@@ -216,7 +234,7 @@ __global__ void backward_sweep_kernel(
 
         Real vn_self = u * d_nx[f] + v * d_ny[f] + w * d_nz[f];
         Real rho_n = d_q[nbr * nvar + 0];
-        Real lambda = 0;
+        Real lambda;
         if (rho_n > 0) {
             Real inv_rho_n = 1.0f / rho_n;
             Real u_n = d_q[nbr * nvar + 1] * inv_rho_n;
@@ -225,11 +243,11 @@ __global__ void backward_sweep_kernel(
             Real E_n = d_q[nbr * nvar + 4];
             Real kin_n = 0.5f * (u_n*u_n + v_n*v_n + w_n*w_n);
             Real p_n = (gamma - 1.0f) * (E_n - rho_n * kin_n);
-            Real a_n = p_n > 0 ? real_sqrt(gamma * p_n / rho_n) : 0;
+            Real a_n = p_n > 0 ? real_sqrt(gamma * p_n / rho_n) : a;
             Real vn_nbr = u_n * d_nx[f] + v_n * d_ny[f] + w_n * d_nz[f];
-            lambda = 0.5f * (real_fabs(vn_self) + real_fabs(vn_nbr) + a_n);
+            lambda = 0.5f * (real_fabs(vn_self) + real_fabs(vn_nbr) + a + a_n);
         } else {
-            lambda = real_fabs(vn_self);
+            lambda = real_fabs(vn_self) + a;
         }
         Real contrib = 0.5f * lambda * d_area[f] * d_inv_vol[cell];
         for (int iv = 0; iv < nvar; ++iv) {
@@ -260,8 +278,9 @@ bool LusgsPreconditioner::allocate(DeviceMesh& mesh, std::string* error) {
     int nf = static_cast<int>(mesh.face_count());
     std::vector<int> h_left(nf), h_right(nf);
     DeviceFaceData fd = mesh.face_data();
-    if (!cuda_check(cudaMemcpy(h_left.data(), fd.left_cell, nf * sizeof(int), cudaMemcpyDeviceToHost), "copy left", error)) return false;
-    if (!cuda_check(cudaMemcpy(h_right.data(), fd.right_cell, nf * sizeof(int), cudaMemcpyDeviceToHost), "copy right", error)) return false;
+    if (!cuda_check(cudaMemcpyAsync(h_left.data(), fd.left_cell, nf * sizeof(int), cudaMemcpyDeviceToHost, 0), "copy left", error)) return false;
+    if (!cuda_check(cudaMemcpyAsync(h_right.data(), fd.right_cell, nf * sizeof(int), cudaMemcpyDeviceToHost, 0), "copy right", error)) return false;
+    if (!cuda_check(cudaDeviceSynchronize(), "sync left/right", error)) return false;
 
     std::vector<int> cell_color;
     n_cell_colors_ = greedy_color_cells(h_left, h_right, n_cells_, cell_color);
@@ -289,7 +308,6 @@ void LusgsPreconditioner::release() {
 bool LusgsPreconditioner::compute_diagonal(DeviceMesh& mesh, const Real* d_dt_cell,
     Real gamma, bool viscous, const Real* d_mu, Real Re,
     std::string* error) {
-    (void)viscous; (void)d_mu; (void)Re;
     int n_faces = static_cast<int>(mesh.face_count());
     int block = kBlockSize;
     int grid = (n_cells_ + block - 1) / block;
@@ -302,7 +320,8 @@ bool LusgsPreconditioner::compute_diagonal(DeviceMesh& mesh, const Real* d_dt_ce
         d_D_, d_spectral_radius_, n_cells_, nvar_, gamma,
         mesh.state_device(), cd.volume,
         fd.nx, fd.ny, fd.nz, fd.area, fd.left_cell, fd.right_cell,
-        n_faces, d_dt_cell, d_inv_vol_);
+        n_faces, d_dt_cell, d_inv_vol_,
+        viscous ? d_mu : nullptr, Re);
     if (!cuda_check(cudaGetLastError(), "compute_diag_kernel", error)) return false;
     return true;
 }

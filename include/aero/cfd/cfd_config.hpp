@@ -44,7 +44,7 @@ struct CfdConfig {
     int fgmres_max_iter = 100;
     Real fgmres_tol = 1e-2f;
     int newton_max_iter = 3;
-    Real newton_sufficent_decrease = 0.5f;
+    Real newton_sufficient_decrease = 0.5f;
 };
 
 struct FreestreamCondition {

@@ -79,7 +79,8 @@ __global__ void gg_gradient_kernel_atomic(
     Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
     Real area = d_area[idx];
 
-    Real rhoF, uF, vF, wF, pF;
+    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
+    Real rhoF, uF, vF, wF, pF, nu_tildeF;
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
@@ -88,11 +89,13 @@ __global__ void gg_gradient_kernel_atomic(
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
+        Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
         rhoF = 0.5f * (rhoL + rhoR);
         uF = 0.5f * (uL + uR);
         vF = 0.5f * (vL + vR);
         wF = 0.5f * (wL + wR);
         pF = 0.5f * (pL + pR);
+        nu_tildeF = 0.5f * (nu_tildeL + nu_tildeR);
 
         if (!real_isfinite(d_volume[right]) || d_volume[right] <= 0.0f) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
@@ -105,6 +108,7 @@ __global__ void gg_gradient_kernel_atomic(
         Real dv_r = vF - vR;
         Real dw_r = wF - wR;
         Real dp_r = pF - pR;
+        Real dnu_r = nu_tildeF - nu_tildeR;
         real_atomic_add(&gR[0], drho_r * nx * right_scale);
         real_atomic_add(&gR[1], drho_r * ny * right_scale);
         real_atomic_add(&gR[2], drho_r * nz * right_scale);
@@ -120,8 +124,12 @@ __global__ void gg_gradient_kernel_atomic(
         real_atomic_add(&gR[12], dp_r * nx * right_scale);
         real_atomic_add(&gR[13], dp_r * ny * right_scale);
         real_atomic_add(&gR[14], dp_r * nz * right_scale);
+        real_atomic_add(&gR[15], dnu_r * nx * right_scale);
+        real_atomic_add(&gR[16], dnu_r * ny * right_scale);
+        real_atomic_add(&gR[17], dnu_r * nz * right_scale);
     } else {
         rhoF = rhoL; uF = uL; vF = vL; wF = wL; pF = pL;
+        nu_tildeF = nu_tildeL;
     }
 
     if (!real_isfinite(d_volume[left]) || d_volume[left] <= 0.0f) {
@@ -134,6 +142,7 @@ __global__ void gg_gradient_kernel_atomic(
     Real dv = vF - vL;
     Real dw = wF - wL;
     Real dp = pF - pL;
+    Real dnu = nu_tildeF - nu_tildeL;
 
     Real* gL = d_gradients + left * DeviceMesh::NGRAD;
     real_atomic_add(&gL[0], drho * nx * left_scale);
@@ -151,6 +160,9 @@ __global__ void gg_gradient_kernel_atomic(
     real_atomic_add(&gL[12], dp * nx * left_scale);
     real_atomic_add(&gL[13], dp * ny * left_scale);
     real_atomic_add(&gL[14], dp * nz * left_scale);
+    real_atomic_add(&gL[15], dnu * nx * left_scale);
+    real_atomic_add(&gL[16], dnu * ny * left_scale);
+    real_atomic_add(&gL[17], dnu * nz * left_scale);
 }
 
 __global__ void gg_gradient_kernel_colored(
@@ -179,7 +191,8 @@ __global__ void gg_gradient_kernel_colored(
     Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
     Real area = d_area[idx];
 
-    Real rhoF, uF, vF, wF, pF;
+    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
+    Real rhoF, uF, vF, wF, pF, nu_tildeF;
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
@@ -188,11 +201,13 @@ __global__ void gg_gradient_kernel_colored(
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
+        Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
         rhoF = 0.5f * (rhoL + rhoR);
         uF = 0.5f * (uL + uR);
         vF = 0.5f * (vL + vR);
         wF = 0.5f * (wL + wR);
         pF = 0.5f * (pL + pR);
+        nu_tildeF = 0.5f * (nu_tildeL + nu_tildeR);
 
         if (!real_isfinite(d_volume[right]) || d_volume[right] <= 0.0f) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
@@ -205,6 +220,7 @@ __global__ void gg_gradient_kernel_colored(
         Real dv_r = vF - vR;
         Real dw_r = wF - wR;
         Real dp_r = pF - pR;
+        Real dnu_r = nu_tildeF - nu_tildeR;
         gR[0] += drho_r * nx * right_scale;
         gR[1] += drho_r * ny * right_scale;
         gR[2] += drho_r * nz * right_scale;
@@ -220,8 +236,12 @@ __global__ void gg_gradient_kernel_colored(
         gR[12] += dp_r * nx * right_scale;
         gR[13] += dp_r * ny * right_scale;
         gR[14] += dp_r * nz * right_scale;
+        gR[15] += dnu_r * nx * right_scale;
+        gR[16] += dnu_r * ny * right_scale;
+        gR[17] += dnu_r * nz * right_scale;
     } else {
         rhoF = rhoL; uF = uL; vF = vL; wF = wL; pF = pL;
+        nu_tildeF = nu_tildeL;
     }
 
     if (!real_isfinite(d_volume[left]) || d_volume[left] <= 0.0f) {
@@ -234,6 +254,7 @@ __global__ void gg_gradient_kernel_colored(
     Real dv = vF - vL;
     Real dw = wF - wL;
     Real dp = pF - pL;
+    Real dnu = nu_tildeF - nu_tildeL;
 
     Real* gL = d_gradients + left * DeviceMesh::NGRAD;
     gL[0] += drho * nx * left_scale;
@@ -251,6 +272,9 @@ __global__ void gg_gradient_kernel_colored(
     gL[12] += dp * nx * left_scale;
     gL[13] += dp * ny * left_scale;
     gL[14] += dp * nz * left_scale;
+    gL[15] += dnu * nx * left_scale;
+    gL[16] += dnu * ny * left_scale;
+    gL[17] += dnu * nz * left_scale;
 }
 
 constexpr int kMINMAX_STRIDE = 12;

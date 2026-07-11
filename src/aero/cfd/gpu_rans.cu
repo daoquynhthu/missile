@@ -167,6 +167,40 @@ __global__ void apply_rans_implicit_kernel(
                                + old_residual * implicit_factor;
 }
 
+__global__ void apply_rans_implicit_per_cell_kernel(
+    const Real* d_q,
+    Real* d_residual,
+    const Real* d_volume,
+    const Real* d_wall_distance,
+    const Real* d_dt_cell,
+    int n_cells, int nvar, Real Re) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_cells) return;
+
+    Real rho = d_q[idx * nvar + 0];
+    if (rho <= 0.0f || !real_isfinite(rho)) return;
+
+    Real wall_distance = d_wall_distance[idx];
+    if (wall_distance <= 0.0f || !real_isfinite(wall_distance)) {
+        wall_distance = 1e30f;
+    }
+
+    Real nu_tilde = d_q[idx * nvar + 5] / rho;
+    if (!real_isfinite(nu_tilde)) return;
+
+    constexpr Real cw1 = 0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f); // ~3.239
+    constexpr Real karman = 0.41f;
+
+    Real d_dest = 2.0f * cw1 * nu_tilde / (karman * karman * wall_distance * wall_distance + 1e-30f);
+    Real dt_over_V = d_dt_cell[idx] / (d_volume[idx] + 1e-30f);
+    Real implicit_factor = 1.0f / (1.0f + dt_over_V * d_dest + 1e-30f);
+
+    Real old_rhont = d_q[idx * nvar + 5];
+    Real old_residual = d_residual[idx * nvar + 5];
+    d_residual[idx * nvar + 5] = (old_rhont * (implicit_factor - 1.0f)) / (dt_over_V + 1e-30f)
+                               + old_residual * implicit_factor;
+}
+
 } // namespace
 
 bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
@@ -181,7 +215,23 @@ bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
         mesh.state_device(), mesh.residual_device(), cd.volume,
         cd.wall_distance, d_min_dt,
         nc, DeviceMesh::NVAR, Re);
-    if (!cuda_check(cudaGetLastError(), "apply_rans_implicit_kernel launch")) return false;
+    if (!cuda_check(cudaGetLastError(), "apply_rans_implicit_kernel launch", error)) return false;
+    return true;
+}
+
+bool apply_rans_implicit_per_cell_gpu(DeviceMesh& mesh, Real Re,
+    const Real* d_dt_cell, std::string* error) {
+    if (mesh.cell_count() == 0) return true;
+    int block = 128;
+    int nc = static_cast<int>(mesh.cell_count());
+    int grid = (nc + block - 1) / block;
+    DeviceCellData cd = mesh.cell_data();
+
+    apply_rans_implicit_per_cell_kernel<<<grid, block>>>(
+        mesh.state_device(), mesh.residual_device(), cd.volume,
+        cd.wall_distance, d_dt_cell,
+        nc, DeviceMesh::NVAR, Re);
+    if (!cuda_check(cudaGetLastError(), "apply_rans_implicit_per_cell_kernel launch", error)) return false;
     return true;
 }
 
