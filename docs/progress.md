@@ -542,3 +542,9 @@
   2. PH11-M10: discriminator formula had double-sqrt. `dnrm2_gpu` returned sqrt(S) not S; callers took sqrt again. Fix: dnrm2 returns raw sum-of-squares.
   3. PH4-A-2: original test used step-function rho (1e-3 left, 2.0 right) too sharp for unstructured tet mesh — BJ limiter still couldn't prevent negative extrapolation. Redesigned with smooth linear gradient (0.5→1.5) that limiter handles, plus discriminator: verify limiters < 1 for some cells.
 - Verification: `TestCfdGpu.exe` 52/52 PASS. All 6 CFD suites PASS.
+
+2026-07-11 (4-parallel performance audit)
+- Launched 4 concurrent subagents auditing: GPU kernel performance, CPU hot paths, memory/data flow, build system
+- Total ~47 findings: 20 HIGH, 15 MEDIUM, 9 LOW, 3 INFO
+- Key HIGH findings: 6 atomic contention hotspots needing colored/fused paths (viscous, wall, limiter, minmax, timestep, L2); 1 non-coalesced d_q read through all face-level kernels; 4 CPU redundant work items (2-4x conservative_to_primitive per iteration, rebuild_faces double metrics, linear boundary matching); FGMRES O(m²) D2H sync; d_minmax alloc/free per iteration; JFV 3x full-state D2D copy; streams unused; 4 build-system issues (nvcc on .cpp, 27 device-link steps, no ccache, arch detection broken)
+- Written to ISSUES.md as `## 性能审计 (2026-07-11)` section
